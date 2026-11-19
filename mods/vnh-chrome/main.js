@@ -34,9 +34,9 @@ function runTarget() {
   return cwd ? { cwd, on: space.machine ?? null, space: space.id } : null;
 }
 
-// The project's package.json: at the repo root, else the nearest one above the folder (inside the
-// repo). Package manager from "packageManager", else the lock file, else npm.
-const PM_SCRIPT = 'top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null); d=$1; found=; if [ -n "$top" ] && [ -f "$top/package.json" ]; then found=$top; else while :; do [ -f "$d/package.json" ] && { found=$d; break; }; [ -n "$top" ] && [ "$d" = "$top" ] && break; p=$(dirname "$d"); [ "$p" = "$d" ] && break; [ -z "$top" ] && [ "$d" = "$HOME" ] && break; d=$p; done; fi; [ -n "$found" ] || exit 0; echo "$found"; for f in pnpm-lock.yaml yarn.lock bun.lockb bun.lock package-lock.json; do [ -e "$found/$f" ] && { echo "$f"; break; }; done; true';
+// The project's package.json: only at the repo root (the folder itself outside git); none, nothing.
+// Package manager from "packageManager", else the lock file, else npm.
+const PM_SCRIPT = 'top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || top=$1; [ -f "$top/package.json" ] || exit 0; echo "$top"; for f in pnpm-lock.yaml yarn.lock bun.lockb bun.lock package-lock.json; do [ -e "$top/$f" ] && { echo "$f"; break; }; done; true';
 const LOCK_PM = { "pnpm-lock.yaml": "pnpm", "yarn.lock": "yarn", "bun.lockb": "bun", "bun.lock": "bun", "package-lock.json": "npm" };
 
 export function selectedScript(root, scripts) {
@@ -45,18 +45,57 @@ export function selectedScript(root, scripts) {
   return scripts.find((x) => x.name === "dev")?.name ?? scripts[0]?.name ?? null;
 }
 
+// A run writes its pid to ~/.cache/vnh-run/<key>.pid (on the project's machine) and execs the
+// package manager, so the pid is the script's. Running = that pid is alive and is this script.
+export const runKey = (root, name) => `${root}::${name}`.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-180);
+const START_SCRIPT = 'mkdir -p "$HOME/.cache/vnh-run" && echo $$ > "$HOME/.cache/vnh-run/$3.pid" && exec "$1" run "$2"';
+const CHECK_SCRIPT = 'f="$HOME/.cache/vnh-run/$1.pid"; [ -f "$f" ] || exit 0; p=$(cat "$f"); kill -0 "$p" 2>/dev/null && ps -p "$p" -o args= | grep -qF -- "$2" && echo "$p"; true';
+// Like JetBrains' stop: SIGINT to the script's process group (or its whole process tree), then
+// SIGTERM to whatever is still alive after 3 s. The tab and its output stay.
+const STOP_SCRIPT = 'f="$HOME/.cache/vnh-run/$1.pid"; [ -f "$f" ] || exit 0; p=$(cat "$f"); tree() { for c in $(pgrep -P "$1"); do tree "$c"; done; echo "$1"; }; pids=$(tree "$p"); kill -INT -- "-$p" 2>/dev/null || kill -INT $pids 2>/dev/null; i=0; while [ $i -lt 30 ]; do alive=; for x in $pids; do kill -0 "$x" 2>/dev/null && alive="$alive $x"; done; [ -z "$alive" ] && exit 0; sleep 0.1; i=$((i+1)); done; kill -TERM $alive 2>/dev/null; true';
+
 export function runScript(project, name) {
   if (!project || !name) return;
-  run("tab.new", { space: project.space, folder: project.root, name: `${project.pm} run ${name}`, argv: [project.pm, "run", name] });
+  run("tab.new", { space: project.space, folder: project.root, name: `${project.pm} run ${name}`,
+    argv: ["sh", "-c", START_SCRIPT, "vnh-run", project.pm, name, runKey(project.root, name)] });
 }
 
 export default class WorkspaceChrome extends View {
   init(_props, cx) {
     this.project = null; // { key, root, on, space, pm, scripts: [{ name, cmd }] }
     if (checking() || props()?.footer) return;
+    this.running = null; // { key, pid } of the selected script while it runs
     this.loadProject(cx);
     // Follow focus changes quickly; re-read package.json every 10 s, only while the window is active.
-    cx.timer.every(1500, (cx) => this.loadProject(cx));
+    cx.timer.every(1500, (cx) => { this.loadProject(cx); this.checkRunning(cx); });
+  }
+
+  // Is the selected script running (started from the bar)? One tiny `sh` per tick while active.
+  checkRunning(cx) {
+    const p = this.project;
+    const name = p ? selectedScript(p.root, p.scripts) : null;
+    const key = name ? runKey(p.root, name) : null;
+    if (!key) { if (this.running) { this.running = null; cx.notify(); } return; }
+    if (this.checking || (!window()?.active && this.running?.key === key)) return;
+    this.checking = true;
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("sh", ["-c", CHECK_SCRIPT, "check", key, `run ${name}`], { on: p.on, timeout: 5000 }).catch(() => null);
+        const pid = r?.stdout.trim() || null;
+        const next = pid ? { key, pid } : null;
+        if (JSON.stringify(next) !== JSON.stringify(this.running)) { this.running = next; cx.notify(); }
+      } finally { this.checking = false; }
+    });
+  }
+
+  stopScript(cx) {
+    const p = this.project, key = this.running?.key;
+    if (!p || !key) return;
+    this.stopping = true; cx.notify();
+    cx.spawn(async (cx) => {
+      try { await exec("sh", ["-c", STOP_SCRIPT, "stop", key], { on: p.on, timeout: 10000 }).catch(() => null); }
+      finally { this.stopping = false; this.running = null; cx.notify(); this.checkRunning(cx); }
+    });
   }
 
   loadProject(cx) {
@@ -96,15 +135,24 @@ export default class WorkspaceChrome extends View {
     if (!p) return div().flex_1();
     const name = selectedScript(p.root, p.scripts);
     const stop = (_e, cx) => cx.stop_propagation();
+    const running = Boolean(this.running) && this.running.key === runKey(p.root, name);
     return h_flex().flex_1().min_w(0).gap(4).items_center().justify_end()
       .child(h_flex().id("run-config").min_w(0).h(28).px(8).gap(6).items_center().rounded(7).cursor_pointer()
-        .bg(t.hover).hover((s) => s.bg(t.selected)).on_mouse_down("left", stop)
+        .bg(t.hover).hover((s) => s.bg(t.selected))
+        // Remember where the pill is, so the popup opens flush with its left edge, just below it.
+        .on_mouse_down("left", (e, cx) => { if (e.bounds) this.pillBounds = e.bounds; cx.stop_propagation(); })
         .tooltip(p.scripts.find((x) => x.name === name)?.cmd ?? "")
-        .on_click(() => openOverlay({ mod: "vnh-run-menu", kind: "popup", width: 400, height: 440, props: { project: p, selected: name } }))
+        .on_click(() => {
+          const b = this.pillBounds;
+          openOverlay({ mod: "vnh-run-menu", kind: "popup", width: 400, height: 440, props: { project: p, selected: name },
+            ...(b ? { at: { x: b.x, y: b.y + b.height + 4 } } : {}) });
+        })
         .child(svg("mods/vnh-chrome/package.svg").size(14).flex_none().text_color(t.ansi2))
         .child(div().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(`${p.pm} run ${name}`))
         .child(svg("mods/vnh-chrome/chevron-down.svg").size(12).flex_none().text_color(t.muted)))
-      .child(this.button("run-start", svg("mods/vnh-chrome/play.svg").size(14).text_color(t.ansi2), () => runScript(p, name)).tooltip(`Run ${p.pm} run ${name}`));
+      .child(this.button("run-start", svg("mods/vnh-chrome/play.svg").size(14).text_color(t.ansi2), () => runScript(p, name)).tooltip(`Run ${p.pm} run ${name}`))
+      .when(running, (el) => el.child(this.button("run-stop", svg("mods/vnh-chrome/stop.svg").size(13).text_color(this.stopping ? t.dim : t.ansi1),
+        (_e, cx) => this.stopScript(cx)).tooltip(this.stopping ? "Stopping…" : `Stop ${p.pm} run ${name}`)));
   }
 
   button(id, label, action) {
