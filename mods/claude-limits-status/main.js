@@ -22,7 +22,7 @@ function untilReset(epoch) {
 
 // One shell call for everything the git segment shows (same numbers as the old Claude status line).
 const GIT_SCRIPT = `
-g() { git --no-optional-locks "$@" 2>/dev/null; }
+g() { git --no-optional-locks -c core.fsmonitor=false "$@" 2>/dev/null; }
 g rev-parse --is-inside-work-tree >/dev/null || exit 0
 echo "@@status"; g status --porcelain=v2 --branch
 echo "@@numstat"; g diff HEAD --numstat

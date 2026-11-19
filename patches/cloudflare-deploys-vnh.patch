@@ -1,0 +1,17 @@
+--- a/mods/cloudflare-deploys/fetch-project.js
++++ b/mods/cloudflare-deploys/fetch-project.js
+@@ -29,4 +29,13 @@
+   return { project, source: null, deploys: [], errors };
+ }
+ 
+-export const fetchAll = (cfg, projects, sources) => Promise.all(projects.map((p) => fetchProject(cfg, p, sources)));
++// VNH: at most 3 at a time. With wrangler each fetch is a node process (~260 MB, ~0.7 s CPU), and
++// all at once was 16-32 of them together; the results keep the projects' order.
++export async function fetchAll(cfg, projects, sources, limit = 3) {
++  const out = new Array(projects.length);
++  let next = 0;
++  await Promise.all(Array.from({ length: Math.min(limit, projects.length) }, async () => {
++    while (next < projects.length) { const i = next++; out[i] = await fetchProject(cfg, projects[i], sources); }
++  }));
++  return out;
++}

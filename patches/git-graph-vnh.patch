@@ -1,0 +1,38 @@
+--- a/mods/git-graph/graph.js
++++ b/mods/git-graph/graph.js
+@@ -162,11 +162,26 @@
+     cx.timer.after(1500, (cx) => this.warm(cx));
+     // Remote spaces can't be watched: poll them gently. New folders get read ahead.
+     // The Manygit list re-reads too: edits in a working tree don't touch .git.
+-    cx.timer.every(15000, (cx) => { if (!this.watching || this.state === "workspace") this.refresh(cx, true, true); this.warm(cx); check(); });
++    cx.timer.every(15000, (cx) => {
++      // VNH: a hidden panel reads nothing; it catches up when it shows (the 1 s check below).
++      if (!this.shown()) { this.stale = true; return; }
++      if (!this.watching || this.state === "workspace") this.refresh(cx, true, true); this.warm(cx); check();
++    });
++    cx.timer.every(1000, (cx) => { if (this.stale && this.shown()) { this.stale = false; this.refresh(cx, true); } });
+     check();
+   }
+ 
+   key() { return JSON.stringify(location(this.folder)); }
++
++  // VNH: whether the graph is on screen. When the layout's side panel holds it, only while that
++  // panel shows and has it selected; anywhere else (a pane, another layout) always.
++  shown() {
++    const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((hit, c) => hit ?? find(c, id), null));
++    const root = layout(), body = find(root, "panel-body"), panel = find(root, "panel");
++    const block = body?.children?.find((c) => c.content?.mod === "git-graph");
++    if (!block) return true;
++    return Boolean(panel && !panel.hidden && body.active === block.id);
++  }
+ 
+   reset() {
+     Object.assign(this, folderState());
+@@ -392,6 +407,7 @@
+           // Windows reports backslashes; the ref checks read slashes.
+           const paths = (await watchFolder(dir)).map((p) => p.replace(/\\/g, "/"));
+           if (token !== this.watchToken) return;
++          if (!this.shown()) { this.stale = true; continue; } // VNH: read it when the panel shows
+           if (paths.some((p) => (gitDir || inGitDir(p)) && isRefChange(p))) this.refresh(cx, true);
+           else if (paths.some((p) => !gitDir && !inGitDir(p))) this.statusSoon(cx);
+         }

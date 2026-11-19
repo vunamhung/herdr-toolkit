@@ -8,16 +8,59 @@
      this.showSize = prefs.showSize ?? null;
      this.follow = true; this.pinned = null;
      this.view = VIEWS.some(([v]) => v === prefs.view) ? prefs.view : "tree";
-@@ -313,7 +314,7 @@
+@@ -308,12 +309,23 @@
+       cx.notify();
+     });
+     this.watchActivity(cx);
+-    cx.timer.every(10000, (cx) => this.refresh(cx));
++    // VNH: no reads while the side panel hides the tree; it catches up when it shows.
++    cx.timer.every(10000, (cx) => { if (this.shownNow()) this.refresh(cx); else this.stale = true; });
++    cx.timer.every(1000, (cx) => { if (this.stale && this.shownNow()) { this.stale = false; this.refresh(cx); } });
+     cx.timer.every(1000, (cx) => this.tick(cx));
    }
  
++  // VNH: on screen? Only while the layout's side panel shows this block; anywhere else always.
++  shownNow() {
++    const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((hit, c) => hit ?? find(c, id), null));
++    const root = layout(), body = find(root, "panel-body"), panel = find(root, "panel");
++    const block = body?.children?.find((c) => c.content?.mod === NAME);
++    if (!block) return true;
++    return Boolean(panel && !panel.hidden && body.active === block.id);
++  }
++
    savePrefs() {
 -    try { localStorage.setItem("prefs", JSON.stringify({ showHidden: this.showHidden, showSize: this.showSize, view: this.view })); } catch {}
 +    try { localStorage.setItem("prefs", JSON.stringify({ showHidden: this.showHidden, showIgnored: this.showIgnored, showSize: this.showSize, view: this.view })); } catch {}
    }
  
    setView(view, cx) {
-@@ -479,7 +480,7 @@
+@@ -425,15 +437,22 @@
+     const now = Date.now();
+     this.recent = this.recent.filter((r) => now - r.at < 15000);
+     this.recent.push({ at: now, paths });
+-    let structural = false;
++    let structural = false, gitState = false;
+     for (const abs of paths) {
+       const rel = relTo(this.root, abs);
+-      if (rel === null || rel === ".git" || rel.startsWith(".git/")) continue;
++      if (rel === null) continue;
++      if (rel === ".git" || rel.startsWith(".git/")) {
++        // VNH: only what moves git status (index, HEAD, refs, a merge or rebase). fsmonitor's
++        // cookies, objects and logs change on every git call anyone makes, and refreshing on
++        // them ran this panel's git status at other tools' pace.
++        if (/^\.git\/(index|HEAD|ORIG_HEAD|MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD|packed-refs|refs\/|rebase-|sequencer)/.test(rel)) gitState = true;
++        continue;
++      }
+       structural = true;
+       for (const d of [...ancestors(rel), ""]) this.sizes.delete(d);
+     }
+     if (structural && !this.query) this.index = null;
+-    this.refresh(cx);
++    if (structural || gitState) this.refresh(cx);
+   }
+ 
+   toggle(path, cx) {
+@@ -479,7 +498,7 @@
            this.index = index;
          }
          if (seq !== this.searchSeq) return;
@@ -26,7 +69,7 @@
          const named = matches.filter((rel) => baseOf(rel).toLowerCase().includes(q));
          this.hits = [...new Set([...named, ...matches])].slice(0, FIND_LIMIT);
          this.cursor = this.hits[0] ?? "";
-@@ -529,6 +530,7 @@
+@@ -529,6 +548,7 @@
        for (const e of this.entries.get(prefix) ?? []) {
          if (!this.showHidden && e.name.startsWith(".")) continue;
          const rel = prefix ? `${prefix}/${e.name}` : e.name, open = e.dir && this.folders.has(rel);
@@ -34,7 +77,7 @@
          out.push({ rel, e, depth, open });
          if (open && depth < 40) walk(rel, depth + 1);
        }
-@@ -807,6 +809,7 @@
+@@ -807,6 +827,7 @@
      else if (k === "end") this.move(rows, rows.length);
      else if (k === "/") { this.input.focus(); }
      else if (k === ".") { this.showHidden = !this.showHidden; this.savePrefs(); }
@@ -42,7 +85,7 @@
      else if (k === "escape") { if (this.query) this.clearSearch(cx); else this.cursor = ""; }
      else if (/^[1-9]$/.test(k) && VIEWS[Number(k) - 1]) this.setView(VIEWS[Number(k) - 1][0], cx);
      else if (!cur) return;
-@@ -838,12 +841,20 @@
+@@ -838,12 +859,20 @@
    }
  
    // A row of Recent: a status pill, the name, then what happened to it.
@@ -64,7 +107,7 @@
        .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
        .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
        .child(this.pill(h.kind === "read" ? "R" : h.kind === "commit" ? "C" : "W", color, R))
-@@ -867,7 +878,7 @@
+@@ -867,7 +896,7 @@
        : (!e.dir && !loc && this.width > 250 ? stamp(e.mtime) : "");
      const selected = rel === this.cursor;
      const pulse = (el) => el.loop("opacity", { from: 0.35, to: 1, period: 900 });
@@ -73,7 +116,7 @@
        .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
        .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
        .child(e.dir ? svg(ICON(`chevron-${open ? "down" : "right"}`)).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
-@@ -986,6 +997,7 @@
+@@ -986,6 +1015,7 @@
        btn("ft-up", "↑", "Up a folder", false, () => { if (!this.root) return; this.follow = false; this.pinned = this.root.replace(/[\\/][^\\/]+[\\/]?$/, "") || "/"; this.pinnedOn = this.on; }),
        btn("ft-home", "⌂", this.follow ? "Following the focused pane" : "Back to the focused pane's folder", this.follow, () => { this.follow = true; this.pinned = null; }),
        btn("ft-hidden", this.showHidden ? "◉" : "○", this.showHidden ? "Hide dotfiles (.)" : "Show dotfiles (.)", this.showHidden, () => { this.showHidden = !this.showHidden; this.savePrefs(); }),
