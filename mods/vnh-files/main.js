@@ -22,13 +22,25 @@ function fmtSize(n) {
   return i === 0 ? `${n} B` : `${n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`;
 }
 
+const SORTS = [["name", "Sort by Name"], ["type", "Sort by Type"], ["mtime", "Sort by Modification Time"]];
+const ext = (name) => { const i = name.lastIndexOf("."); return i > 0 ? name.slice(i + 1).toLowerCase() : ""; };
+
+// Folders first, then by the chosen key; ties by name.
+function sortEntries(list, by) {
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  return list.sort((a, b) => Number(b.dir) - Number(a.dir)
+    || (by === "type" && !a.dir ? ext(a.name).localeCompare(ext(b.name)) : 0)
+    || (by === "mtime" ? (b.mtime ?? 0) - (a.mtime ?? 0) : 0)
+    || byName(a, b));
+}
+
 // A folder's first-level contents: "3 folders · 12 files".
 function fmtCounts(dirs, files) {
   const part = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   return [dirs ? part(dirs, "folder", "folders") : "", files ? part(files, "file", "files") : ""].filter(Boolean).join(" · ") || "empty";
 }
 
-async function directory(path, on, sizes = false) {
+async function directory(path, on, sizes = false, mtimes = false) {
   const windowsDirectory = async () => {
     // Windows PowerShell otherwise uses the console code page; exec decodes UTF-8.
     // Links keep directory attributes even when dangling; check their target.
@@ -42,17 +54,19 @@ async function directory(path, on, sizes = false) {
   if (!on && window()?.platform === "windows") return windowsDirectory();
   // With sizes ("1"): a file's byte size (GNU stat, else BSD stat), a folder's first-level
   // "<folders> <files>" (not counting .git). Without, the third field stays empty.
-  const script = 'root=$1; sz=$2; n=0; for p in "$root"/* "$root"/.[!.]* "$root"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; info=; if [ -d "$p" ]; then kind=d; if [ "$sz" = 1 ]; then d=0; f=0; for q in "$p"/* "$p"/.[!.]* "$p"/..?*; do [ -e "$q" ] || [ -L "$q" ] || continue; [ "${q##*/}" = .git ] && continue; if [ -d "$q" ]; then d=$((d+1)); else f=$((f+1)); fi; done; info="$d $f"; fi; else kind=f; if [ "$sz" = 1 ]; then info=$(stat -c %s "$p" 2>/dev/null || stat -f %z "$p" 2>/dev/null); fi; fi; printf "%s\\0%s\\0%s\\0" "$kind" "$name" "$info"; n=$((n+1)); [ "$n" -gt 500 ] && break; done; test -d "$root"';
+  // With mtimes ("1"): the 4th field is the modification time in unix seconds, else empty.
+  const script = 'root=$1; sz=$2; mt=$3; n=0; for p in "$root"/* "$root"/.[!.]* "$root"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; info=; if [ -d "$p" ]; then kind=d; if [ "$sz" = 1 ]; then d=0; f=0; for q in "$p"/* "$p"/.[!.]* "$p"/..?*; do [ -e "$q" ] || [ -L "$q" ] || continue; [ "${q##*/}" = .git ] && continue; if [ -d "$q" ]; then d=$((d+1)); else f=$((f+1)); fi; done; info="$d $f"; fi; else kind=f; if [ "$sz" = 1 ]; then info=$(stat -c %s "$p" 2>/dev/null || stat -f %z "$p" 2>/dev/null); fi; fi; m=; if [ "$mt" = 1 ]; then m=$(stat -c %Y "$p" 2>/dev/null || stat -f %m "$p" 2>/dev/null); fi; printf "%s\\0%s\\0%s\\0%s\\0" "$kind" "$name" "$info" "$m"; n=$((n+1)); [ "$n" -gt 500 ] && break; done; test -d "$root"';
   let r;
-  try { r = await exec("sh", ["-c", script, "files", path, sizes ? "1" : "0"], { on }); }
+  try { r = await exec("sh", ["-c", script, "files", path, sizes ? "1" : "0", mtimes ? "1" : "0"], { on }); }
   catch (e) {
     if (on && String(e).includes("cannot start sh: program not found")) return windowsDirectory();
     throw e;
   }
   if (r.code !== 0) throw new Error(r.stderr || "Cannot list this folder");
   const fields = r.stdout.split("\0"), out = [];
-  for (let i = 0; i + 2 < fields.length; i += 3) {
+  for (let i = 0; i + 3 < fields.length; i += 4) {
     const entry = { name: fields[i + 1], dir: fields[i] === "d" }, info = fields[i + 2];
+    if (fields[i + 3]) entry.mtime = Number(fields[i + 3]);
     if (info && entry.dir) { const [d, f] = info.split(" ").map(Number); entry.counts = { dirs: d || 0, files: f || 0 }; }
     else if (info) entry.size = Number(info);
     out.push(entry);
@@ -68,6 +82,8 @@ export default class Files extends View {
     const flag = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : v === "1"; } catch { return d; } };
     this.showIgnored = flag("showIgnored", true);
     this.showSizes = flag("showSizes", false);
+    try { const v = localStorage.getItem("sortBy"); this.sortBy = SORTS.some(([k]) => k === v) ? v : "name"; } catch { this.sortBy = "name"; }
+    this.sortOpen = false;
     this.refresh(cx);
     cx.timer.every(10000, cx => this.refresh(cx));
   }
@@ -88,7 +104,7 @@ export default class Files extends View {
 
   async loadFolder(path, context) {
     const { on, cwd: root } = context;
-    const entries = await directory(path ? `${root}/${path}` : root, on, this.showSizes);
+    const entries = await directory(path ? `${root}/${path}` : root, on, this.showSizes, this.sortBy === "mtime");
     if (!this.current(context) || (path && !this.folders.has(path))) return;
     // Which of these .gitignore ignores (paths relative to the panel's folder; folders end in "/").
     const rel = (e) => `${path ? path + "/" : ""}${e.name}${e.dir ? "/" : ""}`;
@@ -102,7 +118,7 @@ export default class Files extends View {
       for (const p of asked) { const k = p.replace(/\/$/, ""); if (hit.has(p)) this.ignored.add(k); else this.ignored.delete(k); }
     }
     const used = [...this.entries.entries()].filter(([p]) => p !== path).reduce((n, [, e]) => n + e.length, 0);
-    this.entries.set(path, entries.slice(0, Math.max(0, Math.min(PER_FOLDER, TOTAL - used))).sort((a, b) => Number(b.dir) - Number(a.dir) || a.name.localeCompare(b.name)));
+    this.entries.set(path, sortEntries(entries.slice(0, Math.max(0, Math.min(PER_FOLDER, TOTAL - used))), this.sortBy));
     if (entries.length > PER_FOLDER || used + entries.length > TOTAL) this.limited = true;
   }
 
@@ -168,6 +184,19 @@ export default class Files extends View {
     this[name] = value;
     try { localStorage.setItem(name, value ? "1" : "0"); } catch {}
     if (name === "showSizes") this.refresh(cx); // re-list loaded folders with or without sizes
+    cx.notify();
+  }
+
+  setSort(by, cx) {
+    this.sortOpen = false;
+    if (by !== this.sortBy) {
+      this.sortBy = by;
+      try { localStorage.setItem("sortBy", by); } catch {}
+      // Name/type re-sort what is loaded; modification time needs the folders listed again with times.
+      const haveTimes = [...this.entries.values()].every((l) => l.every((e) => e.mtime != null));
+      if (by === "mtime" && !haveTimes) this.refresh(cx);
+      else for (const [p, l] of this.entries) this.entries.set(p, sortEntries(l, by));
+    }
     cx.notify();
   }
 
@@ -263,7 +292,7 @@ export default class Files extends View {
   render(cx) {
     if (key() !== this.context?.key) this.refresh(cx);
     const t = theme();
-    return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+    return v_flex().id("files").relative().size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       // The header's buttons show only while the pointer is over the header (space kept, nothing shifts).
       .child(h_flex().id("files-header").h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .on_hover((hovered, cx) => { if (this.headerHover !== hovered) { this.headerHover = hovered; cx.notify(); } })
@@ -271,7 +300,12 @@ export default class Files extends View {
         // VNH: the folder's name is the title (no "Files"); a previewed file's path stays on the right.
         .child(div().flex_none().max_w(200).truncate().font_semibold().child(this.root?.split(/[\\/]/).pop() || "Files"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? ""))
-        .when(!this.file, el => el.child(h_flex().flex_none().gap(2).items_center().when(!this.headerHover, el => el.invisible())
+        .when(!this.file, el => el.child(h_flex().flex_none().gap(2).items_center().when(!this.headerHover && !this.sortOpen, el => el.invisible())
+          .child(this.tool(t, "files-sort", "sort", "Sort", this.sortOpen, (cx) => {
+            // The click that closed the menu (outside it) is this same press: don't reopen.
+            if (!this.sortOpen && Date.now() - (this.sortClosedAt ?? 0) < 250) return;
+            this.sortOpen = !this.sortOpen; cx.notify();
+          }))
           .child(this.tool(t, "files-ignored", this.showIgnored ? "eye" : "eye-off", this.showIgnored ? "Hide ignored files" : "Show ignored files", !this.showIgnored, (cx) => this.setFlag("showIgnored", !this.showIgnored, cx)))
           .child(this.tool(t, "files-sizes", "ruler", this.showSizes ? "Hide sizes" : "Show sizes", this.showSizes, (cx) => this.setFlag("showSizes", !this.showSizes, cx)))
           .child(this.tool(t, "files-expand", "expand-all", this.expanding ? "Expanding…" : "Expand all", this.expanding, (cx) => this.expandAll(cx)))
@@ -279,6 +313,18 @@ export default class Files extends View {
       .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))
-      .when(Boolean(this.file), el => el.child(this.code ? Editor.new(this.code).flex_1().min_h(0) : div().p(12).text_color(t.dim).child(this.fileError || "Loading file…")));
+      .when(Boolean(this.file), el => el.child(this.code ? Editor.new(this.code).flex_1().min_h(0) : div().p(12).text_color(t.dim).child(this.fileError || "Loading file…")))
+      .when(this.sortOpen && !this.file, el => el.child(this.sortMenu(t)));
+  }
+
+  // The Sort dropdown under the header's buttons; a click outside closes it.
+  sortMenu(t) {
+    return v_flex().id("files-sort-menu").absolute().top(38).right(8).w(230).p(4).gap(1).rounded(8)
+      .bg(t.surface).border_1().border_color(t.border).text_size(13)
+      .on_mouse_down_out((_e, cx) => { if (this.sortOpen) { this.sortOpen = false; this.sortClosedAt = Date.now(); cx.notify(); } })
+      .children(SORTS.map(([by, label]) => h_flex().id(`files-sort-${by}`).h(28).px(8).gap(8).items_center().rounded(6).cursor_pointer()
+        .hover(s => s.bg(t.hover)).on_click((_e, cx) => this.setSort(by, cx))
+        .child(by === this.sortBy ? svg("mods/vnh-files/check.svg").size(14).flex_none() : div().w(14).flex_none())
+        .child(div().child(label))));
   }
 }
