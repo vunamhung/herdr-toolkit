@@ -32,7 +32,9 @@ Personal customizations for the [Herdr](https://herdr.dev) desktop app.
 
 Existing files are backed up as `<file>.bak-<timestamp>`.
 
-The layout also places mods that are installed separately: `chat-agents`, `gitview`, `new-chat`. Install those first, or Herdr shows empty blocks for them.
+The layout also places mods that are installed separately: `chat-agents`, `gitview`, `new-chat`, `insights` (its toolbar button sits after the tab bar). Install those first, or Herdr shows empty blocks for them.
+
+The Timeline panel sits in a `work-split` row below the tab bar (with the work area and status bar), so opening it no longer narrows the tab bar; the status bar then ends where the Timeline starts.
 
 ## Restore defaults
 

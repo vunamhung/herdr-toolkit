@@ -87,112 +87,152 @@
           "children": [
             {
               "id": "tabs",
-              "type": "block",
-              "content": {
-                "mod": "vnh-tabs"
-              },
+              "type": "row",
               "size": {
                 "px": 42
               },
-              "window_drag": true
-            },
-            {
-              "id": "work-body",
-              "type": "row",
+              "window_drag": true,
+              "resizable": false,
               "children": [
                 {
-                  "id": "main",
+                  "id": "insights-original-tabs",
                   "type": "block",
+                  "size": {
+                    "weight": 1
+                  },
                   "content": {
-                    "tab": "active",
-                    "pane": {
-                      "header": {
-                        "content": {
-                          "mod": "vnh-pane"
-                        },
-                        "reveal": "always",
-                        "height": 30,
-                        "position": "top"
-                      },
-                      "background": "background",
-                      "border": {
-                        "width": 1,
-                        "color": "border"
-                      },
-                      "focus": {
-                        "width": 1,
-                        "color": "accent"
-                      },
-                      "radius": 10,
-                      "gap": 8,
-                      "lone": true
-                    }
+                    "mod": "vnh-tabs"
                   }
                 },
                 {
-                  "id": "panel",
+                  "id": "insights-toolbar-button",
+                  "type": "block",
+                  "size": {
+                    "px": 104
+                  },
+                  "content": {
+                    "mod": "insights",
+                    "props": {
+                      "mode": "toolbar"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "id": "work-split",
+              "type": "row",
+              "children": [
+                {
+                  "id": "work-inner",
                   "type": "column",
                   "children": [
                     {
-                      "id": "panel-body",
-                      "type": "stack",
+                      "id": "work-body",
+                      "type": "row",
                       "children": [
                         {
-                          "id": "files",
+                          "id": "main",
                           "type": "block",
                           "content": {
-                            "mod": "vnh-files"
+                            "tab": "active",
+                            "pane": {
+                              "header": {
+                                "content": {
+                                  "mod": "vnh-pane"
+                                },
+                                "reveal": "always",
+                                "height": 30,
+                                "position": "top"
+                              },
+                              "background": "background",
+                              "border": {
+                                "width": 1,
+                                "color": "border"
+                              },
+                              "focus": {
+                                "width": 1,
+                                "color": "accent"
+                              },
+                              "radius": 10,
+                              "gap": 8,
+                              "lone": true
+                            }
                           }
                         },
                         {
-                          "id": "changes",
-                          "type": "block",
-                          "content": {
-                            "mod": "gitview",
-                            "props": {
-                              "replaces": {
-                                "mod": "changes"
-                              }
+                          "id": "panel",
+                          "type": "column",
+                          "children": [
+                            {
+                              "id": "panel-body",
+                              "type": "stack",
+                              "children": [
+                                {
+                                  "id": "files",
+                                  "type": "block",
+                                  "content": {
+                                    "mod": "vnh-files"
+                                  }
+                                },
+                                {
+                                  "id": "changes",
+                                  "type": "block",
+                                  "content": {
+                                    "mod": "gitview",
+                                    "props": {
+                                      "replaces": {
+                                        "mod": "changes"
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "active": "files"
                             }
-                          }
+                          ],
+                          "size": {
+                            "px": 368
+                          },
+                          "min": 280,
+                          "max": 900,
+                          "hidden": true
                         }
                       ],
-                      "active": "files"
+                      "padding": 8,
+                      "gap": 8
+                    },
+                    {
+                      "id": "status",
+                      "type": "block",
+                      "content": {
+                        "mod": "claude-limits-status"
+                      },
+                      "size": {
+                        "px": 28
+                      }
                     }
                   ],
+                  "resizable": false
+                },
+                {
+                  "id": "timeline",
+                  "type": "block",
+                  "content": {
+                    "mod": "vnh-prompts"
+                  },
                   "size": {
                     "px": 368
-                  },
-                  "min": 280,
-                  "max": 900,
-                  "hidden": true
+                  }
                 }
               ],
-              "padding": 8,
-              "gap": 8
-            },
-            {
-              "id": "status",
-              "type": "block",
-              "content": {
-                "mod": "claude-limits-status"
-              },
-              "size": {
-                "px": 28
+              "divider": {
+                "width": 1,
+                "color": "border"
               }
             }
           ],
           "resizable": false
-        },
-        {
-          "id": "timeline",
-          "type": "block",
-          "content": {
-            "mod": "vnh-prompts"
-          },
-          "size": {
-            "px": 368
-          }
         }
       ],
       "background": "canvas",
