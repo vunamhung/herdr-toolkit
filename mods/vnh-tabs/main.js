@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, nextCommand } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, focused, checking } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -27,6 +27,19 @@ function label(tab, lead) {
   return (tab.name === prog || !tab.named) && telling ? live : base;
 }
 
+// The last terminal folder focused per space (shared "vnh.lastCwd"), for the run bar, the cmd-enter
+// popup and the status bar, so a focused mod pane doesn't send them to the space's starting folder.
+// Kept here because the tab bar is always in the VNH layout (the Files panel may be another mod).
+function rememberWorkFolder() {
+  const space = spaces().find((s) => s.active), f = focused();
+  if (!space || !f) return;
+  const pane = f.pane ? panes().find((p) => p.pane === f.pane) : null;
+  const cwd = pane?.terminal ? pane.cwd : (f.pane === null && f.terminal ? f.cwd : null);
+  if (!cwd) return;
+  const map = shared("vnh.lastCwd") ?? {};
+  if (map[space.id] !== cwd) setShared("vnh.lastCwd", { ...map, [space.id]: cwd });
+}
+
 export default class Tabs extends View {
   init(_props, cx) {
     this.pressed = null;
@@ -34,6 +47,7 @@ export default class Tabs extends View {
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
+    if (!checking()) { rememberWorkFolder(); cx?.timer.every(1000, () => rememberWorkFolder()); }
     try { this.focus = JSON.parse(localStorage.getItem("timelineFocus") ?? "null"); } catch { this.focus = null; }
     // keys.json: "vnh-tabs.timeline" (cmd-shift-b) toggles the Timeline the same way as its button.
     // "vnh-tabs.insights": the Insights toolbar button; "vnh-tabs.insights-close": Esc in the dashboard.

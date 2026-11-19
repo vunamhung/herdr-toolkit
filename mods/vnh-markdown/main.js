@@ -6,7 +6,7 @@
 // show up. Links: web URLs open in the browser; a relative .md link opens in another tab like this.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { theme, props, readTextFile, run, spaces, window, exec, panes, nextCommand } from "herdr";
+import { theme, props, readTextFile, run, spaces, window, exec, panes, nextCommand, layout } from "herdr";
 
 const MAX = 1_000_000; // readTextFile's limit
 const FONT = "PragmataPro";
@@ -62,7 +62,9 @@ export default class MarkdownView extends View {
     run("tab.close", { id: me.tab, confirmed: true });
     const back = props()?.back;
     if (back) run("tab.select", { id: back });
-    run("vnh-files.focus"); // the Files panel takes the keyboard back
+    // The Files panel takes the keyboard back (when the layout's Files panel is vnh-files).
+    const walk = (n) => n?.content?.mod === "vnh-files" || (n?.children ?? []).some(walk);
+    if (walk(layout())) run("vnh-files.focus");
   }
 
   openLink(url) {
