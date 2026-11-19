@@ -1,5 +1,8 @@
 {
   "layout:VNH": {
     "cmd-shift-b": "vnh-tabs.timeline"
+  },
+  "global": {
+    "cmd-enter": "mod.open:vnh-command"
   }
 }
