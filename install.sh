@@ -3,6 +3,8 @@
 #
 #   ./install.sh            mods + Claude Code status line script
 #   ./install.sh --layout   also install layouts/VNH.json and switch Herdr to it
+#   ./install.sh --karabiner  also add the Cmd+` -> Herdr rule to Karabiner-Elements
+# Options can be combined: ./install.sh --layout --karabiner
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -28,7 +30,10 @@ if ! jq -e '.statusLine.command == "~/.claude/statusline.sh"' "$HOME/.claude/set
   echo '    "statusLine": { "type": "command", "command": "~/.claude/statusline.sh", "padding": 0 }'
 fi
 
-if [ "${1:-}" = "--layout" ]; then
+ARGS=" $* "
+want() { case "$ARGS" in *" $1 "*) return 0;; esac; return 1; }
+
+if want --layout; then
   echo "layout: VNH"
   backup "$HERDR/layouts/VNH.json"
   cp "$ROOT/layouts/VNH.json" "$HERDR/layouts/VNH.json"
@@ -37,6 +42,22 @@ if [ "${1:-}" = "--layout" ]; then
   KEYS="$HERDR/keys.json"; [ -s "$KEYS" ] || echo "{}" > "$KEYS"
   jq -s '.[0] * .[1]' "$KEYS" "$ROOT/keys/vnh.json" > "$KEYS.tmp" && mv "$KEYS.tmp" "$KEYS"
   command -v herdr-app >/dev/null && herdr-app do layout.switch '{"name":"VNH"}' >/dev/null || true
+fi
+
+if want --karabiner; then
+  echo "karabiner: Cmd+\` activates Herdr"
+  KB="$HOME/.config/karabiner/karabiner.json"
+  if [ ! -f "$KB" ]; then
+    echo "  skipped: $KB not found (install Karabiner-Elements and open it once)"
+  else
+    backup "$KB"
+    # Replace a rule with the same description in the selected profile, else prepend it.
+    jq --slurpfile src "$ROOT/karabiner/herdr-hotkey.json" '
+      ($src[0].rules) as $new | ($new | map(.description)) as $names
+      | .profiles |= map(if .selected then
+          .complex_modifications.rules = ($new + ((.complex_modifications.rules // []) | map(select(.description as $d | $names | index($d) | not))))
+        else . end)' "$KB" > "$KB.tmp" && mv "$KB.tmp" "$KB"
+  fi
 fi
 
 if command -v herdr-app >/dev/null; then

@@ -1,0 +1,18 @@
+{
+  "title": "Herdr",
+  "rules": [
+    {
+      "description": "Cmd+` activates Herdr",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "grave_accent_and_tilde",
+            "modifiers": { "mandatory": ["command"] }
+          },
+          "to": [{ "shell_command": "open -b dev.herdr.app" }]
+        }
+      ]
+    }
+  ]
+}

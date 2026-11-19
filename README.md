@@ -11,6 +11,7 @@ Personal customizations for the [Herdr](https://herdr.dev) desktop app.
 | `mods/vnh-tabs/` | `~/.config/herdr-app/mods/vnh-tabs/` | Clone of Herdr's `tabs` (0.1.16) with a **Timeline** button after Files and Changes; it toggles the Timeline panel and is highlighted while the panel shows. Opening the Timeline (button, `⌘⇧B` or palette) closes the Files/Changes panel, and closing it reopens that panel if it was open; the left sidebar is left alone. |
 | `mods/vnh-prompts/` | `~/.config/herdr-app/mods/vnh-prompts/` | Clone of the `over9k-prompts` Timeline panel without its "Timeline" title (the tab bar's button names it). `place` is `none` so Herdr does not dock an extra copy; the layout places it. |
 | `mods/vnh-files/` | `~/.config/herdr-app/mods/vnh-files/` | Clone of Herdr's `files` (0.1.16) whose rows are drag sources: drag a file or folder into a terminal to type `@<path>` relative to the panel's folder (a folder ends in `/`), which Claude Code reads as a file mention. On a remote machine it stays the absolute path. Clicks still open folders and preview files. |
+| `karabiner/herdr-hotkey.json` | merged into `~/.config/karabiner/karabiner.json` (selected profile) | Karabiner-Elements rule: `⌘`` ` from any app activates Herdr (`open -b dev.herdr.app`). It replaces macOS's own `⌘`` ` (cycle the windows of the front app). |
 | `claude/statusline.sh` | `~/.claude/statusline.sh` | Claude Code status line command. It publishes model, effort, 5h/7d usage, reset times and context % to `~/.cache/claude-statusline/limits.json` (read by the mod) and prints nothing, so the in-terminal status line is hidden. |
 | `layouts/VNH.json` | `~/.config/herdr-app/layouts/VNH.json` | The **VNH** layout, based on Herdr's `main`: status bar uses `claude-limits-status`, the sidebar's top row uses `vnh-chrome`, the tab bar uses `vnh-tabs`, the Files panel uses `vnh-files`, and the sidebar footer (Settings / Add machine) is removed. Settings stays on `⌘,` and both are in the command palette (`⌘⇧P`). The Timeline panel (`vnh-prompts`) is the block `timeline`. |
 | `keys/vnh.json` | merged into `~/.config/herdr-app/keys.json` | While the VNH layout shows: `⌘⇧B` toggles the Timeline panel through `vnh-tabs.timeline` (same as the tab bar's Timeline button, so Files/Changes closes and reopens in the same step) (next to Herdr's `⌘B` for the sidebar). |
@@ -20,6 +21,7 @@ Personal customizations for the [Herdr](https://herdr.dev) desktop app.
 ```sh
 ./install.sh            # mods + status line script
 ./install.sh --layout   # also the layout + its keys, and switch Herdr to it
+./install.sh --karabiner  # also the Cmd+` -> Herdr Karabiner rule (combine flags freely)
 ```
 
 Existing files are backed up as `<file>.bak-<timestamp>`.
