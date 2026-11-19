@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, agents, theme, run, window, keys, home, readTextFile, checking } from "herdr";
+import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, exec, checking } from "herdr";
 
 // Written by ~/.claude/statusline.sh on every Claude Code status refresh:
 // { model, effort, five, five_reset, seven, seven_reset, ctx, updated } (resets/updated: unix seconds;
@@ -16,14 +16,115 @@ function untilReset(epoch) {
   return `${Math.floor(s / 60)}m`;
 }
 
+// One shell call for everything the git segment shows (same numbers as the old Claude status line).
+const GIT_SCRIPT = `
+g() { git --no-optional-locks "$@" 2>/dev/null; }
+g rev-parse --is-inside-work-tree >/dev/null || exit 0
+echo "@@status"; g status --porcelain=v2 --branch
+echo "@@numstat"; g diff HEAD --numstat
+echo "@@stash"; g stash list | wc -l
+gd=$(g rev-parse --absolute-git-dir)
+echo "@@state"
+{ [ -d "$gd/rebase-merge" ] || [ -d "$gd/rebase-apply" ]; } && echo REBASING
+[ -f "$gd/MERGE_HEAD" ] && echo MERGING
+true`;
+
+function parseGit(out) {
+  const sections = {};
+  let cur = null;
+  for (const line of out.split("\n")) {
+    if (line.startsWith("@@")) { cur = line.slice(2); sections[cur] = []; continue; }
+    if (cur && line) sections[cur].push(line);
+  }
+  if (!sections.status) return null;
+  const info = { staged: 0, modified: 0, untracked: 0, conflicts: 0, ahead: 0, behind: 0, added: 0, removed: 0, stash: 0, state: [] };
+  for (const l of sections.status) {
+    if (l.startsWith("# branch.ab ")) {
+      const m = l.match(/\+(\d+) -(\d+)/);
+      if (m) { info.ahead = +m[1]; info.behind = +m[2]; }
+    } else if (l.startsWith("? ")) info.untracked++;
+    else if (l.startsWith("u ")) info.conflicts++;
+    else if (l.startsWith("1 ") || l.startsWith("2 ")) {
+      const xy = l.slice(2, 4);
+      if (xy[0] !== ".") info.staged++;
+      if (xy[1] !== ".") info.modified++;
+    }
+  }
+  for (const l of sections.numstat ?? []) {
+    const [a, d] = l.split("\t");
+    info.added += +a || 0; info.removed += +d || 0; // binary files show "-"
+  }
+  info.stash = +(sections.stash?.[0] ?? "0").trim() || 0;
+  info.state = sections.state ?? [];
+  return info;
+}
+
 // Clone of Herdr's workspace-status with Claude Code's model and usage limits next to the agents count.
 export default class ClaudeLimitsStatus extends View {
   init(_props, cx) {
     this.limits = null;
+    this.git = null; // { key, info }
+    this.gitAt = 0;
+    this.gitBusy = false;
     if (checking()) return;
     this.refresh(cx);
     // Gentle poll: the file changes at most every few seconds, and timers keep running while hidden.
     cx.timer.every(5000, (cx) => this.refresh(cx));
+    // Git: re-read at once when the shown folder changes, else every 6 s.
+    this.refreshGit(cx);
+    cx.timer.every(1500, (cx) => this.refreshGit(cx));
+  }
+
+  // The folder the bar describes: the active space's focused terminal, else its folder.
+  gitTarget() {
+    const space = spaces().find((s) => s.active);
+    if (!space) return null;
+    const tabs = new Set(space.tabs.map((t) => t.id));
+    const mine = panes().filter((p) => p.terminal && tabs.has(p.tab) && p.cwd);
+    const cwd = (mine.find((p) => p.focused) ?? mine[0])?.cwd ?? space.folder;
+    return cwd ? { cwd, on: space.machine ?? null, key: `${space.machine ?? ""}:${cwd}` } : null;
+  }
+
+  refreshGit(cx) {
+    const target = this.gitTarget();
+    const moved = (target?.key ?? null) !== (this.git?.key ?? null);
+    if (this.gitBusy || (!moved && Date.now() - this.gitAt < 6000)) return;
+    if (!target) { if (this.git) { this.git = null; cx.notify(); } return; }
+    this.gitBusy = true;
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("sh", ["-c", GIT_SCRIPT], { cwd: target.cwd, on: target.on, timeout: 15000 }).catch(() => null);
+        const info = r && r.code === 0 ? parseGit(r.stdout) : null;
+        const next = { key: target.key, info };
+        if (JSON.stringify(next) !== JSON.stringify(this.git)) { this.git = next; cx.notify(); }
+      } finally {
+        this.gitAt = Date.now();
+        this.gitBusy = false;
+      }
+    });
+  }
+
+  // "⚔1 ●2 ✚3 ?1 ↑2 ↓1 +40/−7 stash 1 REBASING": zero counts are left out.
+  gitStats(t) {
+    const g = this.git?.info;
+    if (!g) return null;
+    const parts = [];
+    const add = (text, color) => parts.push(color ? div().text_color(color).child(text) : div().child(text));
+    if (g.conflicts) add(`⚔${g.conflicts}`, t.blocked);
+    if (g.staged) add(`●${g.staged}`, t.ansi2);
+    if (g.modified) add(`✚${g.modified}`, t.ansi3);
+    if (g.untracked) add(`?${g.untracked}`, t.dim);
+    if (g.ahead) add(`↑${g.ahead}`);
+    if (g.behind) add(`↓${g.behind}`, t.blocked);
+    if (g.added || g.removed) {
+      parts.push(h_flex().items_center()
+        .child(div().text_color(t.ansi2).child(`+${g.added}`))
+        .child(div().child("/"))
+        .child(div().text_color(t.blocked).child(`−${g.removed}`)));
+    }
+    if (g.stash) add(`stash ${g.stash}`);
+    for (const s of g.state) add(s, t.blocked);
+    return parts.length ? h_flex().gap(6).items_center().children(parts) : null;
   }
 
   refresh(cx) {
@@ -81,9 +182,11 @@ export default class ClaudeLimitsStatus extends View {
     const needs = list.filter(a => a.status === "blocked").length;
     const label = (icon, text) => h_flex().gap(6).items_center().child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
     const claude = this.claude(t);
+    const gitStats = this.gitStats(t);
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
       .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
-      .when(Boolean(space?.branch), el => el.child(label("branch", space.branch)))
+      .when(Boolean(space?.branch), el => el.child(h_flex().gap(8).items_center().child(label("branch", space.branch))
+        .when(Boolean(gitStats), el => el.child(gitStats))))
       .child(h_flex().gap(6).items_center().child(div().size(6).rounded(3).bg(t.dim)).child(`${list.length} agents`)
         .when(needs > 0, el => el.child(div().text_color(t.blocked).child(`· ${needs} needs you`))))
       .when(Boolean(claude), el => el.child(claude))
