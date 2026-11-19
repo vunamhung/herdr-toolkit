@@ -13,7 +13,7 @@ Personal customizations for the [Herdr](https://herdr.dev) desktop app.
 | `mods/vnh-files/` | `~/.config/herdr-app/mods/vnh-files/` | Clone of Herdr's `files` (0.1.16) whose rows are drag sources: drag a file or folder into a terminal to type `@<path>` relative to the panel's folder (a folder ends in `/`), which Claude Code reads as a file mention. On a remote machine it stays the absolute path. Clicks still open folders and preview files. |
 | `claude/statusline.sh` | `~/.claude/statusline.sh` | Claude Code status line command. It publishes model, effort, 5h/7d usage, reset times and context % to `~/.cache/claude-statusline/limits.json` (read by the mod) and prints nothing, so the in-terminal status line is hidden. |
 | `layouts/VNH.json` | `~/.config/herdr-app/layouts/VNH.json` | The **VNH** layout, based on Herdr's `main`: status bar uses `claude-limits-status`, the sidebar's top row uses `vnh-chrome`, the tab bar uses `vnh-tabs`, the Files panel uses `vnh-files`, and the sidebar footer (Settings / Add machine) is removed. Settings stays on `⌘,` and both are in the command palette (`⌘⇧P`). The Timeline panel (`vnh-prompts`) is the block `timeline`. |
-| `keys/vnh.json` | merged into `~/.config/herdr-app/keys.json` | While the VNH layout shows: `⌘⇧B` toggles the Timeline panel (same as the tab bar's Timeline button) (next to Herdr's `⌘B` for the sidebar). |
+| `keys/vnh.json` | merged into `~/.config/herdr-app/keys.json` | While the VNH layout shows: `⌘⇧B` toggles the Timeline panel through `vnh-tabs.timeline` (same as the tab bar's Timeline button, so Files/Changes closes and reopens in the same step) (next to Herdr's `⌘B` for the sidebar). |
 
 ## Install
 

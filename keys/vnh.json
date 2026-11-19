@@ -1,5 +1,5 @@
 {
   "layout:VNH": {
-    "cmd-shift-b": "layout.toggle:timeline"
+    "cmd-shift-b": "vnh-tabs.timeline"
   }
 }

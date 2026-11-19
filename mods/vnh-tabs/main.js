@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, nextCommand } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -28,22 +28,52 @@ function label(tab, lead) {
 }
 
 export default class Tabs extends View {
-  init() {
+  init(_props, cx) {
     this.pressed = null;
     this.scroll = ScrollHandle.new();
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
     try { this.focus = JSON.parse(localStorage.getItem("timelineFocus") ?? "null"); } catch { this.focus = null; }
+    // keys.json: "vnh-tabs.timeline" (cmd-shift-b) toggles the Timeline the same way as its button.
+    cx?.spawn(async (cx) => { for (;;) { if ((await nextCommand()) === "timeline") this.toggleTimeline(); cx.notify(); } });
+  }
+
+  // The Timeline button and cmd-shift-b: the panel and the Timeline change in the same
+  // step, so the layout reflows once (no frame with both, or neither, showing).
+  toggleTimeline() {
+    const root = layout(), timeline = find(root, "timeline"), panel = find(root, "panel");
+    if (!timeline) return;
+    const open = Boolean(timeline.hidden);
+    if (open) {
+      if (!this.focus) { this.focus = { panel: Boolean(panel && !panel.hidden) }; this.saveFocus(); }
+      if (this.focus.panel) run("layout.hide", { id: "panel" });
+      run("layout.show", { id: "timeline" });
+    } else {
+      const f = this.focus;
+      this.focus = null;
+      this.saveFocus();
+      run("layout.hide", { id: "timeline" });
+      if (f?.panel) run("layout.show", { id: "panel" });
+    }
+    // Until the layout shows it, the old state isn't a change (syncTimeline).
+    this.timelineShown = open;
+    this.timelineWant = { shown: open, until: Date.now() + 1000 };
   }
 
   // VNH: opening the Timeline hides the Files/Changes panel; closing it brings the panel
   // back if it was open. The left sidebar is left alone. It follows the timeline block
-  // however it is toggled (the button, cmd-shift-b, the palette). `this.focus` is what
+  // when something else toggles it (the palette); the button and cmd-shift-b use
+  // toggleTimeline, which changes both at once. `this.focus` is what
   // was open, kept in localStorage so a reload while the Timeline shows still restores it.
   syncTimeline(timeline, panel) {
     if (!timeline) return;
-    const shown = !timeline.hidden, was = this.timelineShown;
+    const shown = !timeline.hidden;
+    if (this.timelineWant) {
+      if (this.timelineWant.shown !== shown && Date.now() < this.timelineWant.until) return;
+      this.timelineWant = null;
+    }
+    const was = this.timelineShown;
     this.timelineShown = shown;
     if (shown && was === false && !this.focus) {
       this.focus = { panel: Boolean(panel && !panel.hidden) };
@@ -178,7 +208,7 @@ export default class Tabs extends View {
       return h_flex().id("panel-timeline").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
         .text_size(12).bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
-        .on_click(() => run("layout.toggle", { id: "timeline" }))
+        .on_click(() => this.toggleTimeline())
         .child(svg("mods/vnh-prompts/timeline.svg").size(14)).child("Timeline");
     };
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
