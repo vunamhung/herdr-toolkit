@@ -58,6 +58,15 @@ export default class Tabs extends View {
         else if (c === "insights") this.toggleInsights();
         else if (c === "insights-close") this.closeInsights();
         else if (c === "files" || c === "changes" || c === "graph") this.togglePanel(c);
+        // "vnh-tabs.git-push" (cmd-\): show the Git panel, then git-graph's push dialog. A hidden
+        // mod gets no commands, so the panel shows first.
+        else if (c === "git-push") {
+          const body = find(layout(), "panel-body");
+          if (body?.children?.some((x) => x.id === "graph")) {
+            run("layout.select", { stack: "panel-body", child: "graph" }); run("layout.show", { id: "panel" });
+            cx.timer.after(350, () => run("git-graph.push"));
+          }
+        }
         cx.notify();
       }
     });

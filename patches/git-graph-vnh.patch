@@ -1,6 +1,38 @@
 --- a/mods/git-graph/graph.js
 +++ b/mods/git-graph/graph.js
-@@ -162,11 +162,26 @@
+@@ -2,8 +2,8 @@
+ // commit) for the focused pane's repository, or `props.folder` when opened as
+ // a pane. Labels take double-clicks (checkout) and right-clicks (menus).
+ import { div, svg, PathBuilder } from "gpui-kit";
+-import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
+-import { spaces, panes, focused, layout, exec, watchFolder, readTextFile, theme, settings, props, shared, setShared, openOverlay, home, notify, knownAgents, updates } from "herdr";
++import { v_flex, h_flex, Scrollbar, v_virtual_list, InputState, Input } from "gpui-base";
++import { spaces, panes, focused, layout, exec, watchFolder, readTextFile, theme, settings, props, shared, setShared, openOverlay, home, notify, knownAgents, updates, nextCommand } from "herdr";
+ import { layoutLanes } from "./lanes.js";
+ import { READ, STATUS, UNCOMMITTED, LABEL, logArgs, parseLog, parseStatus, withUncommitted, labelsOf, hitLabel,
+   menuFor, menuHeight, fileArgs, joinFiles, diffArgs, diffRows } from "./git.js";
+@@ -142,6 +142,20 @@
+ export class Graph {
+   init(cx) {
+     this.folder = props()?.folder ?? null;
++    // VNH: the branch picker (the branch chip) and keys: "git-graph.push" (cmd-\ via vnh-tabs),
++    // "git-graph.branches".
++    this.branchPicking = false; this.branchList = null; this.branchQuery = ""; this.branchAt = 0;
++    this.branchInput = InputState.new({ placeholder: "Find a branch…" });
++    this.branchInput.on("change", (_e, cx) => { this.branchQuery = this.branchInput.value(); this.branchAt = 0; cx.notify(); });
++    this.branchInput.on("submit", (_e, cx) => { const b = this.branchRows()[this.branchAt]; if (b) this.pickBranch(b, cx); });
++    cx.spawn(async (cx) => {
++      for (;;) {
++        const c = String(await nextCommand()).replace(/^git-graph\./, "");
++        if (c === "push") this.push(cx);
++        else if (c === "branches") this.toggleBranches(cx);
++        cx.notify();
++      }
++    });
+     // A scrollbar finds its list by name: each copy (panel, pane) needs its own.
+     this.listId = `graph-rows-${Math.random().toString(36).slice(2)}`;
+     this.diffId = `${this.listId}-diff`;
+@@ -162,12 +176,27 @@
      cx.timer.after(1500, (cx) => this.warm(cx));
      // Remote spaces can't be watched: poll them gently. New folders get read ahead.
      // The Manygit list re-reads too: edits in a working tree don't touch .git.
@@ -15,7 +47,7 @@
    }
  
    key() { return JSON.stringify(location(this.folder)); }
-+
+ 
 +  // VNH: whether the graph is on screen. When the layout's side panel holds it, only while that
 +  // panel shows and has it selected; anywhere else (a pane, another layout) always.
 +  shown() {
@@ -25,10 +57,11 @@
 +    if (!block) return true;
 +    return Boolean(panel && !panel.hidden && body.active === block.id);
 +  }
- 
++
    reset() {
      Object.assign(this, folderState());
-@@ -392,6 +407,7 @@
+     this.watchToken++; this.watching = null; this.picking = false;
+@@ -392,6 +421,7 @@
            // Windows reports backslashes; the ref checks read slashes.
            const paths = (await watchFolder(dir)).map((p) => p.replace(/\\/g, "/"));
            if (token !== this.watchToken) return;
@@ -36,3 +69,129 @@
            if (paths.some((p) => (gitDir || inGitDir(p)) && isRefChange(p))) this.refresh(cx, true);
            else if (paths.some((p) => !gitDir && !inGitDir(p))) this.statusSoon(cx);
          }
+@@ -674,14 +704,18 @@
+         .child(h_flex().id("graph-repository").h(22).px(7).gap(5).min_w(0).items_center().rounded(6).cursor_pointer()
+           .bg(this.picking ? t.selected : t.raised).text_color(t.foreground).hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.togglePicker(cx))
+           .child(svg(icon("folder")).size(12).flex_none()).child(div().min_w(0).truncate().text_size(11.5).font_semibold().child(repo.name))))
+-      .when(ready && Boolean(where), (e) => e.child(h_flex().h(22).px(7).gap(5).min_w(0).items_center().rounded(6).bg(t.accent + "26").text_color(t.accent)
+-        .child(svg(icon(this.current ? "branch" : "commit")).size(12).flex_none()).child(div().min_w(0).truncate().text_size(11.5).font_semibold().child(where))))
++      .when(ready && Boolean(where), (e) => e.child(h_flex().id("graph-branch").h(22).px(7).gap(5).min_w(0).items_center().rounded(6).cursor_pointer()
++        .bg(this.branchPicking ? t.accent + "40" : t.accent + "26").text_color(t.accent).hover((st) => st.bg(t.accent + "40"))
++        .tooltip("Switch branch").on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => this.toggleBranches(cx))
++        .child(svg(icon(this.current ? "branch" : "commit")).size(12).flex_none()).child(div().min_w(0).truncate().text_size(11.5).font_semibold().child(where))
++        .child(div().flex_none().text_size(9).child("▾"))))
+       .when(this.state === "workspace", (e) => e.child(div().flex_none().text_size(11.5).text_color(t.dim).child(count(ws.repos.length, "repo"))))
+       .child(div().flex_1())
+       // A newer release: a dot, and the update window on click.
+       .when(Boolean(available()), (e) => e.child(h_flex().id("graph-update").h(24).px(7).gap(5).flex_none().items_center().rounded(6).text_size(11.5)
+         .cursor_pointer().text_color(t.accent).hover((s) => s.bg(t.hover)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+         .on_click(() => openUpdate()).child(div().size(6).rounded(3).bg(t.accent)).child("Update Graph")))
++      .when(ready && this.remoteNames?.length > 0 && Boolean(this.current), (e) => e.child(this.iconButton("graph-push", "push", null, false, (_e, cx) => this.push(cx), t).tooltip("Push this branch · ⌘\\")))
+       .when(ready && this.remoteNames?.length > 0, (e) => e.child(this.iconButton("graph-fetch", "fetch", this.fetching ? "Fetching…" : null, false, (_e, cx) => this.fetch(cx), t)))
+       .when(this.state === "workspace", (e) => {
+         const run = this.fetchAll?.root === ws.root ? this.fetchAll : null;
+@@ -721,8 +755,88 @@
+     const { rows, height } = this.repoRows(t);
+     return v_flex().id(`${this.listId}-picker`).h(Math.min(height, 260)).flex_none().py(4).overflow_y_scrollbar()
+       .bg(t.raised).border_b(1).border_color(t.border).children(rows);
++  }
++
++  // VNH: local branches (latest commit first), then remote ones no local branch tracks.
++  toggleBranches(cx) {
++    this.branchPicking = !this.branchPicking;
++    if (this.branchPicking) {
++      this.branchQuery = ""; this.branchAt = 0; this.branchList = null;
++      this.branchInput.set_value("");
++      this.branchInput.focus();
++      const root = this.root, on = this.on;
++      cx.spawn(async (cx) => {
++        const r = await exec("git", [...READ, "for-each-ref", "--sort=-committerdate", "--format=%(refname)%09%(committerdate:relative)%09%(upstream:short)", "refs/heads", "refs/remotes"], { cwd: root, on }).catch(() => null);
++        if (root !== this.root) return;
++        const local = [], remote = [];
++        for (const line of (r?.stdout ?? "").split("\n")) {
++          const [ref, when, up] = line.split("\t");
++          if (!ref) continue;
++          if (ref.startsWith("refs/heads/")) local.push({ kind: "local", name: ref.slice(11), when, up });
++          else if (ref.startsWith("refs/remotes/") && !ref.endsWith("/HEAD")) remote.push({ kind: "remote", name: ref.slice(13), when });
++        }
++        const tracked = new Set(local.map((b) => b.up).filter(Boolean)), names = new Set(local.map((b) => b.name));
++        this.branchList = [...local, ...remote.filter((b) => !tracked.has(b.name) && !names.has(b.name.replace(/^[^/]+\//, "")))];
++        cx.notify();
++      });
++    } else this.handle.focus();
++    cx.notify();
+   }
+ 
++  branchRows() {
++    const q = (this.branchQuery ?? "").trim().toLowerCase();
++    return (this.branchList ?? []).filter((b) => !q || b.name.toLowerCase().includes(q));
++  }
++
++  // A local branch checks out at once (as double-clicking its label does); a remote one asks
++  // for the local name first. Both go through the graph's own checks (HEAD unchanged, etc.).
++  pickBranch(b, cx) {
++    this.branchPicking = false;
++    this.handle.focus();
++    if (b.kind === "local") { if (b.name !== this.current) cx.spawn(async () => { await perform({ type: "checkout", name: b.name }, {}, this.ctx); }); }
++    else openDialog({ type: "checkoutRemote", name: b.name, branch: b.name.replace(/^[^/]+\//, "") }, this.ctx);
++    cx.notify();
++  }
++
++  // Push the current branch: the graph's push dialog (remote, set upstream), never a force push.
++  push(cx) {
++    if (!this.ctx || this.state !== "ready") return;
++    if (!this.current) { notify({ title: "Nothing to push", body: "HEAD is detached: check out a branch first.", level: "warning", timeout: 3000 }); return; }
++    if (!this.remoteNames?.length) { notify({ title: "No remote", body: "This repository has no remote to push to.", level: "warning", timeout: 3000 }); return; }
++    openDialog({ type: "push", name: this.current }, this.ctx);
++  }
++
++  branchPicker(t) {
++    const rows = this.branchRows();
++    if (this.branchAt >= rows.length) this.branchAt = Math.max(0, rows.length - 1);
++    const row = (b, i) => {
++      const here = b.kind === "local" && b.name === this.current, on = i === this.branchAt;
++      return h_flex().id(`graph-br-${b.kind}-${b.name}`).h(26).flex_none().px(10).gap(7).items_center().rounded(6).cursor_pointer()
++        .when(on, (e) => e.bg(t.selected)).hover((st) => st.bg(t.hover))
++        .on_click((_e, cx) => this.pickBranch(b, cx))
++        .child(svg(icon(b.kind === "local" ? "branch" : "cloud")).size(12).flex_none().text_color(here ? t.accent : t.dim))
++        .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(here ? t.accent : t.foreground).when(here, (e) => e.font_semibold()).child(b.name))
++        .when(here, (e) => e.child(svg(icon("check")).size(12).flex_none().text_color(t.accent)))
++        .child(div().flex_none().text_size(10.5).text_color(t.dim).child(b.when ?? ""));
++    };
++    const list = this.branchList === null ? [div().px(10).py(6).text_size(11.5).text_color(t.dim).child("Reading branches…")]
++      : rows.length ? rows.map(row) : [div().px(10).py(6).text_size(11.5).text_color(t.dim).child("No branch matches")];
++    return v_flex().id(`${this.listId}-branches`).flex_none().pb(6).bg(t.raised).border_b(1).border_color(t.border)
++      .on_key_down((e, cx) => {
++        const n = rows.length;
++        if (e.key === "escape") { this.branchPicking = false; this.handle.focus(); }
++        else if (e.key === "down" && n) this.branchAt = (this.branchAt + 1) % n;
++        else if (e.key === "up" && n) this.branchAt = (this.branchAt + n - 1) % n;
++        else return;
++        cx.stop_propagation(); cx.notify();
++      })
++      .child(h_flex().h(30).mx(8).mt(8).mb(4).px(8).gap(6).items_center().rounded(7).border_1().border_color(t.accent).bg(t.background)
++        .child(svg(icon("branch")).size(12).flex_none().text_color(t.dim))
++        .child(Input.new(this.branchInput).flex_1().h_full().text_size(12).text_color(t.foreground))
++        .child(div().flex_none().text_size(10.5).text_color(t.dim).child("↑↓ Enter · Esc")))
++      .child(v_flex().id(`${this.listId}-branch-rows`).max_h(260).px(4).gap(1).overflow_y_scrollbar().children(list));
++  }
++
+   // Opening it reads every row again, since the list stopped watching while the graph showed.
+   togglePicker(cx) {
+     this.picking = !this.picking;
+@@ -923,6 +1037,7 @@
+       .on_mouse_up("left", (_e, cx) => this.endDrag(cx))
+       .on_hover((hovered, cx) => { if (!hovered) this.endDrag(cx); })
+       .on_key_down((e, cx) => {
++        if (e.key === "escape" && this.branchPicking) { this.branchPicking = false; cx.stop_propagation(); cx.notify(); return; }
+         if (e.key !== "escape" || !(this.selected || this.opened)) return;
+         // Esc closes the dropdown, a diff, then the details, then goes back to the Manygit list.
+         if (this.picking) this.picking = false; else if (this.diff) this.diff = null; else if (this.selected) { this.selected = null; this.details = null; } else this.back(cx);
+@@ -939,6 +1054,7 @@
+       .child(this.header(t))
+       .when(this.state === "workspace", (e) => e.child(this.workspaceList(t)))
+       .when(Boolean(this.picking && this.workspace && this.opened), (e) => e.child(this.picker(t)))
++      .when(ready && this.branchPicking, (e) => e.child(this.branchPicker(t)))
+       .when(ready, (e) => e.child(this.toolbar(t)).child(this.columns(t, this.graphWidth())).child(this.list(t, mono))
+         .when(Boolean(this.selected), (el) => el.child(this.detailsPane(t, mono))))
+       .when(!ready && this.state !== "workspace", (e) => e.child(this.empty(t)));

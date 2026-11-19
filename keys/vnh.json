@@ -3,7 +3,8 @@
     "cmd-shift-b": "vnh-tabs.timeline",
     "alt-s": "better-changes.generate",
     "cmd-e": "vnh-tabs.files",
-    "alt-a": "vnh-tabs.changes"
+    "alt-a": "vnh-tabs.changes",
+    "cmd-\\": "vnh-tabs.git-push"
   },
   "global": {
     "cmd-enter": "mod.open:vnh-command",
