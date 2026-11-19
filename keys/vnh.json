@@ -6,6 +6,8 @@
     "alt-a": "vnh-tabs.changes"
   },
   "global": {
-    "cmd-enter": "mod.open:vnh-command"
+    "cmd-enter": "mod.open:vnh-command",
+    "ctrl-shift-r": "mod.open:run",
+    "ctrl-shift-q": "overlay.close"
   }
 }
