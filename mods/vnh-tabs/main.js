@@ -34,6 +34,34 @@ export default class Tabs extends View {
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
+    try { this.focus = JSON.parse(localStorage.getItem("timelineFocus") ?? "null"); } catch { this.focus = null; }
+  }
+
+  // VNH: opening the Timeline hides the Files/Changes panel; closing it brings the panel
+  // back if it was open. The left sidebar is left alone. It follows the timeline block
+  // however it is toggled (the button, cmd-shift-b, the palette). `this.focus` is what
+  // was open, kept in localStorage so a reload while the Timeline shows still restores it.
+  syncTimeline(timeline, panel) {
+    if (!timeline) return;
+    const shown = !timeline.hidden, was = this.timelineShown;
+    this.timelineShown = shown;
+    if (shown && was === false && !this.focus) {
+      this.focus = { panel: Boolean(panel && !panel.hidden) };
+      this.saveFocus();
+      if (this.focus.panel) run("layout.hide", { id: "panel" });
+    } else if (!shown && this.focus) {
+      const f = this.focus;
+      this.focus = null;
+      this.saveFocus();
+      if (f.panel) run("layout.show", { id: "panel" });
+    }
+  }
+
+  saveFocus() {
+    try {
+      if (this.focus) localStorage.setItem("timelineFocus", JSON.stringify(this.focus));
+      else localStorage.removeItem("timelineFocus");
+    } catch {}
   }
 
   // One tab per wheel notch. A touchpad or smooth-scrolling mouse sends many
@@ -62,7 +90,8 @@ export default class Tabs extends View {
   // The side panel is remembered per space: switching shows that space's choice
   // (closed if it never had one), and opening or closing it records it.
   syncPanel(space, panel, body, enabled) {
-    if (!space || !panel) return;
+    // While the Timeline hides the panel (syncTimeline), that isn't the space's choice.
+    if (!space || !panel || this.focus) return;
     const now = panel.hidden ? null : body?.active ?? null;
     if (space.id !== this.space) {
       const first = this.space === undefined;
@@ -130,6 +159,7 @@ export default class Tabs extends View {
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
     const enabled = shared("workspace.panels") ?? ["files", "changes"];
+    this.syncTimeline(find(root, "timeline"), panel);
     this.syncPanel(space, panel, body, enabled);
     const panelButton = (id, label, icon) => {
       const on = panel && !panel.hidden && body?.active === id;
