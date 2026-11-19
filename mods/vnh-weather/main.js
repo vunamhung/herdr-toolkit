@@ -176,7 +176,7 @@ export default class Weather extends View {
 
   render() {
     const t = theme(), wx = this.wx;
-    const shell = v_flex().id("vnh-weather").size_full().px(16).py(9).gap(5).border_t(1).border_color(t.border).text_color(t.muted);
+    const shell = v_flex().id("vnh-weather").size_full().px(16).py(9).gap(5).text_color(t.muted);
     if (!wx) return shell.justify_center().child(div().text_size(11.5).text_color(t.dim).child(this.error ? "Weather unavailable" : "Finding the weather…"));
     const look = KINDS[wx.now.kind] ?? KINDS.cloudy;
     const icon = (k, night, size, color) => svg(`mods/vnh-weather/${(KINDS[k] ?? KINDS.cloudy)[night ? "night" : "day"]}.svg`).size(size).flex_none().text_color(color);
