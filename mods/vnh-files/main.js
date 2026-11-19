@@ -48,6 +48,21 @@ function markColor(t, mark) {
   return mark === "U" || mark === "A" ? t.ansi2 : mark === "M" ? t.ansi3 : mark === "D" || mark === "!" ? t.ansi1 : null;
 }
 
+// `git diff -U0` hunks as VS Code's change markers: added / modified line ranges (1-based, in the
+// working file) and "deleted" points (lines removed after line `start`).
+function parseHunks(diff) {
+  const out = [];
+  for (const line of diff.split("\n")) {
+    const m = line.match(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+    if (!m) continue;
+    const oldCount = m[1] === undefined ? 1 : Number(m[1]);
+    const start = Number(m[2]), count = m[3] === undefined ? 1 : Number(m[3]);
+    if (count === 0) out.push({ kind: "deleted", start, count: 0 });
+    else out.push({ kind: oldCount === 0 ? "added" : "modified", start, count });
+  }
+  return out;
+}
+
 // A folder's first-level contents: "3 folders · 12 files".
 function fmtCounts(dirs, files) {
   const part = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -349,6 +364,7 @@ export default class Files extends View {
 
   show(path, cx) {
     this.code?.release(); this.code = null; this.file = path; this.fileError = null;
+    this.fileHunks = []; this.fileLines = 0; this.lineStarts = null;
     if (!path || !cx) return;
     const context = this.context, root = this.root, on = this.on;
     cx.spawn(async cx => {
@@ -358,8 +374,21 @@ export default class Files extends View {
         if (text === null) { this.fileError = "This file is no longer available"; return; }
         if (text.includes("\0")) { this.fileError = "Binary file · no text preview"; return; }
         const t = theme(), ext = path.includes(".") ? path.split(".").pop() : "txt";
+        const value = text.length > 400000 ? text.slice(0, 400000) + "\n… (file truncated)" : text;
+        // Line start offsets (UTF-16, as the editor's selection uses) for jumping to a change.
+        const starts = [0];
+        for (let i = 0; i < value.length; i++) if (value.charCodeAt(i) === 10) starts.push(i + 1);
+        this.lineStarts = starts; this.fileLines = starts.length;
+        // Changes against HEAD for the overview ruler; an untracked file is all added.
+        const mark = this.marks[`${root}/${path}`];
+        if (mark === "U") this.fileHunks = [{ kind: "added", start: 1, count: starts.length }];
+        else if (mark) {
+          const d = await exec("git", ["--no-optional-locks", "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "-U0", "HEAD", "--", path], { cwd: root, on }).catch(() => null);
+          if (this.file !== path || !this.current(context)) return;
+          this.fileHunks = d?.code === 0 ? parseHunks(d.stdout) : [];
+        }
         this.code = EditorState.new({ language: LANG[ext] ?? ext, readonly: true,
-          value: text.length > 400000 ? text.slice(0, 400000) + "\n… (file truncated)" : text,
+          value,
           font_family: settings().font_family, font_size: 12,
           syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } });
       } catch { if (this.file === path && this.current(context)) this.fileError = "Cannot preview this file (binary, too large, or unreadable)"; }
@@ -426,8 +455,35 @@ export default class Files extends View {
       .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))
-      .when(Boolean(this.file), el => el.child(this.code ? Editor.new(this.code).flex_1().min_h(0) : div().p(12).text_color(t.dim).child(this.fileError || "Loading file…")))
+      .when(Boolean(this.file), el => el.child(this.code
+        ? h_flex().flex_1().min_h(0).child(Editor.new(this.code).flex_1().min_w(0).min_h(0)).when(this.fileHunks.length > 0, el => el.child(this.ruler(t)))
+        : div().p(12).text_color(t.dim).child(this.fileError || "Loading file…")))
       .when(this.sortOpen && !this.file, el => el.child(this.sortMenu(t)));
+  }
+
+  // VS Code style overview ruler beside the preview: where the file's uncommitted changes are,
+  // relative to its length (green added, blue modified, red removed). Click one to put the
+  // editor's cursor on that line.
+  ruler(t) {
+    const total = Math.max(1, this.fileLines), pct = (n) => `${Math.min(100, Math.max(0, n * 100))}%`;
+    const color = { added: t.ansi2, modified: t.ansi4, deleted: t.ansi1 };
+    return div().id("files-ruler").relative().w(10).flex_none().h_full().border_l(1).border_color(t.border)
+      .children(this.fileHunks.slice(0, 400).map((h, i) => {
+        const top = (h.kind === "deleted" ? h.start : h.start - 1) / total;
+        return div().id(`files-ruler-${i}`).absolute().left(2).w(6).top(pct(top)).min_h(3).rounded(1)
+          .when(h.count > 0, el => el.h(pct(h.count / total))).when(h.count === 0, el => el.h(3))
+          .bg(color[h.kind]).cursor_pointer()
+          .tooltip(h.kind === "deleted" ? `Removed after line ${h.start}` : `${h.kind === "added" ? "Added" : "Modified"} line${h.count > 1 ? `s ${h.start}–${h.start + h.count - 1}` : ` ${h.start}`}`)
+          .on_click((_e, cx) => this.jumpTo(h.kind === "deleted" ? h.start + 1 : h.start, cx));
+      }));
+  }
+
+  jumpTo(line, cx) {
+    if (!this.code || !this.lineStarts) return;
+    const at = this.lineStarts[Math.min(this.lineStarts.length, Math.max(1, line)) - 1] ?? 0;
+    this.code.focus();
+    this.code.set_selected_range({ start: at, end: at });
+    cx.notify();
   }
 
   // The Sort dropdown under the header's buttons; a click outside closes it.
