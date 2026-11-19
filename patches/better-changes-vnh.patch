@@ -1,6 +1,14 @@
 --- a/mods/better-changes/main.js
 +++ b/mods/better-changes/main.js
-@@ -62,6 +62,17 @@
+@@ -56,12 +56,25 @@
+ 
+     this.tab = localStorage.getItem("tab") === "commit" ? "commit" : "changes";
+     this.view = localStorage.getItem("view") === "flat" ? "flat" : "tree";
++    // VNH: "fluid" (one list) or "split" (Unstaged above, Staged below, each scrolling).
++    this.staging = localStorage.getItem("vnh-staging") === "split" ? "split" : "fluid";
+     this.diffLayout =
+       shared("better-changes.diff-layout") ??
+       (localStorage.getItem("diff-layout") === "split" ? "split" : "inline");
      if (this.mode === "sidebar") setShared("better-changes.diff-layout", this.diffLayout);
      this.menuOpen = false;
      this.menuFocus = cx.focus_handle();
@@ -82,7 +90,20 @@
    TextBox,
    SplitButton,
    SplitTrigger,
-@@ -113,6 +114,8 @@
+@@ -47,6 +48,12 @@
+     cx.notify();
+   },
+ 
++  setStaging(staging, cx) {
++    this.staging = staging;
++    localStorage.setItem("vnh-staging", staging);
++    cx.notify();
++  },
++
+   setView(view, cx) {
+     this.view = view;
+     localStorage.setItem("view", view);
+@@ -113,6 +120,8 @@
              }),
            ),
        )
@@ -91,12 +112,10 @@
        .child(
          IconButton({
            id: "refresh",
-@@ -142,6 +145,43 @@
-     }
-     this.refreshSpinning = false;
+@@ -144,6 +153,46 @@
      cx.notify();
-+  },
-+
+   },
+ 
 +  // VNH: Fork style: a check column on the left, the option's icon, its label. The same
 +  // settings as the ⋮ menu (file list view, diff layout).
 +  renderViewMenu() {
@@ -130,8 +149,64 @@
 +        MenuDivider(),
 +        option("inline", "diff-inline", "Inline diff", this.diffLayout === "inline", (cx) => this.setDiffLayout("inline", cx)),
 +        option("split", "diff-split", "Side by side diff", this.diffLayout === "split", (cx) => this.setDiffLayout("split", cx)),
++        MenuDivider(),
++        option("fluid-staging", "staging-fluid", "Fluid staging", this.staging !== "split", (cx) => this.setStaging("fluid", cx)),
++        option("split-staging", "staging-split", "Split view staging", this.staging === "split", (cx) => this.setStaging("split", cx)),
 +      ],
 +    });
++  },
++
+   renderMore() {
+     const option = (group, choice, selected, set) =>
+       MenuOption({
+@@ -187,7 +236,10 @@
+     const unstaged = this.files.filter((f) => f.unstaged && !f.conflict);
+     const staged = this.files.filter((f) => f.staged);
+     const committed = this.committed?.total ? this.committed : null;
+-    if (!conflicts.length && !unstaged.length && !staged.length && !committed)
++    const nothing = !conflicts.length && !unstaged.length && !staged.length && !committed;
++    // VNH: split view staging, as Fork's: working changes above, the staging area below.
++    if (this.staging === "split" && !nothing) return this.renderSplitStaging(list, conflicts, unstaged, staged, committed);
++    if (nothing)
+       list.child(Message(this.loading || !this.root ? "Loading changes…" : "No changes"));
+     this.groupsDrawn = 0;
+     this.addGroup(list, "conflict", "Conflicts", conflicts);
+@@ -208,6 +260,23 @@
+     return v_flex().id("changes").flex_1().min_h(0).child(list).child(this.renderCommitBox());
    },
  
-   renderMore() {
++  renderSplitStaging(top, conflicts, unstaged, staged, committed) {
++    const t = theme();
++    this.groupsDrawn = 0;
++    this.addGroup(top, "conflict", "Conflicts", conflicts);
++    this.addGroup(top, "unstaged", "Unstaged", unstaged);
++    if (committed)
++      this.addGroup(top, "committed", "Committed", committed.files, `not on ${committed.name}`, committed.total);
++    if (!this.groupsDrawn) top.child(Message("No unstaged changes"));
++    const limit = this.settings.limits.files;
++    if (this.total > limit) top.child(Message(`Showing the first ${limit.toLocaleString()} changed files.`));
++    const bottom = v_flex().id("staged-list").flex_1().min_h(0).overflow_y_scrollbar().p(6).border_t(1).border_color(t.border);
++    this.groupsDrawn = 0;
++    this.addGroup(bottom, "staged", "Staged", staged);
++    if (!this.groupsDrawn) bottom.child(Message("Nothing staged · press + on a file to stage it"));
++    return v_flex().id("changes").flex_1().min_h(0).child(top).child(bottom).child(this.renderCommitBox());
++  },
++
+   renderCommitBox() {
+     const t = theme();
+     const hint = this.commitBoxHint();
+--- /dev/null
++++ b/mods/better-changes/icons/staging-fluid.svg
+@@ -0,0 +1,3 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
++  <rect width="18" height="18" x="3" y="3" rx="2" />
++</svg>
+--- /dev/null
++++ b/mods/better-changes/icons/staging-split.svg
+@@ -0,0 +1,6 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
++  <rect width="18" height="18" x="3" y="3" rx="2" />
++  <path d="M3 13h18" />
++  <path d="M7 8h6" />
++  <path d="M7 17h4" />
++</svg>
