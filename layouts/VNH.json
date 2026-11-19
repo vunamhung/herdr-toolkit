@@ -1,7 +1,7 @@
 {
   "id": "r3294136a4d62e57f5835d4d2c03e677a",
   "cloned_from": {
-    "name": "main-copy",
+    "name": "main",
     "version": "0.1.16"
   },
   "type": "column",
@@ -22,7 +22,7 @@
               "id": "brand",
               "type": "block",
               "content": {
-                "mod": "workspace-chrome"
+                "mod": "vnh-chrome"
               },
               "size": {
                 "px": 46

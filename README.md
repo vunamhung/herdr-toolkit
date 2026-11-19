@@ -7,13 +7,14 @@ Personal customizations for the [Herdr](https://herdr.dev) desktop app.
 | Path | Installs to | What it does |
 |---|---|---|
 | `mods/claude-limits-status/` | `~/.config/herdr-app/mods/claude-limits-status/` | Herdr's bottom status bar (clone of `workspace-status` 0.1.16) plus Claude Code's model and usage limits next to the agents count: `6 agents │ Opus 5.5 (medium) 17%/5h 3h35m 7%/7d 2d13h`. Only the percentages are colored (green, yellow ≥ 60 %, red ≥ 85 %). |
+| `mods/vnh-chrome/` | `~/.config/herdr-app/mods/vnh-chrome/` | Clone of Herdr's `workspace-chrome` (0.1.16) without the Herdr logo and name in the sidebar's top row; search, the sidebar toggle and the window-drag area stay. |
 | `claude/statusline.sh` | `~/.claude/statusline.sh` | Claude Code status line command. It publishes model, effort, 5h/7d usage and reset times to `~/.cache/claude-statusline/limits.json` (read by the mod) and prints nothing, so the in-terminal status line is hidden. |
-| `layouts/VNH.json` | `~/.config/herdr-app/layouts/VNH.json` | The **VNH** layout, based on Herdr's `main`: status bar uses `claude-limits-status`, and the sidebar footer (Settings / Add machine) is removed. Settings stays on `⌘,` and both are in the command palette (`⌘⇧P`). |
+| `layouts/VNH.json` | `~/.config/herdr-app/layouts/VNH.json` | The **VNH** layout, based on Herdr's `main`: status bar uses `claude-limits-status`, the sidebar's top row uses `vnh-chrome`, and the sidebar footer (Settings / Add machine) is removed. Settings stays on `⌘,` and both are in the command palette (`⌘⇧P`). |
 
 ## Install
 
 ```sh
-./install.sh            # mod + status line script
+./install.sh            # mods + status line script
 ./install.sh --layout   # also the layout, and switch Herdr to it
 ```
 

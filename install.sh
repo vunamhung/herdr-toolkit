@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the herdr-toolkit customizations. Existing files are backed up as <file>.bak-<timestamp>.
 #
-#   ./install.sh            mod + Claude Code status line script
+#   ./install.sh            mods + Claude Code status line script
 #   ./install.sh --layout   also install layouts/VNH.json and switch Herdr to it
 set -euo pipefail
 
@@ -11,11 +11,11 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 
 backup() { [ -e "$1" ] && cp -R "$1" "$1.bak-$STAMP" && echo "  backup: $1.bak-$STAMP"; return 0; }
 
-echo "mod: claude-limits-status"
-mkdir -p "$HERDR/mods/claude-limits-status"
-for f in main.js mod.json; do
-  backup "$HERDR/mods/claude-limits-status/$f"
-  cp "$ROOT/mods/claude-limits-status/$f" "$HERDR/mods/claude-limits-status/$f"
+for mod in claude-limits-status vnh-chrome; do
+  echo "mod: $mod"
+  backup "$HERDR/mods/$mod"
+  mkdir -p "$HERDR/mods/$mod"
+  cp -R "$ROOT/mods/$mod/." "$HERDR/mods/$mod/"
 done
 
 echo "claude: ~/.claude/statusline.sh"
@@ -35,5 +35,7 @@ if [ "${1:-}" = "--layout" ]; then
   command -v herdr-app >/dev/null && herdr-app do layout.switch '{"name":"VNH"}' >/dev/null || true
 fi
 
-command -v herdr-app >/dev/null && herdr-app check "$HERDR/mods/claude-limits-status"
+if command -v herdr-app >/dev/null; then
+  for mod in claude-limits-status vnh-chrome; do herdr-app check "$HERDR/mods/$mod"; done
+fi
 echo "done"
