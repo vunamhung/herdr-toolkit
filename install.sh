@@ -2,7 +2,7 @@
 # Install the herdr-toolkit customizations. Existing files are backed up as <file>.bak-<timestamp>.
 #
 #   ./install.sh            mod + Claude Code status line script
-#   ./install.sh --layout   also install layouts/main-copy.json and switch Herdr to it
+#   ./install.sh --layout   also install layouts/VNH.json and switch Herdr to it
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -29,10 +29,10 @@ if ! jq -e '.statusLine.command == "~/.claude/statusline.sh"' "$HOME/.claude/set
 fi
 
 if [ "${1:-}" = "--layout" ]; then
-  echo "layout: main-copy"
-  backup "$HERDR/layouts/main-copy.json"
-  cp "$ROOT/layouts/main-copy.json" "$HERDR/layouts/main-copy.json"
-  command -v herdr-app >/dev/null && herdr-app do layout.switch '{"name":"main-copy"}' >/dev/null || true
+  echo "layout: VNH"
+  backup "$HERDR/layouts/VNH.json"
+  cp "$ROOT/layouts/VNH.json" "$HERDR/layouts/VNH.json"
+  command -v herdr-app >/dev/null && herdr-app do layout.switch '{"name":"VNH"}' >/dev/null || true
 fi
 
 command -v herdr-app >/dev/null && herdr-app check "$HERDR/mods/claude-limits-status"

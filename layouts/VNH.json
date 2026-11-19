@@ -1,11 +1,10 @@
 {
   "id": "r3294136a4d62e57f5835d4d2c03e677a",
+  "cloned_from": {
+    "name": "main-copy",
+    "version": "0.1.16"
+  },
   "type": "column",
-  "titlebar": "none",
-  "traffic_lights": [
-    12,
-    16
-  ],
   "children": [
     {
       "id": "root",
@@ -218,5 +217,10 @@
     "width": 1,
     "color": "border"
   },
+  "titlebar": "none",
+  "traffic_lights": [
+    12,
+    16
+  ],
   "terminal_menu": "chat-menu"
 }
