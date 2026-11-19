@@ -178,7 +178,7 @@
           "id": "timeline",
           "type": "block",
           "content": {
-            "mod": "over9k-prompts"
+            "mod": "vnh-prompts"
           },
           "size": {
             "px": 368
@@ -213,6 +213,10 @@
       ]
     }
   ],
+  "theme": {
+    "light": "paper",
+    "dark": "graphite"
+  },
   "divider": {
     "width": 1,
     "color": "border"

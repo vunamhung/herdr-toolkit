@@ -149,7 +149,7 @@ export default class Tabs extends View {
         .text_size(12).bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
         .on_click(() => run("layout.toggle", { id: "timeline" }))
-        .child(svg("mods/over9k-prompts/timeline.svg").size(14)).child("Timeline");
+        .child(svg("mods/vnh-prompts/timeline.svg").size(14)).child("Timeline");
     };
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .on_mouse_up("left", () => { this.pressed = null; })
