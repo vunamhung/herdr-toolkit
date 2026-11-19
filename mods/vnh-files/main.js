@@ -34,6 +34,20 @@ function sortEntries(list, by) {
     || byName(a, b));
 }
 
+// Git decorations as in VS Code: U untracked, A added, M modified, D deleted, ! conflict.
+// A folder takes the most severe status below it.
+const SEVERITY = { "!": 5, M: 4, D: 3, A: 2, U: 1 };
+function gitMark(xy) {
+  if (xy === "??") return "U";
+  if (xy.includes("U") || xy === "AA" || xy === "DD") return "!";
+  if (xy[0] === "A") return "A";
+  if (xy.includes("D")) return "D";
+  return "M";
+}
+function markColor(t, mark) {
+  return mark === "U" || mark === "A" ? t.ansi2 : mark === "M" ? t.ansi3 : mark === "D" || mark === "!" ? t.ansi1 : null;
+}
+
 // A folder's first-level contents: "3 folders · 12 files".
 function fmtCounts(dirs, files) {
   const part = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -128,7 +142,7 @@ export default class Files extends View {
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
-      this.pending = new Set(); this.marks = {}; this.ignored = new Set(); this.show(null); this.watched = null; this.error = null; this.limited = false;
+      this.pending = new Set(); this.marks = {}; this.folderMarks = {}; this.ignored = new Set(); this.show(null); this.watched = null; this.error = null; this.limited = false;
       this.loading = false;
       if (saved?.file) this.show(saved.file, cx);
     }
@@ -143,17 +157,25 @@ export default class Files extends View {
           await this.loadFolder(path, context);
         }
         const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }).catch(() => null);
-        const marks = {};
+        const marks = {}, folderMarks = {};
         if (top?.code === 0) {
           // Writes nothing under .git (index lock, fsmonitor cookie): the folder watch would refresh again.
           const status = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"], { cwd, on }).catch(() => null);
           if (status?.code === 0) for (const entry of status.stdout.split("\0").filter(Boolean).slice(0, TOTAL)) {
             const xy = entry.slice(0, 2);
-            marks[`${top.stdout.trim()}/${entry.slice(3)}`] = xy === "??" || xy.includes("A") ? "A" : xy.includes("U") ? "U" : xy.includes("D") ? "D" : "M";
+            const repo = top.stdout.trim(), mark = gitMark(xy);
+            let file = `${repo}/${entry.slice(3)}`;
+            if (file.endsWith("/")) file = file.slice(0, -1); // an untracked folder shown as one entry
+            marks[file] = mark;
+            // Every folder above it, up to the repo, shows the most severe status inside.
+            for (let dir = file.slice(0, file.lastIndexOf("/")); dir.length > repo.length; dir = dir.slice(0, dir.lastIndexOf("/"))) {
+              if ((SEVERITY[folderMarks[dir]] ?? 0) >= SEVERITY[mark]) break;
+              folderMarks[dir] = mark;
+            }
           }
         }
         if (!this.current(context)) return;
-        this.marks = marks; this.error = null; this.watch(cwd, cx);
+        this.marks = marks; this.folderMarks = folderMarks; this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
       finally { if (this.context === context) this.loading = false; cx.notify(); }
     });
@@ -265,6 +287,9 @@ export default class Files extends View {
       const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
       const ignored = this.ignored.has(path);
       if (ignored && !this.showIgnored) continue;
+      // A folder's own mark (an untracked folder) or the most severe one inside it.
+      const folderMark = entry.dir ? (mark ?? this.folderMarks?.[`${this.root}/${path}`]) : null;
+      const color = ignored ? t.dim : markColor(t, entry.dir ? folderMark : mark);
       const meta = !this.showSizes ? "" : entry.dir ? (entry.counts ? fmtCounts(entry.counts.dirs, entry.counts.files) : "") : fmtSize(entry.size);
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
         // Drag a file or folder into a terminal: locally it types `@<path>` relative to this
@@ -273,10 +298,11 @@ export default class Files extends View {
         .drag_paths([this.on ? `${this.root}/${path}` : `@${path}${entry.dir ? "/" : ""}`], { on: this.on ?? null })
         .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.show(path, cx))
         .child(entry.dir ? svg(`mods/vnh-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
-        .child(svg(`mods/vnh-files/${entry.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(t.muted))
-        .child(div().flex_1().min_w(0).truncate().when(ignored, el => el.text_color(t.dim)).child(entry.name))
+        .child(svg(`mods/vnh-files/${entry.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(entry.dir && color ? color : t.muted))
+        .child(div().flex_1().min_w(0).truncate().when(Boolean(color), el => el.text_color(color)).child(entry.name))
         .when(Boolean(meta), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(meta)))
-        .when(Boolean(mark), el => el.child(div().text_size(11).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark))));
+        .when(!entry.dir && Boolean(mark), el => el.child(div().flex_none().w(12).text_size(11).text_color(markColor(t, mark)).child(mark)))
+        .when(entry.dir && Boolean(folderMark) && !ignored, el => el.child(div().flex_none().w(12).text_size(11).text_color(markColor(t, folderMark)).child("•"))));
       if (entry.dir && open) this.rows(path, depth + 1, out, t);
     }
     return out;
