@@ -1,0 +1,52 @@
+--- a/mods/filetree/main.js
++++ b/mods/filetree/main.js
+@@ -284,6 +284,7 @@
+     let prefs = {};
+     try { prefs = JSON.parse(localStorage.getItem("prefs") ?? "{}"); } catch {}
+     this.showHidden = prefs.showHidden ?? true;
++    this.showIgnored = prefs.showIgnored ?? true; // VNH: git-ignored files and folders (⊘ button, i)
+     this.showSize = prefs.showSize ?? null;
+     this.follow = true; this.pinned = null;
+     this.view = VIEWS.some(([v]) => v === prefs.view) ? prefs.view : "tree";
+@@ -313,7 +314,7 @@
+   }
+ 
+   savePrefs() {
+-    try { localStorage.setItem("prefs", JSON.stringify({ showHidden: this.showHidden, showSize: this.showSize, view: this.view })); } catch {}
++    try { localStorage.setItem("prefs", JSON.stringify({ showHidden: this.showHidden, showIgnored: this.showIgnored, showSize: this.showSize, view: this.view })); } catch {}
+   }
+ 
+   setView(view, cx) {
+@@ -479,7 +480,7 @@
+           this.index = index;
+         }
+         if (seq !== this.searchSeq) return;
+-        const matches = this.index.all.filter((rel) => rel.toLowerCase().includes(q) && (this.showHidden || !rel.split("/").some((s) => s.startsWith("."))));
++        const matches = this.index.all.filter((rel) => rel.toLowerCase().includes(q) && (this.showHidden || !rel.split("/").some((s) => s.startsWith("."))) && (this.showIgnored || !this.isIgnored(rel)));
+         const named = matches.filter((rel) => baseOf(rel).toLowerCase().includes(q));
+         this.hits = [...new Set([...named, ...matches])].slice(0, FIND_LIMIT);
+         this.cursor = this.hits[0] ?? "";
+@@ -529,6 +530,7 @@
+       for (const e of this.entries.get(prefix) ?? []) {
+         if (!this.showHidden && e.name.startsWith(".")) continue;
+         const rel = prefix ? `${prefix}/${e.name}` : e.name, open = e.dir && this.folders.has(rel);
++        if (!this.showIgnored && this.isIgnored(rel)) continue;
+         out.push({ rel, e, depth, open });
+         if (open && depth < 40) walk(rel, depth + 1);
+       }
+@@ -807,6 +809,7 @@
+     else if (k === "end") this.move(rows, rows.length);
+     else if (k === "/") { this.input.focus(); }
+     else if (k === ".") { this.showHidden = !this.showHidden; this.savePrefs(); }
++    else if (k === "i") { this.showIgnored = !this.showIgnored; this.savePrefs(); }
+     else if (k === "escape") { if (this.query) this.clearSearch(cx); else this.cursor = ""; }
+     else if (/^[1-9]$/.test(k) && VIEWS[Number(k) - 1]) this.setView(VIEWS[Number(k) - 1][0], cx);
+     else if (!cur) return;
+@@ -986,6 +989,7 @@
+       btn("ft-up", "↑", "Up a folder", false, () => { if (!this.root) return; this.follow = false; this.pinned = this.root.replace(/[\\/][^\\/]+[\\/]?$/, "") || "/"; this.pinnedOn = this.on; }),
+       btn("ft-home", "⌂", this.follow ? "Following the focused pane" : "Back to the focused pane's folder", this.follow, () => { this.follow = true; this.pinned = null; }),
+       btn("ft-hidden", this.showHidden ? "◉" : "○", this.showHidden ? "Hide dotfiles (.)" : "Show dotfiles (.)", this.showHidden, () => { this.showHidden = !this.showHidden; this.savePrefs(); }),
++      btn("ft-ignored", this.showIgnored ? "⊙" : "⊘", this.showIgnored ? "Hide git-ignored files and folders (i)" : "Show git-ignored files and folders (i)", this.showIgnored, () => { this.showIgnored = !this.showIgnored; this.savePrefs(); }),
+       btn("ft-size", "Σ", this.showSize ? "Show dates" : "Show sizes", Boolean(this.showSize), () => { this.showSize = !this.showSize; this.savePrefs(); }),
+       btn("ft-collapse", "⊟", "Collapse all", false, (cx) => this.collapseAll(cx)),
+     ] : [
