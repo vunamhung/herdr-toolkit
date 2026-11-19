@@ -82,6 +82,14 @@
      if (this.error || this.note) root.child(Message(this.error || this.note, true));
 --- a/mods/better-changes/views/sidebar.js
 +++ b/mods/better-changes/views/sidebar.js
+@@ -1,6 +1,6 @@
+ // The sidebar: its tabs, options menu, file groups and commit views.
+ import { div } from "gpui-kit";
+-import { v_flex, h_flex } from "gpui-base";
++import { v_flex, h_flex, v_resizable, resizable_panel } from "gpui-base";
+ import { theme, shared, setShared } from "herdr";
+ import { fileTree, timeAgo } from "../git/model.js";
+ import {
 @@ -23,6 +23,7 @@
    MenuLabel,
    MenuDivider,
@@ -171,10 +179,12 @@
        list.child(Message(this.loading || !this.root ? "Loading changes…" : "No changes"));
      this.groupsDrawn = 0;
      this.addGroup(list, "conflict", "Conflicts", conflicts);
-@@ -208,6 +260,23 @@
+@@ -206,6 +258,31 @@
+     if (this.total > limit)
+       list.child(Message(`Showing the first ${limit.toLocaleString()} changed files.`));
      return v_flex().id("changes").flex_1().min_h(0).child(list).child(this.renderCommitBox());
-   },
- 
++  },
++
 +  renderSplitStaging(top, conflicts, unstaged, staged, committed) {
 +    const t = theme();
 +    this.groupsDrawn = 0;
@@ -185,16 +195,22 @@
 +    if (!this.groupsDrawn) top.child(Message("No unstaged changes"));
 +    const limit = this.settings.limits.files;
 +    if (this.total > limit) top.child(Message(`Showing the first ${limit.toLocaleString()} changed files.`));
-+    const bottom = v_flex().id("staged-list").flex_1().min_h(0).overflow_y_scrollbar().p(6).border_t(1).border_color(t.border);
++    const bottom = v_flex().id("staged-list").size_full().min_h(0).overflow_y_scrollbar().p(6);
 +    this.groupsDrawn = 0;
 +    this.addGroup(bottom, "staged", "Staged", staged);
 +    if (!this.groupsDrawn) bottom.child(Message("Nothing staged · press + on a file to stage it"));
-+    return v_flex().id("changes").flex_1().min_h(0).child(top).child(bottom).child(this.renderCommitBox());
-+  },
-+
++    // A draggable divider between the two (the group keeps the drag in the window); the
++    // top's height is saved so it comes back after a restart.
++    let saved = null;
++    try { saved = Number(localStorage.getItem("vnh-staging-top")) || null; } catch {}
++    const split = v_resizable("vnh-split-staging").flex_1().min_h(0).w_full()
++      .on_resize((sizes) => { try { if (sizes?.[0] > 0) localStorage.setItem("vnh-staging-top", String(Math.round(sizes[0]))); } catch {} })
++      .child(resizable_panel().when(Boolean(saved), (el) => el.size(saved)).size_range(70).child(top.size_full()))
++      .child(resizable_panel().size_range(70).child(v_flex().size_full().border_t(1).border_color(t.border).child(bottom)));
++    return v_flex().id("changes").flex_1().min_h(0).child(split).child(this.renderCommitBox());
+   },
+ 
    renderCommitBox() {
-     const t = theme();
-     const hint = this.commitBoxHint();
 --- /dev/null
 +++ b/mods/better-changes/icons/staging-fluid.svg
 @@ -0,0 +1,3 @@
