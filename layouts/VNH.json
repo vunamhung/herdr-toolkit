@@ -61,6 +61,16 @@
                   "min": 90
                 }
               ]
+            },
+            {
+              "id": "worktree-sync",
+              "type": "block",
+              "content": {
+                "mod": "vnh-worktree-sync"
+              },
+              "size": {
+                "px": 0
+              }
             }
           ],
           "size": {
