@@ -63,6 +63,16 @@
               ]
             },
             {
+              "id": "weather",
+              "type": "block",
+              "size": {
+                "px": 66
+              },
+              "content": {
+                "mod": "vnh-weather"
+              }
+            },
+            {
               "id": "worktree-sync",
               "type": "block",
               "content": {
