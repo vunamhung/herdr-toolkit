@@ -19,10 +19,22 @@
      this.files = [];
 --- a/mods/better-changes/views/diff.js
 +++ b/mods/better-changes/views/diff.js
-@@ -336,8 +336,35 @@
+@@ -67,6 +67,9 @@
+     const entries = shared("better-changes.diff-tabs") ?? {};
+     const old = entries[space.id];
+     const tab = this.diffTab(space.id);
++    // VNH: the tab showing before the diff tab, for Esc to return to (not the diff tab itself).
++    const current = space.tabs.find((t) => t.active)?.id;
++    if (current && current !== tab) setShared("vnh.better-changes.back", { ...(shared("vnh.better-changes.back") ?? {}), [space.id]: current });
+     const source = JSON.parse(this.context);
+     const name = file.path.split("/").pop();
+     // Published before the tab opens so its copy sees the latest pick. The
+@@ -334,10 +337,41 @@
+     const find = (node) =>
+       node?.content?.pane?.header?.content?.mod ?? (node?.children ?? []).map(find).find(Boolean);
      return find(layout()) === "better-changes";
-   },
- 
++  },
++
 +  // VNH: this space's diff tab (one per space), and whether it is the one showing.
 +  // (Not diffTab: the mod's own diffTab(space) returns the tab id, and pick() relies on it.)
 +  vnhDiffTab() {
@@ -37,9 +49,13 @@
 +    const { tab } = this.vnhDiffTab();
 +    if (!tab) return;
 +    this.closingTab = true;
++    const back = (shared("vnh.better-changes.back") ?? {})[this.diffSpace];
++    const space = spaces().find((s) => s.id === this.diffSpace);
 +    run("tab.close", { id: tab, confirmed: true });
-+  },
-+
++    // Back to the tab that was showing when the file was opened, if it is still there.
++    if (back && back !== tab && space?.tabs.some((t) => t.id === back)) run("tab.select", { id: back });
+   },
+ 
    renderDiff() {
      const root = Panel({ id: "better-changes-diff", framed: false });
 +    // VNH: Esc closes the diff tab. The tab takes the keyboard when it is opened or selected again.
@@ -55,3 +71,21 @@
      const split = this.diffLayout === "split";
      if (!this.layoutUsesOurHeader()) root.child(this.renderFileRow());
      if (this.error || this.note) root.child(Message(this.error || this.note, true));
+--- a/mods/better-changes/views/sidebar.js
++++ b/mods/better-changes/views/sidebar.js
+@@ -113,6 +113,15 @@
+             }),
+           ),
+       )
++      // VNH: one click between the folder tree and a flat list (also in the ⋮ menu).
++      .when(this.tab === "changes", (el) => el.child(
++        IconButton({
++          id: "view-toggle",
++          icon: this.view === "tree" ? "flat" : "tree",
++          label: this.view === "tree" ? "Show as a flat list" : "Show as a folder tree",
++          onClick: (cx) => this.setView(this.view === "tree" ? "flat" : "tree", cx),
++        }),
++      ))
+       .child(
+         IconButton({
+           id: "refresh",
