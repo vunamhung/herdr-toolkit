@@ -1,0 +1,58 @@
+--- a/mods/better-changes/main.js
++++ b/mods/better-changes/main.js
+@@ -62,6 +62,16 @@
+     if (this.mode === "sidebar") setShared("better-changes.diff-layout", this.diffLayout);
+     this.menuOpen = false;
+     this.menuFocus = cx.focus_handle();
++    // VNH: the diff tab takes the keyboard so Esc closes it (renderDiff).
++    // Focus can't change during render: a timer takes it when the tab shows (opened or selected again).
++    if (this.mode === "diff") {
++      this.diffKeys = cx.focus_handle();
++      cx.timer.every(300, () => {
++        const { showing } = this.diffTab();
++        if (showing && !this.diffShowing) this.diffKeys.focus();
++        this.diffShowing = showing;
++      });
++    }
+     this.closed = new Set();
+     this.collapsed = new Set(JSON.parse(localStorage.getItem("collapsed") ?? "[]"));
+     this.files = [];
+--- a/mods/better-changes/views/diff.js
++++ b/mods/better-changes/views/diff.js
+@@ -334,10 +334,36 @@
+     const find = (node) =>
+       node?.content?.pane?.header?.content?.mod ?? (node?.children ?? []).map(find).find(Boolean);
+     return find(layout()) === "better-changes";
++  },
++
++  // VNH: this space's diff tab (one per space), and whether it is the one showing.
++  diffTab() {
++    const space = spaces().find((s) => s.id === this.diffSpace);
++    const tabs = new Set(space?.tabs.map((t) => t.id) ?? []);
++    const pane = panes().find((p) => p.mod === "better-changes" && tabs.has(p.tab));
++    return { tab: pane?.tab ?? null, showing: Boolean(space?.active && pane && space.tabs.find((t) => t.active)?.id === pane.tab) };
++  },
++
++  closeDiffTab() {
++    if (this.closingTab) return; // a repeated key would close an already closed tab
++    const { tab } = this.diffTab();
++    if (!tab) return;
++    this.closingTab = true;
++    run("tab.close", { id: tab, confirmed: true });
+   },
+ 
+   renderDiff() {
+     const root = Panel({ id: "better-changes-diff", framed: false });
++    // VNH: Esc closes the diff tab. The tab takes the keyboard when it is opened or selected again.
++    if (this.diffKeys) {
++      root.track_focus(this.diffKeys)
++        .on_mouse_down("left", () => this.diffKeys.focus())
++        .on_key_down((event, cx) => {
++          if (event.key !== "escape" || event.is_held) return;
++          cx.stop_propagation();
++          this.closeDiffTab();
++        });
++    }
+     const split = this.diffLayout === "split";
+     if (!this.layoutUsesOurHeader()) root.child(this.renderFileRow());
+     if (this.error || this.note) root.child(Message(this.error || this.note, true));
