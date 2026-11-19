@@ -47,9 +47,11 @@
          this.view = settings.default.view;
        if (
          this.mode === "sidebar" &&
-@@ -153,7 +169,7 @@
+@@ -152,8 +168,9 @@
+   // `better-changes.<command>`, for keys.
    command(command, cx) {
      if (command === "refresh") this.refreshAll(cx);
++    if (command === "generate") this.generateMessage(cx); // VNH: ⌥S (keys.json), the ✨ button
      if (command === "changes" || command === "commit") this.setTab(command, cx);
 -    if (command === "flat" || command === "tree") this.setView(command, cx);
 +    if (command === "flat" || command === "tree" || command === "columns") this.setView(command, cx);
@@ -251,10 +253,12 @@
        list.child(Message(this.loading || !this.root ? "Loading changes…" : "No changes"));
      this.groupsDrawn = 0;
      this.addGroup(list, "conflict", "Conflicts", conflicts);
-@@ -208,6 +293,74 @@
+@@ -206,8 +291,76 @@
+     if (this.total > limit)
+       list.child(Message(`Showing the first ${limit.toLocaleString()} changed files.`));
      return v_flex().id("changes").flex_1().min_h(0).child(list).child(this.renderCommitBox());
-   },
- 
++  },
++
 +  renderSplitStaging(top, conflicts, unstaged, staged, committed) {
 +    const t = theme();
 +    this.groupsDrawn = 0;
@@ -300,8 +304,8 @@
 +      })
 +      .child(el)
 +      .when(hot, (z) => z.child(div().absolute().inset_0().rounded(8).border_2().border_color(t.accent).bg(t.accent + "14")));
-+  },
-+
+   },
+ 
 +  dragSurface(el) {
 +    const t = theme(), d = this.dragging;
 +    return el.relative()
@@ -334,7 +338,7 @@
          }),
        )
        .child(this.renderCommitButton())
-@@ -262,7 +416,61 @@
+@@ -262,7 +416,59 @@
      return this.commitMode === "amend" ? "Amend" : "Commit";
    },
  
@@ -372,9 +376,7 @@
 +  },
 +
    renderCommitButton() {
-+    return h_flex().w_full().gap(6).items_center()
-+      .child(this.renderGenerateButton())
-+      .child(div().flex_1().min_w(0).child(this.renderCommitSplit()));
++    return this.renderCommitSplit();
 +  },
 +
 +  // A square button as tall as Commit, on the same raised background.
@@ -382,10 +384,10 @@
 +    const t = theme();
 +    const ready = !this.generating && !this.busy && this.files.some((f) => f.staged);
 +    const label = this.generating ? "Writing the commit message…" : ready
-+      ? "Write the commit message with AI (Conventional Commits)" : "Stage files to write a commit message with AI";
++      ? "Write the commit message with AI (Conventional Commits) · ⌥S" : "Stage files to write a commit message with AI";
 +    const icon = Icon("sparkles", 15);
-+    return div().id("generate-message").size(32).flex_none().flex().items_center().justify_center()
-+      .rounded(8).bg(t.raised).text_color(ready || this.generating ? t.foreground : t.dim)
++    return div().id("generate-message").w(34).h_full().flex_none().flex().items_center().justify_center()
++      .rounded_l(8).bg(t.raised).text_color(ready || this.generating ? t.foreground : t.dim)
 +      .accessibility_label(label).tooltip(label)
 +      .when(ready, (el) => el.cursor_pointer().hover((st) => st.bg(t.hover))
 +        .on_click((_e, cx) => { cx.stop_propagation(); this.generateMessage(cx); }))
@@ -396,7 +398,15 @@
      const amend = this.commitMode === "amend";
      return SplitButton({
        id: "commit",
-@@ -340,12 +548,25 @@
+@@ -272,6 +478,7 @@
+       primary: !amend,
+       onClick: (cx) => this.commit(cx),
+       menu: this.renderCommitMenu(),
++      lead: this.renderGenerateButton(), // VNH: ✨ joined to Commit, as the ▾ is
+     });
+   },
+ 
+@@ -340,12 +547,25 @@
        }),
      );
      if (collapsed) return;
@@ -423,7 +433,7 @@
        for (const file of files) list.child(this.fileRow(file, scope, 0));
        return;
      }
-@@ -402,7 +623,13 @@
+@@ -402,7 +622,13 @@
        selected: open?.path === file.path && open?.scope === scope,
        onClick: (cx) => this.pick(file, scope, cx),
      }).child(FileIcon({ icons: this.fileIcons, path: `${this.root}/${file.path}`, color: t.muted, t }));
@@ -437,7 +447,7 @@
      else
        row.child(
          h_flex()
-@@ -425,30 +652,26 @@
+@@ -425,30 +651,26 @@
        row.child(
          div().flex_none().text_size(TEXT.caption).text_color(t.ansi1).child(file.conflictKind),
        );
@@ -496,6 +506,33 @@
      .px(10)
      .py(7)
      .rounded(RADIUS.button)
+@@ -329,7 +329,8 @@
+ }
+ 
+ // A primary action and, joined to it, the trigger for choosing another one.
+-export function SplitButton({ id, icon, label, enabled, primary = true, onClick, menu }) {
++// VNH: `lead` is a button joined on the left (rounded on its left side), as the menu trigger is on the right.
++export function SplitButton({ id, icon, label, enabled, primary = true, onClick, menu, lead = null }) {
+   const t = theme();
+   const solid = enabled && primary;
+   return h_flex()
+@@ -339,6 +340,7 @@
+     .gap(1)
+     .items_center()
+     .text_size(TEXT.small)
++    .when(Boolean(lead), (el) => el.child(lead))
+     .child(
+       h_flex()
+         .id(`${id}-main`)
+@@ -349,7 +351,7 @@
+         .gap(7)
+         .items_center()
+         .justify_center()
+-        .rounded_l(RADIUS.button)
++        .when(!lead, (el) => el.rounded_l(RADIUS.button))
+         .bg(solid ? t.solid : t.raised)
+         .text_color(solid ? t.solid_foreground : enabled ? t.foreground : t.dim)
+         .accessibility_label(label)
 --- /dev/null
 +++ b/mods/better-changes/icons/staging-fluid.svg
 @@ -0,0 +1,3 @@
