@@ -1,5 +1,5 @@
 import { View, div } from "gpui-kit";
-import { spaces, panes, exec, run, checking } from "herdr";
+import { spaces, panes, exec, run, checking, window } from "herdr";
 
 // Opens every git worktree kept in a project's `.worktrees/` folder as a Herdr space.
 // The shipped `spaces` sidebar nests worktree spaces under their main checkout by itself
@@ -11,6 +11,7 @@ import { spaces, panes, exec, run, checking } from "herdr";
 // - Renders nothing: place it in a 0 px block of the layout.
 
 const INTERVAL_MS = 30000;
+const TOP_TTL_MS = 10 * 60 * 1000; // a folder's repo rarely changes: ask git again after 10 min
 const SEEN_KEY = "seen";
 
 const under = (path, dir) => path === dir || path.startsWith(dir.endsWith("/") ? dir : dir + "/");
@@ -40,13 +41,24 @@ export default class WorktreeSync extends View {
   init(_props, cx) {
     try { this.seen = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "{}") || {}; } catch { this.seen = {}; }
     this.busy = false;
+    this.tops = new Map(); // folder -> { top, at }
     if (checking()) return;
     this.sync(cx);
     cx.timer.every(INTERVAL_MS, (cx) => this.sync(cx));
   }
 
+  async topOf(folder) {
+    const hit = this.tops.get(folder);
+    if (hit && Date.now() - hit.at < TOP_TTL_MS) return hit.top;
+    const top = await mainCheckout(folder);
+    this.tops.set(folder, { top, at: Date.now() });
+    return top;
+  }
+
   sync(cx) {
     if (this.busy) return;
+    if (!window()?.active && this.synced) return; // nothing to do while Herdr is in the background
+    this.synced = true;
     this.busy = true;
     cx.spawn(async () => {
       try {
@@ -59,7 +71,7 @@ export default class WorktreeSync extends View {
 
         const tops = new Set();
         for (const f of new Set(folders)) {
-          const top = await mainCheckout(f);
+          const top = await this.topOf(f);
           if (top) tops.add(top);
         }
 

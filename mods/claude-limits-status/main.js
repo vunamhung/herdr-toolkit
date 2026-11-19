@@ -132,6 +132,9 @@ export default class ClaudeLimitsStatus extends View {
   }
 
   refreshGit(cx) {
+    // While the Herdr window is in the background, run no git/gh at all; the first tick after it
+    // becomes active again sees a stale timestamp and refreshes at once.
+    if (!window()?.active && this.git) return;
     if (this.pr?.pr?.ci === "pending" && Date.now() - (this.tickAt ?? 0) >= 10000) { this.tickAt = Date.now(); cx.notify(); }
     const target = this.gitTarget();
     const moved = (target?.key ?? null) !== (this.git?.key ?? null);

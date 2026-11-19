@@ -88,6 +88,60 @@ async function directory(path, on, sizes = false, mtimes = false) {
   return out;
 }
 
+// Lists several folders with ONE shell call (plus one `stat` call when sizes or times are shown),
+// so the work per refresh does not grow with the number of open folders.
+// Returns Map<absolute folder, entries | null (missing)>.
+const LIST_SCRIPT = 'sz=$1; shift; for root in "$@"; do printf "\\001%s\\0" "$root"; [ -d "$root" ] || { printf "\\002\\0"; continue; }; n=0; for p in "$root"/* "$root"/.[!.]* "$root"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; info=; if [ -d "$p" ]; then kind=d; if [ "$sz" = 1 ]; then d=0; f=0; for q in "$p"/* "$p"/.[!.]* "$p"/..?*; do [ -e "$q" ] || [ -L "$q" ] || continue; [ "${q##*/}" = .git ] && continue; if [ -d "$q" ]; then d=$((d+1)); else f=$((f+1)); fi; done; info="$d $f"; fi; else kind=f; fi; printf "%s\\0%s\\0%s\\0" "$kind" "$name" "$info"; n=$((n+1)); [ "$n" -gt 500 ] && break; done; done';
+// "size mtime path" per line; GNU or BSD stat, whichever this machine has.
+const STAT_SCRIPT = 'if stat -c %s / >/dev/null 2>&1; then stat -c "%s %Y %n" -- "$@"; else stat -f "%z %m %N" -- "$@"; fi 2>/dev/null; true';
+const CHUNK = 1500;
+
+async function listFolders(paths, on, sizes, mtimes) {
+  const out = new Map();
+  if (!paths.length) return out;
+  const oneByOne = async () => { for (const p of paths) out.set(p, await directory(p, on).catch(() => null)); return out; };
+  if (!on && window()?.platform === "windows") return oneByOne();
+  let r;
+  try { r = await exec("sh", ["-c", LIST_SCRIPT, "files", sizes ? "1" : "0", ...paths], { on }); }
+  catch (e) {
+    if (on && String(e).includes("cannot start sh: program not found")) return oneByOne();
+    throw e;
+  }
+  if (r.code !== 0) throw new Error(r.stderr || "Cannot list this folder");
+  const fields = r.stdout.split("\0");
+  let cur = null;
+  for (let i = 0; i < fields.length;) {
+    const f = fields[i];
+    if (f.startsWith("\x01")) { cur = f.slice(1); out.set(cur, []); i++; continue; }
+    if (f === "\x02") { if (cur !== null) out.set(cur, null); i++; continue; }
+    if (cur === null || i + 2 >= fields.length) break;
+    const entry = { name: fields[i + 1], dir: f === "d" }, info = fields[i + 2];
+    if (info && entry.dir) { const [d, n] = info.split(" ").map(Number); entry.counts = { dirs: d || 0, files: n || 0 }; }
+    out.get(cur)?.push(entry);
+    i += 3;
+  }
+  if (sizes || mtimes) {
+    const want = [];
+    for (const [dir, list] of out) for (const e of list ?? []) if (mtimes || !e.dir) want.push([`${dir}/${e.name}`, e]);
+    for (let k = 0; k < want.length; k += CHUNK) {
+      const part = want.slice(k, k + CHUNK);
+      const st = await exec("sh", ["-c", STAT_SCRIPT, "stat", ...part.map(([p]) => p)], { on }).catch(() => null);
+      const byPath = new Map();
+      for (const line of (st?.stdout ?? "").split("\n")) {
+        const a = line.indexOf(" "), b = line.indexOf(" ", a + 1);
+        if (a > 0 && b > a) byPath.set(line.slice(b + 1), [Number(line.slice(0, a)), Number(line.slice(a + 1, b))]);
+      }
+      for (const [p, e] of part) {
+        const v = byPath.get(p);
+        if (!v) continue;
+        if (sizes && !e.dir) e.size = v[0];
+        if (mtimes) e.mtime = v[1];
+      }
+    }
+  }
+  return out;
+}
+
 export default class Files extends View {
   init(_props, cx) {
     this.saved = new Map();
@@ -99,7 +153,12 @@ export default class Files extends View {
     try { const v = localStorage.getItem("sortBy"); this.sortBy = SORTS.some(([k]) => k === v) ? v : "name"; } catch { this.sortBy = "name"; }
     this.sortOpen = false;
     this.refresh(cx);
-    cx.timer.every(10000, cx => this.refresh(cx));
+    // Refresh every 10 s, but only while the Herdr window is active; changes seen while it is in
+    // the background (agents keep writing files) are caught up once it becomes active again.
+    cx.timer.every(2000, cx => {
+      if (!window()?.active) return;
+      if (this.stale || Date.now() - (this.refreshedAt ?? 0) >= 10000) this.refresh(cx);
+    });
   }
 
   watch(root, cx) {
@@ -107,7 +166,13 @@ export default class Files extends View {
     this.watched = root;
     const context = this.context;
     cx.spawn(async cx => {
-      try { while (this.context === context) { await watchFolder(root); if (this.current(context)) this.refresh(cx); } }
+      try {
+        while (this.context === context) {
+          await watchFolder(root);
+          if (!this.current(context)) continue;
+          if (window()?.active) this.refresh(cx); else this.stale = true;
+        }
+      }
       catch { if (this.context === context) this.watched = null; }
     });
   }
@@ -116,24 +181,41 @@ export default class Files extends View {
     return this.context === context && key() === context.key;
   }
 
-  async loadFolder(path, context) {
+  loadFolder(path, context) {
+    return this.loadFolders([path], context);
+  }
+
+  // Loads folders (paths relative to the root, "" = the root) with one listing call and one
+  // `git check-ignore` call for all of them.
+  async loadFolders(paths, context) {
     const { on, cwd: root } = context;
-    const entries = await directory(path ? `${root}/${path}` : root, on, this.showSizes, this.sortBy === "mtime");
-    if (!this.current(context) || (path && !this.folders.has(path))) return;
-    // Which of these .gitignore ignores (paths relative to the panel's folder; folders end in "/").
-    const rel = (e) => `${path ? path + "/" : ""}${e.name}${e.dir ? "/" : ""}`;
-    const asked = entries.slice(0, PER_FOLDER).map(rel);
-    if (asked.length) {
-      // No -z: git only allows it with --stdin, and exec has no stdin. quotePath off keeps
-      // non-ASCII names as typed; exit 1 means none ignored, 128 not a repo.
-      const r = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "check-ignore", "--", ...asked], { cwd: root, on }).catch(() => null);
+    const abs = (p) => (p ? `${root}/${p}` : root);
+    const listed = await listFolders(paths.map(abs), on, this.showSizes, this.sortBy === "mtime");
+    if (!this.current(context)) return;
+    if (listed.get(root) === null) throw new Error("Cannot list this folder");
+    const fresh = [];
+    for (const path of paths) {
+      const entries = listed.get(abs(path));
+      if (path && !this.folders.has(path)) continue;
+      if (!entries) { if (path) { this.folders.delete(path); this.entries.delete(path); } continue; } // gone
+      fresh.push([path, entries]);
+    }
+    // Which entries .gitignore ignores (relative to the panel's folder; folders end in "/").
+    // No -z: git only allows it with --stdin, and exec has no stdin. quotePath off keeps
+    // non-ASCII names as typed; exit 1 means none ignored, 128 not a repo.
+    const asked = fresh.flatMap(([path, entries]) => entries.slice(0, PER_FOLDER).map((e) => `${path ? path + "/" : ""}${e.name}${e.dir ? "/" : ""}`));
+    for (let k = 0; k < asked.length; k += CHUNK) {
+      const part = asked.slice(k, k + CHUNK);
+      const r = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "check-ignore", "--", ...part], { cwd: root, on }).catch(() => null);
       if (!this.current(context)) return;
       const hit = new Set(r && (r.code === 0 || r.code === 1) ? r.stdout.split("\n").filter(Boolean) : []);
-      for (const p of asked) { const k = p.replace(/\/$/, ""); if (hit.has(p)) this.ignored.add(k); else this.ignored.delete(k); }
+      for (const p of part) { const key = p.replace(/\/$/, ""); if (hit.has(p)) this.ignored.add(key); else this.ignored.delete(key); }
     }
-    const used = [...this.entries.entries()].filter(([p]) => p !== path).reduce((n, [, e]) => n + e.length, 0);
-    this.entries.set(path, sortEntries(entries.slice(0, Math.max(0, Math.min(PER_FOLDER, TOTAL - used))), this.sortBy));
-    if (entries.length > PER_FOLDER || used + entries.length > TOTAL) this.limited = true;
+    for (const [path, entries] of fresh) {
+      const used = [...this.entries.entries()].filter(([p]) => p !== path).reduce((n, [, e]) => n + e.length, 0);
+      this.entries.set(path, sortEntries(entries.slice(0, Math.max(0, Math.min(PER_FOLDER, TOTAL - used))), this.sortBy));
+      if (entries.length > PER_FOLDER || used + entries.length > TOTAL) this.limited = true;
+    }
   }
 
   refresh(cx) {
@@ -149,13 +231,13 @@ export default class Files extends View {
     if (!cwd || this.loading) return;
     const context = this.context;
     this.loading = true;
+    this.stale = false;
+    this.refreshedAt = Date.now();
     this.limited = false;
     cx.spawn(async cx => {
       try {
-        for (const path of ["", ...this.folders]) {
-          if (!this.current(context)) return;
-          await this.loadFolder(path, context);
-        }
+        await this.loadFolders(["", ...this.folders], context);
+        if (!this.current(context)) return;
         const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }).catch(() => null);
         const marks = {}, folderMarks = {};
         if (top?.code === 0) {
@@ -237,24 +319,29 @@ export default class Files extends View {
     cx.notify();
     cx.spawn(async cx => {
       try {
-        const queue = [""];
-        let opened = 0;
-        while (queue.length && opened < EXPAND_FOLDERS) {
-          const parent = queue.shift();
-          if (!this.entries.has(parent)) await this.loadFolder(parent, context);
+        // Level by level: each level's folders are listed with one batched call.
+        let level = [""], opened = 0;
+        while (level.length && opened < EXPAND_FOLDERS) {
+          const missing = level.filter((p) => !this.entries.has(p));
+          if (missing.length) await this.loadFolders(missing, context);
           if (!this.current(context)) return;
-          for (const e of this.entries.get(parent) ?? []) {
-            if (!e.dir) continue;
-            const p = parent ? `${parent}/${e.name}` : e.name;
-            if (this.ignored.has(p)) continue;
-            if ([...this.entries.values()].reduce((n, l) => n + l.length, 0) >= TOTAL) { this.limited = true; queue.length = 0; break; }
-            this.folders.add(p);
-            queue.push(p);
-            if (++opened >= EXPAND_FOLDERS) break;
+          const next = [];
+          for (const parent of level) {
+            for (const e of this.entries.get(parent) ?? []) {
+              if (!e.dir || opened >= EXPAND_FOLDERS) continue;
+              const p = parent ? `${parent}/${e.name}` : e.name;
+              if (this.ignored.has(p)) continue;
+              this.folders.add(p);
+              next.push(p);
+              opened++;
+            }
           }
+          if ([...this.entries.values()].reduce((n, l) => n + l.length, 0) >= TOTAL) { this.limited = true; break; }
           cx.notify();
+          level = next;
         }
-        for (const p of queue) if (!this.entries.has(p) && this.current(context)) await this.loadFolder(p, context);
+        const unloaded = level.filter((p) => !this.entries.has(p));
+        if (unloaded.length && this.current(context)) await this.loadFolders(unloaded, context);
       } catch (e) { if (this.current(context)) this.error = String(e); }
       finally { if (this.context === context) this.expanding = false; cx.notify(); }
     });
