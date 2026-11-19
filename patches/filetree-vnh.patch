@@ -90,10 +90,10 @@
  
    // A row of Recent: a status pill, the name, then what happened to it.
 +  // VNH (as vnh-files): drag a row into a terminal or an agent's input. Here it types `@<path>`
-+  // relative to this panel's folder (Claude Code reads it as a file mention; a folder ends in
-+  // `/`); on another machine the absolute path.
-+  dragged(el, rel, dir) {
-+    const path = this.on ? join(this.root, rel) : `@${rel}${dir ? "/" : ""}`;
++  // relative to this panel's folder (Claude Code reads it as a file or folder mention); on another
++  // machine the absolute path. No trailing "/" on a folder: such a path dropped nothing.
++  dragged(el, rel, _dir) {
++    const path = this.on ? join(this.root, rel) : `@${rel}`;
 +    return el.drag_paths([path], { on: this.on ?? null });
 +  }
 +
