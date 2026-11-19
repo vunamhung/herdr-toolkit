@@ -1,7 +1,7 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run } from "herdr";
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
@@ -424,6 +424,12 @@ export default class Files extends View {
     return out;
   }
 
+  openMarkdown() {
+    if (!this.file || !this.root) return;
+    const space = spaces().find(s => s.active)?.id;
+    run("tab.new", { space, name: this.file.split("/").pop(), mod: "vnh-markdown", props: { path: `${this.root}/${this.file}`, on: this.on ?? null } });
+  }
+
   // A 24 px icon button in the header; `on` highlights a toggle that is active.
   tool(t, id, icon, label, on, action) {
     return div().id(id).size(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
@@ -442,6 +448,9 @@ export default class Files extends View {
         // VNH: the folder's name is the title (no "Files"); a previewed file's path stays on the right.
         .child(div().flex_none().max_w(200).truncate().font_semibold().child(this.root?.split(/[\\/]/).pop() || "Files"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? ""))
+        // A Markdown file: the eye opens it rendered in a new tab (vnh-markdown).
+        .when(Boolean(this.file) && /\.(md|markdown|mdx)$/i.test(this.file), el => el.child(
+          this.tool(t, "files-md-open", "eye", "Open rendered Markdown in a new tab", false, () => this.openMarkdown())))
         .when(!this.file, el => el.child(h_flex().flex_none().gap(2).items_center().when(!this.panelHover && !this.sortOpen, el => el.invisible())
           .child(this.tool(t, "files-sort", "sort", "Sort", this.sortOpen, (cx) => {
             // The click that closed the menu (outside it) is this same press: don't reopen.
