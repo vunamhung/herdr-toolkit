@@ -57,9 +57,19 @@ export default class Tabs extends View {
         if (c === "timeline") this.toggleTimeline();
         else if (c === "insights") this.toggleInsights();
         else if (c === "insights-close") this.closeInsights();
+        else if (c === "files" || c === "changes" || c === "graph") this.togglePanel(c);
         cx.notify();
       }
     });
+  }
+
+  // "vnh-tabs.files" (cmd-e), "vnh-tabs.changes" (alt-a), "vnh-tabs.graph": what the panel's
+  // button does: close it when it already shows that panel, otherwise show that panel.
+  togglePanel(id) {
+    const root = layout(), panel = find(root, "panel"), body = find(root, "panel-body");
+    if (!panel || !body?.children?.some((c) => c.id === id)) return;
+    if (!panel.hidden && body.active === id) run("layout.hide", { id: "panel" });
+    else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
   }
 
   // VNH: the Insights tab takes the whole work area. Opening it hides the right panel and the

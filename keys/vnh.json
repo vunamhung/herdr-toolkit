@@ -1,7 +1,9 @@
 {
   "layout:VNH": {
     "cmd-shift-b": "vnh-tabs.timeline",
-    "alt-s": "better-changes.generate"
+    "alt-s": "better-changes.generate",
+    "cmd-e": "vnh-tabs.files",
+    "alt-a": "vnh-tabs.changes"
   },
   "global": {
     "cmd-enter": "mod.open:vnh-command"
