@@ -52,9 +52,13 @@ export default class MarkdownView extends View {
   }
 
   close() {
+    // One close per tab: a repeated or re-delivered key would close an already closed tab
+    // ("tab.close failed: no tab …").
+    if (this.closing) return;
     const mine = panes().filter((p) => p.mod === "vnh-markdown");
     const me = mine.find((p) => p.pane === props()?.pane) ?? mine.find((p) => p.focused);
     if (!me) return;
+    this.closing = true;
     run("tab.close", { id: me.tab, confirmed: true });
     const back = props()?.back;
     if (back) run("tab.select", { id: back });
@@ -83,7 +87,7 @@ export default class MarkdownView extends View {
       .on_key_down((e, cx) => {
         const m = e.modifiers ?? {};
         if (m.control || m.alt || m.platform || m.shift) return;
-        if (e.key === "escape" || e.key === "space") { cx.stop_propagation(); this.close(); }
+        if (e.key === "escape" || e.key === "space") { cx.stop_propagation(); if (!e.is_held) this.close(); }
       })
       .child(h_flex().h(34).flex_none().px(16).gap(8).items_center().border_b(1).border_color(t.border).text_size(12).font_family(FONT)
         .child(div().flex_none().font_semibold().child(name))
