@@ -11,13 +11,14 @@
  import { layoutLanes } from "./lanes.js";
  import { READ, STATUS, UNCOMMITTED, LABEL, logArgs, parseLog, parseStatus, withUncommitted, labelsOf, hitLabel,
    menuFor, menuHeight, fileArgs, joinFiles, diffArgs, diffRows } from "./git.js";
-@@ -142,6 +142,20 @@
+@@ -142,6 +142,21 @@
  export class Graph {
    init(cx) {
      this.folder = props()?.folder ?? null;
 +    // VNH: the branch picker (the branch chip) and keys: "git-graph.push" (cmd-\ via vnh-tabs),
 +    // "git-graph.branches".
 +    this.branchPicking = false; this.branchList = null; this.branchQuery = ""; this.branchAt = 0;
++    this.pushSeen = shared("vnh.git-graph.push") ?? 0; // only requests made after this copy started
 +    this.branchInput = InputState.new({ placeholder: "Find a branch…" });
 +    this.branchInput.on("change", (_e, cx) => { this.branchQuery = this.branchInput.value(); this.branchAt = 0; cx.notify(); });
 +    this.branchInput.on("submit", (_e, cx) => { const b = this.branchRows()[this.branchAt]; if (b) this.pickBranch(b, cx); });
@@ -32,7 +33,7 @@
      // A scrollbar finds its list by name: each copy (panel, pane) needs its own.
      this.listId = `graph-rows-${Math.random().toString(36).slice(2)}`;
      this.diffId = `${this.listId}-diff`;
-@@ -162,12 +176,27 @@
+@@ -162,12 +177,32 @@
      cx.timer.after(1500, (cx) => this.warm(cx));
      // Remote spaces can't be watched: poll them gently. New folders get read ahead.
      // The Manygit list re-reads too: edits in a working tree don't touch .git.
@@ -42,7 +43,12 @@
 +      if (!this.shown()) { this.stale = true; return; }
 +      if (!this.watching || this.state === "workspace") this.refresh(cx, true, true); this.warm(cx); check();
 +    });
-+    cx.timer.every(1000, (cx) => { if (this.stale && this.shown()) { this.stale = false; this.refresh(cx, true); } });
++    cx.timer.every(1000, (cx) => {
++      if (this.stale && this.shown()) { this.stale = false; this.refresh(cx, true); }
++      // VNH: cmd-\ (vnh-tabs.git-push) asks through shared state, which reaches a hidden copy too.
++      const want = shared("vnh.git-graph.push") ?? 0;
++      if (want > this.pushSeen && this.shown() && this.state === "ready") { this.pushSeen = want; if (Date.now() - want < 15000) this.push(cx); }
++    });
      check();
    }
  
@@ -61,7 +67,7 @@
    reset() {
      Object.assign(this, folderState());
      this.watchToken++; this.watching = null; this.picking = false;
-@@ -392,6 +421,7 @@
+@@ -392,6 +427,7 @@
            // Windows reports backslashes; the ref checks read slashes.
            const paths = (await watchFolder(dir)).map((p) => p.replace(/\\/g, "/"));
            if (token !== this.watchToken) return;
@@ -69,7 +75,7 @@
            if (paths.some((p) => (gitDir || inGitDir(p)) && isRefChange(p))) this.refresh(cx, true);
            else if (paths.some((p) => !gitDir && !inGitDir(p))) this.statusSoon(cx);
          }
-@@ -674,14 +704,18 @@
+@@ -674,14 +710,18 @@
          .child(h_flex().id("graph-repository").h(22).px(7).gap(5).min_w(0).items_center().rounded(6).cursor_pointer()
            .bg(this.picking ? t.selected : t.raised).text_color(t.foreground).hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.togglePicker(cx))
            .child(svg(icon("folder")).size(12).flex_none()).child(div().min_w(0).truncate().text_size(11.5).font_semibold().child(repo.name))))
@@ -90,7 +96,7 @@
        .when(ready && this.remoteNames?.length > 0, (e) => e.child(this.iconButton("graph-fetch", "fetch", this.fetching ? "Fetching…" : null, false, (_e, cx) => this.fetch(cx), t)))
        .when(this.state === "workspace", (e) => {
          const run = this.fetchAll?.root === ws.root ? this.fetchAll : null;
-@@ -721,8 +755,88 @@
+@@ -721,8 +761,106 @@
      const { rows, height } = this.repoRows(t);
      return v_flex().id(`${this.listId}-picker`).h(Math.min(height, 260)).flex_none().py(4).overflow_y_scrollbar()
        .bg(t.raised).border_b(1).border_color(t.border).children(rows);
@@ -103,6 +109,9 @@
 +      this.branchQuery = ""; this.branchAt = 0; this.branchList = null;
 +      this.branchInput.set_value("");
 +      this.branchInput.focus();
++      // The box isn't drawn yet on the first call: take the keyboard again once it is.
++      cx.timer.after(60, () => { if (this.branchPicking) this.branchInput.focus(); });
++      cx.timer.after(250, () => { if (this.branchPicking) this.branchInput.focus(); });
 +      const root = this.root, on = this.on;
 +      cx.spawn(async (cx) => {
 +        const r = await exec("git", [...READ, "for-each-ref", "--sort=-committerdate", "--format=%(refname)%09%(committerdate:relative)%09%(upstream:short)", "refs/heads", "refs/remotes"], { cwd: root, on }).catch(() => null);
@@ -120,11 +129,26 @@
 +      });
 +    } else this.handle.focus();
 +    cx.notify();
-   }
- 
++  }
++
++  // Words in any order ("feat office"), else the letters in order ("rspw" finds responsive-window);
++  // a remote's "origin/" needn't be typed. Name starts first, then contains, then letters in order.
 +  branchRows() {
 +    const q = (this.branchQuery ?? "").trim().toLowerCase();
-+    return (this.branchList ?? []).filter((b) => !q || b.name.toLowerCase().includes(q));
++    const list = this.branchList ?? [];
++    if (!q) return list;
++    const words = q.split(/\s+/), letters = q.replace(/\s+/g, "");
++    const inOrder = (name) => { let i = 0; for (const ch of name) if (ch === letters[i]) i++; return i === letters.length; };
++    const scored = [];
++    for (const b of list) {
++      const full = b.name.toLowerCase(), short = b.kind === "remote" ? full.replace(/^[^/]+\//, "") : full;
++      let score = -1;
++      if (short.startsWith(q) || full.startsWith(q)) score = 3;
++      else if (words.every((w) => full.includes(w))) score = 2;
++      else if (inOrder(short)) score = 1;
++      if (score >= 0) scored.push({ b, score });
++    }
++    return scored.sort((x, y) => y.score - x.score).map((x) => x.b); // stable: newest first within a score
 +  }
 +
 +  // A local branch checks out at once (as double-clicking its label does); a remote one asks
@@ -143,8 +167,8 @@
 +    if (!this.current) { notify({ title: "Nothing to push", body: "HEAD is detached: check out a branch first.", level: "warning", timeout: 3000 }); return; }
 +    if (!this.remoteNames?.length) { notify({ title: "No remote", body: "This repository has no remote to push to.", level: "warning", timeout: 3000 }); return; }
 +    openDialog({ type: "push", name: this.current }, this.ctx);
-+  }
-+
+   }
+ 
 +  branchPicker(t) {
 +    const rows = this.branchRows();
 +    if (this.branchAt >= rows.length) this.branchAt = Math.max(0, rows.length - 1);
@@ -179,7 +203,7 @@
    // Opening it reads every row again, since the list stopped watching while the graph showed.
    togglePicker(cx) {
      this.picking = !this.picking;
-@@ -923,6 +1037,7 @@
+@@ -923,6 +1061,7 @@
        .on_mouse_up("left", (_e, cx) => this.endDrag(cx))
        .on_hover((hovered, cx) => { if (!hovered) this.endDrag(cx); })
        .on_key_down((e, cx) => {
@@ -187,7 +211,7 @@
          if (e.key !== "escape" || !(this.selected || this.opened)) return;
          // Esc closes the dropdown, a diff, then the details, then goes back to the Manygit list.
          if (this.picking) this.picking = false; else if (this.diff) this.diff = null; else if (this.selected) { this.selected = null; this.details = null; } else this.back(cx);
-@@ -939,6 +1054,7 @@
+@@ -939,6 +1078,7 @@
        .child(this.header(t))
        .when(this.state === "workspace", (e) => e.child(this.workspaceList(t)))
        .when(Boolean(this.picking && this.workspace && this.opened), (e) => e.child(this.picker(t)))
@@ -195,3 +219,33 @@
        .when(ready, (e) => e.child(this.toolbar(t)).child(this.columns(t, this.graphWidth())).child(this.list(t, mono))
          .when(Boolean(this.selected), (el) => el.child(this.detailsPane(t, mono))))
        .when(!ready && this.state !== "workspace", (e) => e.child(this.empty(t)));
+--- a/mods/git-graph/git.js
++++ b/mods/git-graph/git.js
+@@ -252,7 +252,8 @@
+         { value: "mixed", label: "Mixed", detail: "Keep every change, unstaged" },
+         { value: "hard", label: "Hard", detail: "Discard every change", danger: true }] } };
+     case "push": return { title: "Push branch", detail: `Push ${a.name}.`, choice: remoteChoice(ctx),
+-      checks: [{ id: "upstream", label: "Set as upstream", value: true }], confirm: "Push" };
++      // VNH: tags too (git push <remote> --tags after the branch; never forced, so a tag the remote has differently is refused).
++      checks: [{ id: "upstream", label: "Set as upstream", value: true }, { id: "tags", label: "Push tags too", value: true }], confirm: "Push" };
+     case "pushTag": return { title: "Push tag", detail: `Push the tag ${a.name}.`, choice: remoteChoice(ctx), confirm: "Push" };
+     case "commit": return { title: "Commit", detail: ctx.current ? `Commit to ${ctx.current}.` : "You're on a detached HEAD: the commit belongs to no branch until you create one.",
+       inputs: [{ id: "message", label: "Message", value: "", text: true }],
+@@ -330,7 +331,7 @@
+     case "cherryPick": return [["cherry-pick", ...(a.merge ? ["-m", "1"] : []), a.hash]];
+     case "revert": return [["revert", "--no-edit", ...(a.merge ? ["-m", "1"] : []), a.hash]];
+     case "reset": return [["reset", `--${v.mode}`, a.hash]];
+-    case "push": return [["push", ...(v.upstream ? ["--set-upstream"] : []), v.remote, a.name]];
++    case "push": return [["push", ...(v.upstream ? ["--set-upstream"] : []), v.remote, a.name], ...(v.tags ? [["push", v.remote, "--tags"]] : [])];
+     case "pushTag": return [["push", v.remote, `refs/tags/${a.name}`]];
+     // The message is -m's own argument, so one starting with "-" stays a message.
+     case "commit": return [...(v.all ? [["add", "--all"]] : []), ["commit", "-m", message]];
+@@ -360,7 +361,7 @@
+     case "cherryPick": return `Cherry-picked ${a.short}`;
+     case "revert": return `Reverted ${a.short}`;
+     case "reset": return `Reset to ${a.short} (${v.mode})`;
+-    case "push": return `Pushed ${a.name} to ${v.remote}`;
++    case "push": return `Pushed ${a.name}${v.tags ? " and tags" : ""} to ${v.remote}`;
+     case "pushTag": return `Pushed tag ${a.name} to ${v.remote}`;
+     case "commit": return "Committed";
+     case "pull": return `Pulled ${a.upstream}`;

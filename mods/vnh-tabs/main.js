@@ -64,7 +64,7 @@ export default class Tabs extends View {
           const body = find(layout(), "panel-body");
           if (body?.children?.some((x) => x.id === "graph")) {
             run("layout.select", { stack: "panel-body", child: "graph" }); run("layout.show", { id: "panel" });
-            cx.timer.after(350, () => run("git-graph.push"));
+            setShared("vnh.git-graph.push", Date.now()); // git-graph opens its push dialog once it shows
           }
         }
         cx.notify();
