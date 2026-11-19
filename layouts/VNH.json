@@ -37,7 +37,7 @@
                   "id": "spaces",
                   "type": "block",
                   "content": {
-                    "mod": "spaces"
+                    "mod": "vnh-spaces"
                   },
                   "size": {
                     "weight": 1
