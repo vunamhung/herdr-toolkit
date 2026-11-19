@@ -1,9 +1,10 @@
 --- a/mods/better-changes/main.js
 +++ b/mods/better-changes/main.js
-@@ -62,6 +62,16 @@
+@@ -62,6 +62,17 @@
      if (this.mode === "sidebar") setShared("better-changes.diff-layout", this.diffLayout);
      this.menuOpen = false;
      this.menuFocus = cx.focus_handle();
++    this.viewMenuFocus = cx.focus_handle(); // VNH: the view dropdown (renderViewMenu)
 +    // VNH: the diff tab takes the keyboard so Esc closes it (renderDiff).
 +    // Focus can't change during render: a timer takes it when the tab shows (opened or selected again).
 +    if (this.mode === "diff") {
@@ -73,19 +74,64 @@
      if (this.error || this.note) root.child(Message(this.error || this.note, true));
 --- a/mods/better-changes/views/sidebar.js
 +++ b/mods/better-changes/views/sidebar.js
-@@ -113,6 +113,15 @@
+@@ -23,6 +23,7 @@
+   MenuLabel,
+   MenuDivider,
+   MenuOption,
++  Icon,
+   TextBox,
+   SplitButton,
+   SplitTrigger,
+@@ -113,6 +114,8 @@
              }),
            ),
        )
-+      // VNH: one click between the folder tree and a flat list (also in the ⋮ menu).
-+      .when(this.tab === "changes", (el) => el.child(
-+        IconButton({
-+          id: "view-toggle",
-+          icon: this.view === "tree" ? "flat" : "tree",
-+          label: this.view === "tree" ? "Show as a flat list" : "Show as a folder tree",
-+          onClick: (cx) => this.setView(this.view === "tree" ? "flat" : "tree", cx),
-+        }),
-+      ))
++      // VNH: a view dropdown (the current view's icon and a chevron), as Fork's.
++      .when(this.tab === "changes", (el) => el.child(this.renderViewMenu()))
        .child(
          IconButton({
            id: "refresh",
+@@ -142,6 +145,43 @@
+     }
+     this.refreshSpinning = false;
+     cx.notify();
++  },
++
++  // VNH: Fork style: a check column on the left, the option's icon, its label. The same
++  // settings as the ⋮ menu (file list view, diff layout).
++  renderViewMenu() {
++    const t = theme();
++    const option = (id, icon, label, selected, set) =>
++      h_flex().id(`vm-${id}`).h(28).flex_none().px(6).gap(8).items_center().rounded(6).cursor_pointer()
++        .text_size(12.5).text_color(t.foreground)
++        .role("menu_item_radio").aria_selected(Boolean(selected))
++        .hover((s) => s.bg(t.hover))
++        .on_click((_e, cx) => { this.viewMenuOpen = false; set(cx); cx.notify(); })
++        .child(div().w(14).flex_none().flex().justify_center()
++          .when(selected, (el) => el.child(Icon("check", 13).text_color(t.foreground))))
++        .child(Icon(icon, 14).text_color(t.muted))
++        .child(div().flex_1().child(label));
++    const current = VIEWS.find((v) => v.id === this.view) ?? VIEWS[1];
++    const trigger = h_flex().id("view-menu-trigger").h(26).px(5).gap(2).flex_none().items_center().rounded(6)
++      .cursor_pointer().text_color(t.dim).tooltip("File list and diff view")
++      .hover((s) => s.bg(t.hover).text_color(t.foreground))
++      .child(Icon(current.icon, 15))
++      .child(Icon("chevron-down", 11));
++    return Menu({
++      id: "view-menu",
++      open: Boolean(this.viewMenuOpen),
++      focus: this.viewMenuFocus,
++      onOpenChange: (open, cx) => { this.viewMenuOpen = open; cx.notify(); },
++      trigger,
++      width: 210,
++      children: [
++        option("flat", "flat", "Flat list", this.view === "flat", (cx) => this.setView("flat", cx)),
++        option("tree", "tree", "Tree view", this.view === "tree", (cx) => this.setView("tree", cx)),
++        MenuDivider(),
++        option("inline", "diff-inline", "Inline diff", this.diffLayout === "inline", (cx) => this.setDiffLayout("inline", cx)),
++        option("split", "diff-split", "Side by side diff", this.diffLayout === "split", (cx) => this.setDiffLayout("split", cx)),
++      ],
++    });
+   },
+ 
+   renderMore() {
