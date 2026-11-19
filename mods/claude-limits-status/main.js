@@ -2,6 +2,10 @@ import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, exec, checking, shared, focused } from "herdr";
 
+const PRICE_MS = 120000;
+const PRICES = [{ id: "bitcoin", label: "BTC" }, { id: "ethereum", label: "ETH" }, { id: "tether-gold", label: "Gold" }];
+const PRICE_URL = `https://api.coingecko.com/api/v3/simple/price?ids=${PRICES.map((c) => c.id).join(",")}&vs_currencies=usd&include_24hr_change=true`;
+
 // Written by ~/.claude/statusline.sh on every Claude Code status refresh:
 // { model, effort, five, five_reset, seven, seven_reset, ctx, updated } (resets/updated: unix seconds;
 // ctx: context window used %, of the session that refreshed last).
@@ -135,6 +139,50 @@ export default class ClaudeLimitsStatus extends View {
     // Git: re-read at once when the shown folder changes, else every 6 s.
     this.refreshGit(cx);
     cx.timer.every(1500, (cx) => this.refreshGit(cx));
+    // Prices: at once, then every 2 min while the window is active (none while it's in the background).
+    this.refreshPrices(cx);
+    cx.timer.every(PRICE_MS, (cx) => this.refreshPrices(cx));
+  }
+
+  // BTC, ETH and gold (Tether Gold, one token per troy ounce) from CoinGecko's public price API:
+  // one GET, no key, nothing about the person. A failure keeps the last prices.
+  refreshPrices(cx) {
+    // The first fetch runs even in the background, so the bar isn't empty until the window is used.
+    if (this.pricesBusy || (this.prices && !window()?.active) || Date.now() - (this.pricesAt ?? 0) < PRICE_MS - 1000) return;
+    this.pricesBusy = true;
+    cx.spawn(async (cx) => {
+      try {
+        // CoinGecko answers 403 without a User-Agent: a generic one, nothing about the person.
+        const r = await fetch(PRICE_URL, { headers: { Accept: "application/json", "User-Agent": "herdr-status-bar" } });
+        if (!r.ok) this.pricesError = `HTTP ${r.status}`;
+        if (r.ok) {
+          const j = await r.json();
+          const pick = (id) => (typeof j?.[id]?.usd === "number" ? { usd: j[id].usd, change: j[id].usd_24h_change ?? null } : null);
+          const next = PRICES.map((c) => ({ ...c, quote: pick(c.id) })).filter((c) => c.quote);
+          if (next.length) { this.prices = next; this.pricesAt = Date.now(); cx.notify(); }
+        }
+      } catch (e) { this.pricesError = String(e?.message ?? e); } finally { this.pricesBusy = false; }
+    });
+  }
+
+  // "BTC $63,176 +0.1%": the price in the bar's color, the 24 h change green or red.
+  priceRow(t) {
+    if (!this.prices?.length) return null;
+    // toLocaleString has no grouping in the mod runtime: group by hand; whole dollars from $100 up.
+    const money = (n) => {
+      const [whole, cents] = (n >= 100 ? Math.round(n).toString() : n.toFixed(2)).split(".");
+      return `$${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${cents ? `.${cents}` : ""}`;
+    };
+    return h_flex().id("prices").gap(12).items_center().cursor_pointer()
+      .tooltip("24 h change · CoinGecko (gold: Tether Gold) · click to refresh")
+      .on_click((_e, cx) => { this.pricesAt = 0; this.refreshPrices(cx); })
+      .children(this.prices.map((c) => {
+        const ch = c.quote.change;
+        return h_flex().gap(5).items_center()
+          .child(div().text_color(t.dim).child(c.label))
+          .child(div().child(money(c.quote.usd)))
+          .when(typeof ch === "number", (el) => el.child(div().text_color(ch >= 0 ? t.ansi2 : t.ansi1).child(`${ch >= 0 ? "+" : "−"}${Math.abs(ch).toFixed(1)}%`)));
+      }));
   }
 
   // The folder the bar describes: the active space's focused terminal, else its folder.
@@ -311,6 +359,7 @@ export default class ClaudeLimitsStatus extends View {
         .when(needs > 0, el => el.child(div().text_color(t.blocked).child(`· ${needs} needs you`))))
       .when(Boolean(claude), el => el.child(claude))
       .child(div().flex_1())
-      .child(div().id("palette").text_color(t.dim).on_click(() => run("app.palette")).child(this.hint(t)));
+      // VNH: crypto and gold prices where the palette hint was (⌘⇧P still opens the palette).
+      .when(Boolean(this.priceRow(t)), (el) => el.child(this.priceRow(t)));
   }
 }
