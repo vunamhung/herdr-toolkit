@@ -209,12 +209,10 @@
        list.child(Message(this.loading || !this.root ? "Loading changes…" : "No changes"));
      this.groupsDrawn = 0;
      this.addGroup(list, "conflict", "Conflicts", conflicts);
-@@ -206,8 +260,76 @@
-     if (this.total > limit)
-       list.child(Message(`Showing the first ${limit.toLocaleString()} changed files.`));
+@@ -208,6 +262,74 @@
      return v_flex().id("changes").flex_1().min_h(0).child(list).child(this.renderCommitBox());
-+  },
-+
+   },
+ 
 +  renderSplitStaging(top, conflicts, unstaged, staged, committed) {
 +    const t = theme();
 +    this.groupsDrawn = 0;
@@ -238,8 +236,8 @@
 +      .child(resizable_panel().when(Boolean(saved), (el) => el.size(saved)).size_range(70).child(this.dropZone("unstaged", top.size_full())))
 +      .child(resizable_panel().size_range(70).child(v_flex().size_full().border_t(1).border_color(t.border).child(this.dropZone("staged", bottom))));
 +    return this.dragSurface(v_flex().id("changes").flex_1().min_h(0).child(split).child(this.renderCommitBox()));
-   },
- 
++  },
++
 +  // VNH: drag a file between the two areas to stage or unstage it. A press on a row records
 +  // dragStart; moving 5px makes it a drag; releasing over the other area runs the index action.
 +  // Only the index changes (git add / git reset), never the files on disk.
@@ -327,14 +325,55 @@
      else
        row.child(
          h_flex()
-@@ -425,6 +566,7 @@
+@@ -424,31 +565,27 @@
+     if (file.conflict)
        row.child(
          div().flex_none().text_size(TEXT.caption).text_color(t.ansi1).child(file.conflictKind),
+-      );
+-    else row.child(DiffStat(stats)).child(StatusLetter(status));
+-    if (scope === "unstaged")
+-      row.child(
+-        IconButton({
+-          id: `stage-${file.path}`,
+-          icon: "plus",
+-          label: "Stage",
+-          small: true,
+-          onClick: (cx) => this.indexAction("stage", file.path, cx),
+-        }),
+-      );
+-    if (scope === "staged")
+-      row.child(
+-        IconButton({
+-          id: `unstage-${file.path}`,
+-          icon: "minus",
+-          label: "Unstage",
+-          small: true,
+-          onClick: (cx) => this.indexAction("unstage", file.path, cx),
+-        }),
        );
 +    else if (columns) row.child(h_flex().w(70).flex_none().justify_end().child(DiffStat(stats))).child(StatusLetter(status));
-     else row.child(DiffStat(stats)).child(StatusLetter(status));
-     if (scope === "unstaged")
-       row.child(
++    else row.child(DiffStat(stats)).child(StatusLetter(status));
++    // VNH: a checkbox in place of + / −: ticked means staged; a click stages or unstages.
++    if (scope === "unstaged" || scope === "staged") row.child(this.stageBox(file.path, scope === "staged"));
+     return row;
+   },
+ 
++  stageBox(path, checked) {
++    const t = theme();
++    return div().id(`${checked ? "unstage" : "stage"}-${path}`).size(18).flex_none().flex().items_center().justify_center()
++      .cursor_pointer().role("check_box").aria_selected(checked)
++      .accessibility_label(checked ? "Unstage" : "Stage").tooltip(checked ? "Unstage" : "Stage")
++      .on_mouse_down("left", (_e, cx) => cx.stop_propagation()) // not a drag start
++      .on_click((_e, cx) => { cx.stop_propagation(); this.indexAction(checked ? "unstage" : "stage", path, cx); })
++      .child(div().size(14).flex_none().flex().items_center().justify_center().rounded(3).border_1()
++        .border_color(checked ? t.accent : t.dim).when(checked, (el) => el.bg(t.accent))
++        .hover((st) => st.border_color(t.accent))
++        .when(checked, (el) => el.child(Icon("check", 11).text_color(t.background))));
++  },
++
+   renderHistory() {
+     const list = v_flex().id("commit-list").flex_1().min_h(0).overflow_y_scrollbar().p(6);
+     if (this.commitsError) return list.child(Message(this.commitsError, true));
 --- /dev/null
 +++ b/mods/better-changes/icons/staging-fluid.svg
 @@ -0,0 +1,3 @@
