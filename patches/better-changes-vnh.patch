@@ -9,7 +9,7 @@
 +    if (this.mode === "diff") {
 +      this.diffKeys = cx.focus_handle();
 +      cx.timer.every(300, () => {
-+        const { showing } = this.diffTab();
++        const { showing } = this.vnhDiffTab();
 +        if (showing && !this.diffShowing) this.diffKeys.focus();
 +        this.diffShowing = showing;
 +      });
@@ -19,14 +19,13 @@
      this.files = [];
 --- a/mods/better-changes/views/diff.js
 +++ b/mods/better-changes/views/diff.js
-@@ -334,10 +334,36 @@
-     const find = (node) =>
-       node?.content?.pane?.header?.content?.mod ?? (node?.children ?? []).map(find).find(Boolean);
+@@ -336,8 +336,35 @@
      return find(layout()) === "better-changes";
-+  },
-+
+   },
+ 
 +  // VNH: this space's diff tab (one per space), and whether it is the one showing.
-+  diffTab() {
++  // (Not diffTab: the mod's own diffTab(space) returns the tab id, and pick() relies on it.)
++  vnhDiffTab() {
 +    const space = spaces().find((s) => s.id === this.diffSpace);
 +    const tabs = new Set(space?.tabs.map((t) => t.id) ?? []);
 +    const pane = panes().find((p) => p.mod === "better-changes" && tabs.has(p.tab));
@@ -35,12 +34,12 @@
 +
 +  closeDiffTab() {
 +    if (this.closingTab) return; // a repeated key would close an already closed tab
-+    const { tab } = this.diffTab();
++    const { tab } = this.vnhDiffTab();
 +    if (!tab) return;
 +    this.closingTab = true;
 +    run("tab.close", { id: tab, confirmed: true });
-   },
- 
++  },
++
    renderDiff() {
      const root = Panel({ id: "better-changes-diff", framed: false });
 +    // VNH: Esc closes the diff tab. The tab takes the keyboard when it is opened or selected again.
