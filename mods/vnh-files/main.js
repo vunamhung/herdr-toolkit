@@ -292,15 +292,15 @@ export default class Files extends View {
   render(cx) {
     if (key() !== this.context?.key) this.refresh(cx);
     const t = theme();
-    return v_flex().id("files").relative().size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      // The header's buttons show only while the pointer is over the header (space kept, nothing shifts).
+    // The header's buttons show only while the pointer is over the panel (space kept, nothing shifts).
+    return v_flex().id("files").relative().size_full().min_h(0).rounded(10).overflow_hidden()
+      .on_hover((hovered, cx) => { if (this.panelHover !== hovered) { this.panelHover = hovered; cx.notify(); } }).bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().id("files-header").h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-        .on_hover((hovered, cx) => { if (this.headerHover !== hovered) { this.headerHover = hovered; cx.notify(); } })
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         // VNH: the folder's name is the title (no "Files"); a previewed file's path stays on the right.
         .child(div().flex_none().max_w(200).truncate().font_semibold().child(this.root?.split(/[\\/]/).pop() || "Files"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? ""))
-        .when(!this.file, el => el.child(h_flex().flex_none().gap(2).items_center().when(!this.headerHover && !this.sortOpen, el => el.invisible())
+        .when(!this.file, el => el.child(h_flex().flex_none().gap(2).items_center().when(!this.panelHover && !this.sortOpen, el => el.invisible())
           .child(this.tool(t, "files-sort", "sort", "Sort", this.sortOpen, (cx) => {
             // The click that closed the menu (outside it) is this same press: don't reopen.
             if (!this.sortOpen && Date.now() - (this.sortClosedAt ?? 0) < 250) return;
