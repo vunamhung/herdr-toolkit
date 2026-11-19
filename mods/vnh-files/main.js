@@ -153,8 +153,10 @@ export default class Files extends View {
       if (out.length >= TOTAL) break;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
-        // Drag a file or folder into a terminal (e.g. Claude Code's input) to paste its quoted path.
-        .drag_paths([`${this.root}/${path}`], { on: this.on ?? null })
+        // Drag a file or folder into a terminal: locally it types `@<path>` relative to this
+        // panel's folder (the focused terminal's), which Claude Code reads as a file mention;
+        // a folder ends in `/`. On another machine it stays the absolute path (Herdr copies those).
+        .drag_paths([this.on ? `${this.root}/${path}` : `@${path}${entry.dir ? "/" : ""}`], { on: this.on ?? null })
         .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.show(path, cx))
         .child(entry.dir ? svg(`mods/vnh-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(svg(`mods/vnh-files/${entry.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(t.muted))
