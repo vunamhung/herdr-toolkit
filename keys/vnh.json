@@ -8,6 +8,7 @@
   "global": {
     "cmd-enter": "mod.open:vnh-command",
     "ctrl-shift-r": "mod.open:run",
-    "ctrl-shift-q": "overlay.close"
+    "ctrl-shift-q": "overlay.close",
+    "ctrl-shift-u": "mod.open:portal"
   }
 }

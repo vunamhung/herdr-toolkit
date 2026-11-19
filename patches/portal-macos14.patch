@@ -1,0 +1,22 @@
+--- a/mods/portal/scan.js
++++ b/mods/portal/scan.js
+@@ -48,6 +48,9 @@
+ const LINE = /^(tcp|udp)(46|4|6)\s+\d+\s+\d+\s+(\S+)\s+(\S+)\s+(.*)$/;
+ // [state] rxbytes txbytes rhiwat shiwat name:pid, then hex flags. Names can hold spaces.
+ const REST = /^(?:([A-Z_0-9]+)\s+)?\d+\s+\d+\s+\d+\s+\d+\s+(.+?):(-?\d+)\s+[0-9a-f]{5}\s/;
++// VNH: macOS 14 and earlier print [state] rhiwat shiwat pid epid, then flags, and no name:
++// the name then comes from ps (the owner's path), as on Windows.
++const REST_OLD = /^(?:([A-Z_0-9]+)\s+)?\d+\s+\d+\s+(-?\d+)\s+-?\d+\s+[0-9a-f]{5}\s/;
+ 
+ /**
+  * TCP listeners and UDP sockets with a local port and no fixed peer. Connected UDP
+@@ -61,7 +64,8 @@
+     const m = LINE.exec(line.trim());
+     if (!m) continue;
+     const [, p, fam, local, foreign, rest] = m;
+-    const r = REST.exec(rest);
++    let r = REST.exec(rest);
++    if (!r) { const o = REST_OLD.exec(rest); if (o) r = [o[0], o[1], "", o[2]]; }
+     if (!r) continue;
+     const proto = /** @type {Proto} */ (p);
+     if (proto === "tcp" && r[1] !== "LISTEN") continue;
