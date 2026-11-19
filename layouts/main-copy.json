@@ -1,6 +1,11 @@
 {
   "id": "r3294136a4d62e57f5835d4d2c03e677a",
   "type": "column",
+  "titlebar": "none",
+  "traffic_lights": [
+    12,
+    16
+  ],
   "children": [
     {
       "id": "root",
@@ -206,11 +211,6 @@
           "edge": "bottom",
           "align": "start"
         }
-      ],
-      "titlebar": "none",
-      "traffic_lights": [
-        12,
-        16
       ]
     }
   ],
