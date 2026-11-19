@@ -116,6 +116,19 @@
                       "mode": "toolbar"
                     }
                   }
+                },
+                {
+                  "id": "cloudflare-bar",
+                  "type": "block",
+                  "size": {
+                    "px": 44
+                  },
+                  "content": {
+                    "mod": "cloudflare-deploys",
+                    "props": {
+                      "bar": true
+                    }
+                  }
                 }
               ]
             },
