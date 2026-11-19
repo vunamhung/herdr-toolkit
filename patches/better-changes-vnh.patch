@@ -103,15 +103,17 @@
      if (this.error || this.note) root.child(Message(this.error || this.note, true));
 --- a/mods/better-changes/views/sidebar.js
 +++ b/mods/better-changes/views/sidebar.js
-@@ -1,6 +1,6 @@
+@@ -1,7 +1,7 @@
  // The sidebar: its tabs, options menu, file groups and commit views.
  import { div } from "gpui-kit";
 -import { v_flex, h_flex } from "gpui-base";
+-import { theme, shared, setShared } from "herdr";
 +import { v_flex, h_flex, v_resizable, resizable_panel } from "gpui-base";
- import { theme, shared, setShared } from "herdr";
++import { theme, shared, setShared, exec, agents, spaces, notify } from "herdr";
  import { fileTree, timeAgo } from "../git/model.js";
  import {
-@@ -23,6 +23,7 @@
+   TEXT,
+@@ -23,13 +23,46 @@
    MenuLabel,
    MenuDivider,
    MenuOption,
@@ -119,15 +121,46 @@
    TextBox,
    SplitButton,
    SplitTrigger,
-@@ -30,6 +31,7 @@
+ } from "./ui.js";
  
++// VNH: AI commit messages (generateMessage).
++const COMMIT_PROMPT = [
++  "Write a git commit message for the staged changes below, following Conventional Commits 1.0.0.",
++  "First line: type(scope): summary. type is one of feat, fix, refactor, perf, docs, test, build, ci, chore, style, revert.",
++  "scope is optional, short and lowercase (the area touched). summary is imperative mood, lowercase, no trailing period, at most 72 characters.",
++  "Then, only if it helps a reviewer, a blank line and a short body of '- ' bullets on what changed and why, wrapped at 72 columns.",
++  "Add a 'BREAKING CHANGE: ...' footer only when the change breaks a public API, and mark the type with '!'.",
++  "Write in English. Output only the commit message: no code fences, no quotes, no commentary.",
++].join("\n");
++const GENERATE_SCRIPT = `
++export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
++for d in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$d" ] && PATH="$PATH:$d"; done # last: only for codex; claude stays ~/.local/bin
++[ -n "$(git diff --cached --name-only)" ] || exit 3
++log=$(git log -8 --format=%s 2>/dev/null)
++diff=$(git -c core.quotePath=false diff --cached --stat --no-color; echo; git diff --cached --no-color -U2 | head -c 60000)
++input=$(printf '%s\n\nRecent commit subjects in this repository (match their style):\n%s\n\nStaged changes:\n%s\n' "$2" "$log" "$diff")
++if [ "$1" = codex ]; then
++  command -v codex >/dev/null || { echo "codex not found" >&2; exit 127; }
++  out=$(mktemp); printf '%s' "$input" | codex exec --skip-git-repo-check --color never -o "$out" - >/dev/null 2>&1; s=$?; cat "$out"; rm -f "$out"; exit $s
++fi
++command -v claude >/dev/null || { echo "claude not found" >&2; exit 127; }
++printf '%s' "$input" | claude -p --model haiku
++`;
++// Drops code fences and a leading "Commit message:" the model may add.
++function cleanMessage(raw) {
++  let text = String(raw ?? "").replace(/\r/g, "").trim();
++  text = text.replace(/^\x60\x60\x60[a-z]*\n?/i, "").replace(/\n?\x60\x60\x60\s*$/, "").trim();
++  text = text.replace(/^(commit message|message)\s*:\s*/i, "").trim();
++  return text;
++}
++
  const VIEWS = [
    { id: "flat", label: "Flat", icon: "flat" },
 +  { id: "columns", label: "Columns", icon: "columns" }, // VNH
    { id: "tree", label: "Tree", icon: "tree" },
  ];
  const LAYOUTS = [
-@@ -47,6 +49,12 @@
+@@ -47,6 +80,12 @@
      cx.notify();
    },
  
@@ -140,7 +173,7 @@
    setView(view, cx) {
      this.view = view;
      localStorage.setItem("view", view);
-@@ -113,6 +121,8 @@
+@@ -113,6 +152,8 @@
              }),
            ),
        )
@@ -149,10 +182,12 @@
        .child(
          IconButton({
            id: "refresh",
-@@ -144,6 +154,47 @@
+@@ -142,6 +183,47 @@
+     }
+     this.refreshSpinning = false;
      cx.notify();
-   },
- 
++  },
++
 +  // VNH: Fork style: a check column on the left, the option's icon, its label. The same
 +  // settings as the ⋮ menu (file list view, diff layout).
 +  renderViewMenu() {
@@ -192,12 +227,10 @@
 +        option("split-staging", "staging-split", "Split view staging", this.staging === "split", (cx) => this.setStaging("split", cx)),
 +      ],
 +    });
-+  },
-+
+   },
+ 
    renderMore() {
-     const option = (group, choice, selected, set) =>
-       MenuOption({
-@@ -187,7 +238,10 @@
+@@ -187,7 +269,10 @@
      const unstaged = this.files.filter((f) => f.unstaged && !f.conflict);
      const staged = this.files.filter((f) => f.staged);
      const committed = this.committed?.total ? this.committed : null;
@@ -209,10 +242,12 @@
        list.child(Message(this.loading || !this.root ? "Loading changes…" : "No changes"));
      this.groupsDrawn = 0;
      this.addGroup(list, "conflict", "Conflicts", conflicts);
-@@ -208,6 +262,74 @@
+@@ -206,8 +291,76 @@
+     if (this.total > limit)
+       list.child(Message(`Showing the first ${limit.toLocaleString()} changed files.`));
      return v_flex().id("changes").flex_1().min_h(0).child(list).child(this.renderCommitBox());
-   },
- 
++  },
++
 +  renderSplitStaging(top, conflicts, unstaged, staged, committed) {
 +    const t = theme();
 +    this.groupsDrawn = 0;
@@ -258,8 +293,8 @@
 +      })
 +      .child(el)
 +      .when(hot, (z) => z.child(div().absolute().inset_0().rounded(8).border_2().border_color(t.accent).bg(t.accent + "14")));
-+  },
-+
+   },
+ 
 +  dragSurface(el) {
 +    const t = theme(), d = this.dragging;
 +    return el.relative()
@@ -284,7 +319,69 @@
    renderCommitBox() {
      const t = theme();
      const hint = this.commitBoxHint();
-@@ -340,12 +462,25 @@
+@@ -262,7 +415,61 @@
+     return this.commitMode === "amend" ? "Amend" : "Commit";
+   },
+ 
++  // VNH: ✨ before Commit writes a Conventional Commits message for the staged diff with the
++  // agent CLI running in this space (Claude Code: `claude -p --model haiku`; Codex: `codex exec`).
++  // It only fills the message box; nothing is committed until you press Commit.
++  generateMessage(cx) {
++    if (this.generating) return;
++    if (!this.files.some((f) => f.staged)) {
++      notify({ title: "Nothing staged", body: "Stage the files to describe first.", level: "warning", timeout: 3000 });
++      return;
++    }
++    const space = spaces().find((s) => s.active)?.id;
++    const mine = agents().filter((a) => a.space === space).sort((a, b) => (b.focused - a.focused) || (b.seq - a.seq));
++    const kind = (mine[0]?.app ?? "claude-code") === "codex" ? "codex" : "claude";
++    this.generating = true;
++    this.note = null;
++    cx.notify();
++    cx.spawn(async (cx) => {
++      try {
++        const r = await exec("sh", ["-c", GENERATE_SCRIPT, "generate", kind, COMMIT_PROMPT], { cwd: this.root, on: this.on ?? null, timeout: 120000 });
++        if (r.code === 3) throw new Error("Nothing staged.");
++        if (r.code !== 0) throw new Error((r.stderr || "").trim().split("\n").pop() || `${kind} exited ${r.code}`);
++        const text = cleanMessage(r.stdout);
++        if (!text) throw new Error(`${kind} returned no message.`);
++        this.message = text;
++        this.input.set_value(text);
++      } catch (e) {
++        notify({ title: "Couldn't write a commit message", body: String(e?.message ?? e), level: "error", timeout: 5000 });
++      } finally {
++        this.generating = false;
++        cx.notify();
++      }
++    });
++  },
++
+   renderCommitButton() {
++    return h_flex().w_full().gap(6).items_center()
++      .child(this.renderGenerateButton())
++      .child(div().flex_1().min_w(0).child(this.renderCommitSplit()));
++  },
++
++  // A square button as tall as Commit, on the same raised background.
++  renderGenerateButton() {
++    const t = theme();
++    const ready = !this.generating && !this.busy && this.files.some((f) => f.staged);
++    const label = this.generating ? "Writing the commit message…" : ready
++      ? "Write the commit message with AI (Conventional Commits)" : "Stage files to write a commit message with AI";
++    const icon = Icon("sparkles", 15);
++    return div().id("generate-message").size(32).flex_none().flex().items_center().justify_center()
++      .rounded(8).bg(t.raised).text_color(ready || this.generating ? t.foreground : t.dim)
++      .accessibility_label(label).tooltip(label)
++      .when(ready, (el) => el.cursor_pointer().hover((st) => st.bg(t.hover))
++        .on_click((_e, cx) => { cx.stop_propagation(); this.generateMessage(cx); }))
++      .child(this.generating ? icon.spin(SPIN_MS) : icon);
++  },
++
++  renderCommitSplit() {
+     const amend = this.commitMode === "amend";
+     return SplitButton({
+       id: "commit",
+@@ -340,12 +547,25 @@
        }),
      );
      if (collapsed) return;
@@ -311,7 +408,7 @@
        for (const file of files) list.child(this.fileRow(file, scope, 0));
        return;
      }
-@@ -402,7 +537,13 @@
+@@ -402,7 +622,13 @@
        selected: open?.path === file.path && open?.scope === scope,
        onClick: (cx) => this.pick(file, scope, cx),
      }).child(FileIcon({ icons: this.fileIcons, path: `${this.root}/${file.path}`, color: t.muted, t }));
@@ -325,11 +422,10 @@
      else
        row.child(
          h_flex()
-@@ -424,31 +565,27 @@
-     if (file.conflict)
+@@ -425,30 +651,26 @@
        row.child(
          div().flex_none().text_size(TEXT.caption).text_color(t.ansi1).child(file.conflictKind),
--      );
+       );
 -    else row.child(DiffStat(stats)).child(StatusLetter(status));
 -    if (scope === "unstaged")
 -      row.child(
@@ -350,7 +446,7 @@
 -          small: true,
 -          onClick: (cx) => this.indexAction("unstage", file.path, cx),
 -        }),
-       );
+-      );
 +    else if (columns) row.child(h_flex().w(70).flex_none().justify_end().child(DiffStat(stats))).child(StatusLetter(status));
 +    else row.child(DiffStat(stats)).child(StatusLetter(status));
 +    // VNH: a checkbox in place of + / −: ticked means staged; a click stages or unstages.
@@ -399,4 +495,13 @@
 +  <path d="M14 5h7" />
 +  <path d="M14 12h7" />
 +  <path d="M14 19h7" />
++</svg>
+--- /dev/null
++++ b/mods/better-changes/icons/sparkles.svg
+@@ -0,0 +1,6 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
++  <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" />
++  <path d="M20 2v4" />
++  <path d="M22 4h-4" />
++  <circle cx="4" cy="20" r="2" />
 +</svg>
