@@ -175,7 +175,7 @@
           "resizable": false
         },
         {
-          "id": "bb2055fde3a62ffa4b32520a369affbb7",
+          "id": "timeline",
           "type": "block",
           "content": {
             "mod": "over9k-prompts"

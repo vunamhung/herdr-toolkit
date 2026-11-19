@@ -32,6 +32,10 @@ if [ "${1:-}" = "--layout" ]; then
   echo "layout: VNH"
   backup "$HERDR/layouts/VNH.json"
   cp "$ROOT/layouts/VNH.json" "$HERDR/layouts/VNH.json"
+  echo "keys: merge keys/vnh.json into keys.json"
+  backup "$HERDR/keys.json"
+  KEYS="$HERDR/keys.json"; [ -s "$KEYS" ] || echo "{}" > "$KEYS"
+  jq -s '.[0] * .[1]' "$KEYS" "$ROOT/keys/vnh.json" > "$KEYS.tmp" && mv "$KEYS.tmp" "$KEYS"
   command -v herdr-app >/dev/null && herdr-app do layout.switch '{"name":"VNH"}' >/dev/null || true
 fi
 
