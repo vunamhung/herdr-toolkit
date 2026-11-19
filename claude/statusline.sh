@@ -57,10 +57,11 @@ LIMITS="$DATA/limits.json"
 prev=$(cat "$LIMITS" 2>/dev/null); [ -z "$prev" ] && prev='{}'
 tmp=$(mktemp "$DATA/limits.XXXXXX") && jq -n --argjson prev "$prev" \
   --arg model "$model" --arg effort "$effort" \
-  --arg five "$five" --arg five_reset "$five_reset" --arg seven "$seven" --arg seven_reset "$seven_reset" '
+  --arg five "$five" --arg five_reset "$five_reset" --arg seven "$seven" --arg seven_reset "$seven_reset" \
+  --arg ctx "$ctx" '
   def num: if . == "" then null else tonumber end;
   $prev + {model: $model, effort: (if $effort == "" then null else $effort end), updated: now | floor}
-  + ({five: ($five | num), five_reset: ($five_reset | num), seven: ($seven | num), seven_reset: ($seven_reset | num)}
+  + ({five: ($five | num), five_reset: ($five_reset | num), seven: ($seven | num), seven_reset: ($seven_reset | num), ctx: ($ctx | num)}
      | with_entries(select(.value != null)))' > "$tmp" 2>/dev/null && mv -f "$tmp" "$LIMITS" || rm -f "$tmp"
 
 # Status line moved to the Herdr status bar: print nothing here.

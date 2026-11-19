@@ -3,7 +3,8 @@ import { h_flex } from "gpui-base";
 import { spaces, agents, theme, run, window, keys, home, readTextFile, checking } from "herdr";
 
 // Written by ~/.claude/statusline.sh on every Claude Code status refresh:
-// { model, effort, five, five_reset, seven, seven_reset, updated } (resets/updated: unix seconds).
+// { model, effort, five, five_reset, seven, seven_reset, ctx, updated } (resets/updated: unix seconds;
+// ctx: context window used %, of the session that refreshed last).
 const LIMITS_FILE = "/.cache/claude-statusline/limits.json";
 
 // "3h47m" / "2d13h" / "12m" until a unix-seconds reset time.
@@ -69,6 +70,7 @@ export default class ClaudeLimitsStatus extends View {
       .child(div().child(l.effort ? `${l.model} (${l.effort})` : l.model));
     if (typeof l.five === "number") row.child(this.limit(t, l.five, "5h", l.five_reset));
     if (typeof l.seven === "number") row.child(this.limit(t, l.seven, "7d", l.seven_reset));
+    if (typeof l.ctx === "number") row.child(this.limit(t, l.ctx, "ctx", null));
     return row;
   }
 
