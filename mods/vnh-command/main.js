@@ -19,6 +19,22 @@ function ago(ms) {
 }
 const base = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || p;
 
+// The folder the focused work happens in. A mod pane (the Markdown viewer, …) has none, and a
+// space's starting folder can be another project: fall back to the last terminal folder focused
+// in this space (shared "vnh.lastCwd", kept by vnh-files), then the space's first terminal, then
+// its starting folder.
+function workFolder(space, f) {
+  if (!space) return null;
+  const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
+  if (pane?.terminal && pane.cwd) return pane.cwd;
+  if (f && f.pane === null && f.terminal && f.cwd) return f.cwd; // a layout terminal block
+  const last = (shared("vnh.lastCwd") ?? {})[space.id];
+  if (last) return last;
+  const tabs = new Set(space.tabs.map((t) => t.id)), active = space.tabs.find((t) => t.active)?.id;
+  const terms = panes().filter((p) => p.terminal && p.cwd && tabs.has(p.tab));
+  return (terms.find((p) => p.tab === active) ?? terms[0])?.cwd ?? space.folder ?? null;
+}
+
 export default class CommandRunner extends View {
   init(_props, cx) {
     this.filter = "";
@@ -34,8 +50,7 @@ export default class CommandRunner extends View {
 
     // Where to run: the active space's focused terminal folder, lifted to its repo root.
     const space = spaces().find((s) => s.active), f = focused();
-    const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
-    const cwd = pane?.cwd || f?.cwd || space?.folder || null;
+    const cwd = workFolder(space, f);
     this.space = space?.id ?? null; this.on = space?.machine ?? null; this.root = cwd;
     cx.spawn(async (cx) => {
       const r = await exec("sh", ["-c", 'git -C "$1" rev-parse --show-toplevel 2>/dev/null || echo "$1"; echo "${SHELL:-sh}"', "where", cwd || "."], { on: this.on, timeout: 5000 }).catch(() => null);

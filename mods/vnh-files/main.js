@@ -1,13 +1,39 @@
 // A lazy file browser for the focused pane's folder, with bounded read-only previews.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run, shared, setShared, checking, nextCommand } from "herdr";
+
+// The folder the focused work happens in. A mod pane (the Markdown viewer, …) has none, and a
+// space's starting folder can be another project: fall back to the last terminal folder focused
+// in this space (shared "vnh.lastCwd", kept by vnh-files), then the space's first terminal, then
+// its starting folder.
+function workFolder(space, f) {
+  if (!space) return null;
+  const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
+  if (pane?.terminal && pane.cwd) return pane.cwd;
+  if (f && f.pane === null && f.terminal && f.cwd) return f.cwd; // a layout terminal block
+  const last = (shared("vnh.lastCwd") ?? {})[space.id];
+  if (last) return last;
+  const tabs = new Set(space.tabs.map((t) => t.id)), active = space.tabs.find((t) => t.active)?.id;
+  const terms = panes().filter((p) => p.terminal && p.cwd && tabs.has(p.tab));
+  return (terms.find((p) => p.tab === active) ?? terms[0])?.cwd ?? space.folder ?? null;
+}
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
-  const pane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
+  return { cwd: workFolder(space, f), on, space: space?.id };
+}
+
+// Remember the focused terminal's folder per space, for mod panes and the other VNH mods.
+function rememberWorkFolder() {
+  const space = spaces().find(s => s.active), f = focused();
+  if (!space || !f) return;
+  const pane = f.pane ? panes().find(p => p.pane === f.pane) : null;
+  const cwd = pane?.terminal ? pane.cwd : (f.pane === null && f.terminal ? f.cwd : null);
+  if (!cwd) return;
+  const map = shared("vnh.lastCwd") ?? {};
+  if (map[space.id] !== cwd) setShared("vnh.lastCwd", { ...map, [space.id]: cwd });
 }
 const key = () => JSON.stringify(location());
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
@@ -167,6 +193,11 @@ export default class Files extends View {
     this.showSizes = flag("showSizes", false);
     try { const v = localStorage.getItem("sortBy"); this.sortBy = SORTS.some(([k]) => k === v) ? v : "name"; } catch { this.sortBy = "name"; }
     this.sortOpen = false;
+    if (!checking()) { rememberWorkFolder(); cx.timer.every(1000, () => rememberWorkFolder()); }
+    // Keyboard: the panel takes it when its header or tree is clicked, or when the Markdown tab
+    // hands it back ("vnh-files.focus"); Space on a Markdown preview opens it rendered.
+    this.kb = cx.focus_handle();
+    if (!checking()) cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); if (c === "focus") { this.kb.focus(); cx.notify(); } } });
     this.refresh(cx);
     // Refresh every 10 s, but only while the Herdr window is active; changes seen while it is in
     // the background (agents keep writing files) are caught up once it becomes active again.
@@ -427,7 +458,8 @@ export default class Files extends View {
   openMarkdown() {
     if (!this.file || !this.root) return;
     const space = spaces().find(s => s.active)?.id;
-    run("tab.new", { space, name: this.file.split("/").pop(), mod: "vnh-markdown", props: { path: `${this.root}/${this.file}`, on: this.on ?? null } });
+    run("tab.new", { space, name: this.file.split("/").pop(), mod: "vnh-markdown",
+      props: { path: `${this.root}/${this.file}`, on: this.on ?? null, back: focused()?.tab ?? null } });
   }
 
   // A 24 px icon button in the header; `on` highlights a toggle that is active.
@@ -441,9 +473,14 @@ export default class Files extends View {
     if (key() !== this.context?.key) this.refresh(cx);
     const t = theme();
     // The header's buttons show only while the pointer is over the panel (space kept, nothing shifts).
-    return v_flex().id("files").relative().size_full().min_h(0).rounded(10).overflow_hidden()
+    return v_flex().id("files").track_focus(this.kb).relative().size_full().min_h(0).rounded(10).overflow_hidden()
+      .on_key_down((e, cx) => {
+        const m = e.modifiers ?? {};
+        if (e.key !== "space" || m.control || m.alt || m.platform || m.shift) return;
+        if (this.file && /\.(md|markdown|mdx)$/i.test(this.file)) { cx.stop_propagation(); this.openMarkdown(); }
+      })
       .on_hover((hovered, cx) => { if (this.panelHover !== hovered) { this.panelHover = hovered; cx.notify(); } }).bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .child(h_flex().id("files-header").h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
+      .child(h_flex().id("files-header").on_mouse_down("left", () => this.kb.focus()).h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         // VNH: the folder's name is the title (no "Files"); a previewed file's path stays on the right.
         .child(div().flex_none().max_w(200).truncate().font_semibold().child(this.root?.split(/[\\/]/).pop() || "Files"))
@@ -461,7 +498,7 @@ export default class Files extends View {
           .child(this.tool(t, "files-sizes", "ruler", this.showSizes ? "Hide sizes" : "Show sizes", this.showSizes, (cx) => this.setFlag("showSizes", !this.showSizes, cx)))
           .child(this.tool(t, "files-expand", "expand-all", this.expanding ? "Expanding…" : "Expand all", this.expanding, (cx) => this.expandAll(cx)))
           .child(this.tool(t, "files-collapse", "collapse-all", "Collapse all", false, (cx) => this.collapseAll(cx))))))
-      .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
+      .when(!this.file, el => el.child(v_flex().id("files-tree").on_mouse_down("left", () => this.kb.focus()).flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))
       .when(Boolean(this.file), el => el.child(this.code

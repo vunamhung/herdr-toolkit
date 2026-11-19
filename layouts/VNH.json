@@ -108,7 +108,7 @@
                     "pane": {
                       "header": {
                         "content": {
-                          "mod": "pane"
+                          "mod": "vnh-pane"
                         },
                         "reveal": "always",
                         "height": 30,

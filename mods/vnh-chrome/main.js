@@ -26,11 +26,26 @@ function toggleSidebar() {
 // ---- Run configurations: the project's package.json scripts (JetBrains style) ----
 
 // Where the bar reads scripts from: the focused terminal's folder in the active space.
+// The folder the focused work happens in. A mod pane (the Markdown viewer, …) has none, and a
+// space's starting folder can be another project: fall back to the last terminal folder focused
+// in this space (shared "vnh.lastCwd", kept by vnh-files), then the space's first terminal, then
+// its starting folder.
+function workFolder(space, f) {
+  if (!space) return null;
+  const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
+  if (pane?.terminal && pane.cwd) return pane.cwd;
+  if (f && f.pane === null && f.terminal && f.cwd) return f.cwd; // a layout terminal block
+  const last = (shared("vnh.lastCwd") ?? {})[space.id];
+  if (last) return last;
+  const tabs = new Set(space.tabs.map((t) => t.id)), active = space.tabs.find((t) => t.active)?.id;
+  const terms = panes().filter((p) => p.terminal && p.cwd && tabs.has(p.tab));
+  return (terms.find((p) => p.tab === active) ?? terms[0])?.cwd ?? space.folder ?? null;
+}
+
 function runTarget() {
   const space = spaces().find((s) => s.active), f = focused();
   if (!space) return null;
-  const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
-  const cwd = pane?.cwd || f?.cwd || space.folder;
+  const cwd = workFolder(space, f);
   return cwd ? { cwd, on: space.machine ?? null, space: space.id } : null;
 }
 

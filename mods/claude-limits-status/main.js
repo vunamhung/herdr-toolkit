@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, exec, checking } from "herdr";
+import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, exec, checking, shared, focused } from "herdr";
 
 // Written by ~/.claude/statusline.sh on every Claude Code status refresh:
 // { model, effort, five, five_reset, seven, seven_reset, ctx, updated } (resets/updated: unix seconds;
@@ -102,6 +102,22 @@ function fmtDuration(ms) {
   return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
 }
 
+// The folder the focused work happens in. A mod pane (the Markdown viewer, …) has none, and a
+// space's starting folder can be another project: fall back to the last terminal folder focused
+// in this space (shared "vnh.lastCwd", kept by vnh-files), then the space's first terminal, then
+// its starting folder.
+function workFolder(space, f) {
+  if (!space) return null;
+  const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
+  if (pane?.terminal && pane.cwd) return pane.cwd;
+  if (f && f.pane === null && f.terminal && f.cwd) return f.cwd; // a layout terminal block
+  const last = (shared("vnh.lastCwd") ?? {})[space.id];
+  if (last) return last;
+  const tabs = new Set(space.tabs.map((t) => t.id)), active = space.tabs.find((t) => t.active)?.id;
+  const terms = panes().filter((p) => p.terminal && p.cwd && tabs.has(p.tab));
+  return (terms.find((p) => p.tab === active) ?? terms[0])?.cwd ?? space.folder ?? null;
+}
+
 // Clone of Herdr's workspace-status with Claude Code's model and usage limits next to the agents count.
 export default class ClaudeLimitsStatus extends View {
   init(_props, cx) {
@@ -125,9 +141,7 @@ export default class ClaudeLimitsStatus extends View {
   gitTarget() {
     const space = spaces().find((s) => s.active);
     if (!space) return null;
-    const tabs = new Set(space.tabs.map((t) => t.id));
-    const mine = panes().filter((p) => p.terminal && tabs.has(p.tab) && p.cwd);
-    const cwd = (mine.find((p) => p.focused) ?? mine[0])?.cwd ?? space.folder;
+    const cwd = workFolder(space, focused());
     return cwd ? { cwd, on: space.machine ?? null, key: `${space.machine ?? ""}:${cwd}` } : null;
   }
 
@@ -284,10 +298,13 @@ export default class ClaudeLimitsStatus extends View {
     const label = (icon, text) => h_flex().gap(6).items_center().child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
     const claude = this.claude(t);
     const gitStats = this.gitStats(t);
+    const head = this.git?.info?.head;
+    const branch = space?.branch ?? (head && head !== "(detached)" ? head : null);
     const prStatus = this.prStatus(t);
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
       .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
-      .when(Boolean(space?.branch), el => el.child(h_flex().gap(8).items_center().child(label("branch", space.branch))
+      // A mod pane (Markdown viewer…) gives the space no branch; use the one git reported for the work folder.
+      .when(Boolean(branch), el => el.child(h_flex().gap(8).items_center().child(label("branch", branch))
         .when(Boolean(gitStats), el => el.child(gitStats))
         .when(Boolean(prStatus), el => el.child(prStatus))))
       .child(h_flex().gap(6).items_center().child(div().size(6).rounded(3).bg(t.dim)).child(`${list.length} agents`)
