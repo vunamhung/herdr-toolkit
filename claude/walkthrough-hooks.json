@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$HOME/.config/herdr-app/mods/walkthrough/hooks/turn.sh\" start",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$HOME/.config/herdr-app/mods/walkthrough/hooks/turn.sh\" stop",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
