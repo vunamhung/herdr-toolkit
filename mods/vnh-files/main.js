@@ -1,237 +1,89 @@
-// A lazy file browser for the focused pane's folder, with bounded read-only previews.
-import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, run, shared, setShared, checking, nextCommand } from "herdr";
+// VNH Files panel: a lazy file browser for the focused terminal's folder.
+//
+// Tree (virtual list): git colors as in VS Code, ignored files dimmed or hidden, sizes, sort,
+// expand/collapse all, a "Recent changes" section (git-changed files edited in the last 15 min),
+// drag rows into a terminal as @path, right-click menu (vnh-files-menu).
+// Filters: search by name (/ or ⌘F; empty box = recently viewed files), changed files only.
+// Preview: syntax-highlighted text with a change ruler, diff against HEAD, images, editing
+// (⌘S saves), a clickable breadcrumb; Markdown opens rendered in a tab (eye / Space).
+// Keys while the panel has the keyboard: ↑↓ move, → open / into, ← close / up, Enter open,
+// Space quick-look (Markdown) or preview, Esc back, / search.
+import { View, div, svg, image } from "gpui-kit";
+import { v_flex, h_flex, Editor, EditorState, InputState, Input, v_virtual_list, Scrollbar, VirtualListScrollHandle } from "gpui-base";
+import { readTextFile, writeTextFile, watchFolder, theme, settings, window, run, checking, nextCommand, openOverlay, notify, spaces, focused, exec, appHome } from "herdr";
+import {
+  location, locationKey, rememberWorkFolder, PER_FOLDER, TOTAL, EXPAND_FOLDERS, CHUNK, LANG, IMAGE, MARKDOWN,
+  ext, base, parent, fmtSize, fmtCounts, ago, alpha, SORTS, sortEntries, markColor, parseStatus, parseHunks,
+  diffLines, git, listFolders, statPaths, listAllFiles, searchFiles,
+} from "./lib.js";
 
-// The folder the focused work happens in. A mod pane (the Markdown viewer, …) has none, and a
-// space's starting folder can be another project: fall back to the last terminal folder focused
-// in this space (shared "vnh.lastCwd", kept by vnh-files), then the space's first terminal, then
-// its starting folder.
-function workFolder(space, f) {
-  if (!space) return null;
-  const pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
-  if (pane?.terminal && pane.cwd) return pane.cwd;
-  if (f && f.pane === null && f.terminal && f.cwd) return f.cwd; // a layout terminal block
-  const last = (shared("vnh.lastCwd") ?? {})[space.id];
-  if (last) return last;
-  const tabs = new Set(space.tabs.map((t) => t.id)), active = space.tabs.find((t) => t.active)?.id;
-  const terms = panes().filter((p) => p.terminal && p.cwd && tabs.has(p.tab));
-  return (terms.find((p) => p.tab === active) ?? terms[0])?.cwd ?? space.folder ?? null;
-}
-
-function location() {
-  const space = spaces().find(s => s.active), f = focused();
-  const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  return { cwd: workFolder(space, f), on, space: space?.id };
-}
-
-// Remember the focused terminal's folder per space, for mod panes and the other VNH mods.
-function rememberWorkFolder() {
-  const space = spaces().find(s => s.active), f = focused();
-  if (!space || !f) return;
-  const pane = f.pane ? panes().find(p => p.pane === f.pane) : null;
-  const cwd = pane?.terminal ? pane.cwd : (f.pane === null && f.terminal ? f.cwd : null);
-  if (!cwd) return;
-  const map = shared("vnh.lastCwd") ?? {};
-  if (map[space.id] !== cwd) setShared("vnh.lastCwd", { ...map, [space.id]: cwd });
-}
-const key = () => JSON.stringify(location());
-const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
-const PER_FOLDER = 500, TOTAL = 5000, EXPAND_FOLDERS = 200;
-
-// "980 B" / "12.3 KB" / "4.0 MB".
-function fmtSize(n) {
-  if (!(n >= 0)) return "";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let i = 0;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return i === 0 ? `${n} B` : `${n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`;
-}
-
-const SORTS = [["name", "Sort by Name"], ["type", "Sort by Type"], ["mtime", "Sort by Modification Time"]];
-const ext = (name) => { const i = name.lastIndexOf("."); return i > 0 ? name.slice(i + 1).toLowerCase() : ""; };
-
-// Folders first, then by the chosen key; ties by name.
-function sortEntries(list, by) {
-  const byName = (a, b) => a.name.localeCompare(b.name);
-  return list.sort((a, b) => Number(b.dir) - Number(a.dir)
-    || (by === "type" && !a.dir ? ext(a.name).localeCompare(ext(b.name)) : 0)
-    || (by === "mtime" ? (b.mtime ?? 0) - (a.mtime ?? 0) : 0)
-    || byName(a, b));
-}
-
-// Git decorations as in VS Code: U untracked, A added, M modified, D deleted, ! conflict.
-// A folder takes the most severe status below it.
-const SEVERITY = { "!": 5, M: 4, D: 3, A: 2, U: 1 };
-function gitMark(xy) {
-  if (xy === "??") return "U";
-  if (xy.includes("U") || xy === "AA" || xy === "DD") return "!";
-  if (xy[0] === "A") return "A";
-  if (xy.includes("D")) return "D";
-  return "M";
-}
-function markColor(t, mark) {
-  return mark === "U" || mark === "A" ? t.ansi2 : mark === "M" ? t.ansi3 : mark === "D" || mark === "!" ? t.ansi1 : null;
-}
-
-// `git diff -U0` hunks as VS Code's change markers: added / modified line ranges (1-based, in the
-// working file) and "deleted" points (lines removed after line `start`).
-function parseHunks(diff) {
-  const out = [];
-  for (const line of diff.split("\n")) {
-    const m = line.match(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-    if (!m) continue;
-    const oldCount = m[1] === undefined ? 1 : Number(m[1]);
-    const start = Number(m[2]), count = m[3] === undefined ? 1 : Number(m[3]);
-    if (count === 0) out.push({ kind: "deleted", start, count: 0 });
-    else out.push({ kind: oldCount === 0 ? "added" : "modified", start, count });
-  }
-  return out;
-}
-
-// A folder's first-level contents: "3 folders · 12 files".
-function fmtCounts(dirs, files) {
-  const part = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-  return [dirs ? part(dirs, "folder", "folders") : "", files ? part(files, "file", "files") : ""].filter(Boolean).join(" · ") || "empty";
-}
-
-async function directory(path, on, sizes = false, mtimes = false) {
-  const windowsDirectory = async () => {
-    // Windows PowerShell otherwise uses the console code page; exec decodes UTF-8.
-    // Links keep directory attributes even when dangling; check their target.
-    // Other reparse points (OneDrive's folders) have no LinkType and are folders.
-    // PowerShell reads curly single quotes as quotes too, so they're doubled like '.
-    const r = await exec("powershell", ["-NoProfile", "-Command", "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & { param($p) @(Get-ChildItem -LiteralPath $p -Force -ErrorAction Stop | Where-Object Name -ne '.git' | Select-Object -First 501 | ForEach-Object { @{ name=$_.Name; dir=($_.PSIsContainer -and (-not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not $_.LinkType -or ($_.Target -and [IO.Directory]::Exists(([IO.Path]::Combine([IO.Path]::GetDirectoryName($_.FullName), $_.Target[0])))))) } }) | ConvertTo-Json -Compress } '" + path.replace(/['‘’‚‛]/g, "$&$&") + "'"], { on });
-    if (r.code !== 0) throw new Error(r.stderr || "Cannot list this folder");
-    const result = JSON.parse(r.stdout || "[]");
-    return Array.isArray(result) ? result : [result];
-  };
-  if (!on && window()?.platform === "windows") return windowsDirectory();
-  // With sizes ("1"): a file's byte size (GNU stat, else BSD stat), a folder's first-level
-  // "<folders> <files>" (not counting .git). Without, the third field stays empty.
-  // With mtimes ("1"): the 4th field is the modification time in unix seconds, else empty.
-  const script = 'root=$1; sz=$2; mt=$3; n=0; for p in "$root"/* "$root"/.[!.]* "$root"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; info=; if [ -d "$p" ]; then kind=d; if [ "$sz" = 1 ]; then d=0; f=0; for q in "$p"/* "$p"/.[!.]* "$p"/..?*; do [ -e "$q" ] || [ -L "$q" ] || continue; [ "${q##*/}" = .git ] && continue; if [ -d "$q" ]; then d=$((d+1)); else f=$((f+1)); fi; done; info="$d $f"; fi; else kind=f; if [ "$sz" = 1 ]; then info=$(stat -c %s "$p" 2>/dev/null || stat -f %z "$p" 2>/dev/null); fi; fi; m=; if [ "$mt" = 1 ]; then m=$(stat -c %Y "$p" 2>/dev/null || stat -f %m "$p" 2>/dev/null); fi; printf "%s\\0%s\\0%s\\0%s\\0" "$kind" "$name" "$info" "$m"; n=$((n+1)); [ "$n" -gt 500 ] && break; done; test -d "$root"';
-  let r;
-  try { r = await exec("sh", ["-c", script, "files", path, sizes ? "1" : "0", mtimes ? "1" : "0"], { on }); }
-  catch (e) {
-    if (on && String(e).includes("cannot start sh: program not found")) return windowsDirectory();
-    throw e;
-  }
-  if (r.code !== 0) throw new Error(r.stderr || "Cannot list this folder");
-  const fields = r.stdout.split("\0"), out = [];
-  for (let i = 0; i + 3 < fields.length; i += 4) {
-    const entry = { name: fields[i + 1], dir: fields[i] === "d" }, info = fields[i + 2];
-    if (fields[i + 3]) entry.mtime = Number(fields[i + 3]);
-    if (info && entry.dir) { const [d, f] = info.split(" ").map(Number); entry.counts = { dirs: d || 0, files: f || 0 }; }
-    else if (info) entry.size = Number(info);
-    out.push(entry);
-  }
-  return out;
-}
-
-// Lists several folders with ONE shell call (plus one `stat` call when sizes or times are shown),
-// so the work per refresh does not grow with the number of open folders.
-// Returns Map<absolute folder, entries | null (missing)>.
-const LIST_SCRIPT = 'sz=$1; shift; for root in "$@"; do printf "\\001%s\\0" "$root"; [ -d "$root" ] || { printf "\\002\\0"; continue; }; n=0; for p in "$root"/* "$root"/.[!.]* "$root"/..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; name=${p##*/}; [ "$name" = .git ] && continue; info=; if [ -d "$p" ]; then kind=d; if [ "$sz" = 1 ]; then d=0; f=0; for q in "$p"/* "$p"/.[!.]* "$p"/..?*; do [ -e "$q" ] || [ -L "$q" ] || continue; [ "${q##*/}" = .git ] && continue; if [ -d "$q" ]; then d=$((d+1)); else f=$((f+1)); fi; done; info="$d $f"; fi; else kind=f; fi; printf "%s\\0%s\\0%s\\0" "$kind" "$name" "$info"; n=$((n+1)); [ "$n" -gt 500 ] && break; done; done';
-// "size mtime path" per line; GNU or BSD stat, whichever this machine has.
-const STAT_SCRIPT = 'if stat -c %s / >/dev/null 2>&1; then stat -c "%s %Y %n" -- "$@"; else stat -f "%z %m %N" -- "$@"; fi 2>/dev/null; true';
-const CHUNK = 1500;
-
-async function listFolders(paths, on, sizes, mtimes) {
-  const out = new Map();
-  if (!paths.length) return out;
-  const oneByOne = async () => { for (const p of paths) out.set(p, await directory(p, on).catch(() => null)); return out; };
-  if (!on && window()?.platform === "windows") return oneByOne();
-  let r;
-  try { r = await exec("sh", ["-c", LIST_SCRIPT, "files", sizes ? "1" : "0", ...paths], { on }); }
-  catch (e) {
-    if (on && String(e).includes("cannot start sh: program not found")) return oneByOne();
-    throw e;
-  }
-  if (r.code !== 0) throw new Error(r.stderr || "Cannot list this folder");
-  const fields = r.stdout.split("\0");
-  let cur = null;
-  for (let i = 0; i < fields.length;) {
-    const f = fields[i];
-    if (f.startsWith("\x01")) { cur = f.slice(1); out.set(cur, []); i++; continue; }
-    if (f === "\x02") { if (cur !== null) out.set(cur, null); i++; continue; }
-    if (cur === null || i + 2 >= fields.length) break;
-    const entry = { name: fields[i + 1], dir: f === "d" }, info = fields[i + 2];
-    if (info && entry.dir) { const [d, n] = info.split(" ").map(Number); entry.counts = { dirs: d || 0, files: n || 0 }; }
-    out.get(cur)?.push(entry);
-    i += 3;
-  }
-  if (sizes || mtimes) {
-    const want = [];
-    for (const [dir, list] of out) for (const e of list ?? []) if (mtimes || !e.dir) want.push([`${dir}/${e.name}`, e]);
-    for (let k = 0; k < want.length; k += CHUNK) {
-      const part = want.slice(k, k + CHUNK);
-      const st = await exec("sh", ["-c", STAT_SCRIPT, "stat", ...part.map(([p]) => p)], { on }).catch(() => null);
-      const byPath = new Map();
-      for (const line of (st?.stdout ?? "").split("\n")) {
-        const a = line.indexOf(" "), b = line.indexOf(" ", a + 1);
-        if (a > 0 && b > a) byPath.set(line.slice(b + 1), [Number(line.slice(0, a)), Number(line.slice(a + 1, b))]);
-      }
-      for (const [p, e] of part) {
-        const v = byPath.get(p);
-        if (!v) continue;
-        if (sizes && !e.dir) e.size = v[0];
-        if (mtimes) e.mtime = v[1];
-      }
-    }
-  }
-  return out;
-}
+const ROW = 28, DIFF_ROW = 19, RECENT_MIN = 15, RECENT_MAX = 8, RECENT_VIEWED = 15;
+const key = locationKey;
 
 export default class Files extends View {
   init(_props, cx) {
     this.saved = new Map();
-    this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
+    this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {}; this.folderMarks = {};
     this.ignored = new Set(); // paths (relative to the root) that .gitignore ignores
     const flag = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : v === "1"; } catch { return d; } };
     this.showIgnored = flag("showIgnored", true);
     this.showSizes = flag("showSizes", false);
+    this.changedOnly = flag("changedOnly", false);
+    this.recentOpen = flag("recentOpen", true);
     try { const v = localStorage.getItem("sortBy"); this.sortBy = SORTS.some(([k]) => k === v) ? v : "name"; } catch { this.sortBy = "name"; }
     this.sortOpen = false;
+    this.recentChanged = [];
+    this.cursor = null; // key of the keyboard-selected row
+    this.range = { start: 0, end: 0 };
+    this.listScroll = VirtualListScrollHandle.new();
+    this.diffScroll = VirtualListScrollHandle.new();
+    this.search = { open: false, query: "", files: null, at: 0, key: null };
+    this.input = InputState.new({ placeholder: "Search files by name…" });
+    this.input.on("change", (_e, cx) => { this.search.query = this.input.value(); this.cursor = null; this.loadAllFiles(cx); cx.notify(); });
+    this.input.on("submit", (_e, cx) => { const it = this.items()[Math.max(0, this.cursorIndex())]; if (it) this.activate(it, cx); });
     if (!checking()) { rememberWorkFolder(); cx.timer.every(1000, () => rememberWorkFolder()); }
-    // Keyboard: the panel takes it when its header or tree is clicked, or when the Markdown tab
-    // hands it back ("vnh-files.focus"); Space on a Markdown preview opens it rendered.
+    // Keyboard: the panel takes it when clicked, or when the Markdown tab hands it back
+    // ("vnh-files.focus"); the menu asks for a refresh after file operations ("vnh-files.refresh").
     this.kb = cx.focus_handle();
-    if (!checking()) cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); if (c === "focus") { this.kb.focus(); cx.notify(); } } });
+    if (!checking()) cx.spawn(async (cx) => {
+      for (;;) {
+        const c = await nextCommand();
+        if (c === "focus") this.kb.focus();
+        else if (c === "refresh") this.refresh(cx);
+        cx.notify();
+      }
+    });
     this.refresh(cx);
     // Refresh every 10 s, but only while the Herdr window is active; changes seen while it is in
     // the background (agents keep writing files) are caught up once it becomes active again.
-    cx.timer.every(2000, cx => {
+    cx.timer.every(2000, (cx) => {
       if (!window()?.active) return;
       if (this.stale || Date.now() - (this.refreshedAt ?? 0) >= 10000) this.refresh(cx);
     });
   }
 
+  // ------------------------------------------------------------------ loading
+
   watch(root, cx) {
     if (this.on || this.watched === root) return;
     this.watched = root;
     const context = this.context;
-    cx.spawn(async cx => {
+    cx.spawn(async (cx) => {
       try {
         while (this.context === context) {
           await watchFolder(root);
           if (!this.current(context)) continue;
           if (window()?.active) this.refresh(cx); else this.stale = true;
         }
-      }
-      catch { if (this.context === context) this.watched = null; }
+      } catch { if (this.context === context) this.watched = null; }
     });
   }
 
-  current(context) {
-    return this.context === context && key() === context.key;
-  }
+  current(context) { return this.context === context && key() === context.key; }
 
-  loadFolder(path, context) {
-    return this.loadFolders([path], context);
-  }
+  loadFolder(path, context) { return this.loadFolders([path], context); }
 
-  // Loads folders (paths relative to the root, "" = the root) with one listing call and one
+  // Loads folders (relative to the root, "" = the root) with one listing call and one
   // `git check-ignore` call for all of them.
   async loadFolders(paths, context) {
     const { on, cwd: root } = context;
@@ -246,16 +98,15 @@ export default class Files extends View {
       if (!entries) { if (path) { this.folders.delete(path); this.entries.delete(path); } continue; } // gone
       fresh.push([path, entries]);
     }
-    // Which entries .gitignore ignores (relative to the panel's folder; folders end in "/").
-    // No -z: git only allows it with --stdin, and exec has no stdin. quotePath off keeps
-    // non-ASCII names as typed; exit 1 means none ignored, 128 not a repo.
+    // Which entries .gitignore ignores. No -z: git only allows it with --stdin, and exec has no
+    // stdin. Exit 1 means none ignored, 128 not a repo.
     const asked = fresh.flatMap(([path, entries]) => entries.slice(0, PER_FOLDER).map((e) => `${path ? path + "/" : ""}${e.name}${e.dir ? "/" : ""}`));
     for (let k = 0; k < asked.length; k += CHUNK) {
       const part = asked.slice(k, k + CHUNK);
-      const r = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "check-ignore", "--", ...part], { cwd: root, on }).catch(() => null);
+      const r = await git(root, on, ["check-ignore", "--", ...part]);
       if (!this.current(context)) return;
       const hit = new Set(r && (r.code === 0 || r.code === 1) ? r.stdout.split("\n").filter(Boolean) : []);
-      for (const p of part) { const key = p.replace(/\/$/, ""); if (hit.has(p)) this.ignored.add(key); else this.ignored.delete(key); }
+      for (const p of part) { const k2 = p.replace(/\/$/, ""); if (hit.has(p)) this.ignored.add(k2); else this.ignored.delete(k2); }
     }
     for (const [path, entries] of fresh) {
       const used = [...this.entries.entries()].filter(([p]) => p !== path).reduce((n, [, e]) => n + e.length, 0);
@@ -270,8 +121,9 @@ export default class Files extends View {
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
-      this.pending = new Set(); this.marks = {}; this.folderMarks = {}; this.ignored = new Set(); this.show(null); this.watched = null; this.error = null; this.limited = false;
-      this.loading = false;
+      this.pending = new Set(); this.marks = {}; this.folderMarks = {}; this.ignored = new Set(); this.recentChanged = [];
+      this.inRepo = false; this.show(null); this.watched = null; this.error = null; this.limited = false; this.cursor = null;
+      this.search.files = null; this.search.key = null; this.loading = false;
       if (saved?.file) this.show(saved.file, cx);
     }
     if (!cwd || this.loading) return;
@@ -280,34 +132,48 @@ export default class Files extends View {
     this.stale = false;
     this.refreshedAt = Date.now();
     this.limited = false;
-    cx.spawn(async cx => {
+    cx.spawn(async (cx) => {
       try {
         await this.loadFolders(["", ...this.folders], context);
         if (!this.current(context)) return;
         const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on }).catch(() => null);
-        const marks = {}, folderMarks = {};
+        let marks = {}, folderMarks = {}, recent = [];
         if (top?.code === 0) {
           // Writes nothing under .git (index lock, fsmonitor cookie): the folder watch would refresh again.
-          const status = await exec("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"], { cwd, on }).catch(() => null);
-          if (status?.code === 0) for (const entry of status.stdout.split("\0").filter(Boolean).slice(0, TOTAL)) {
-            const xy = entry.slice(0, 2);
-            const repo = top.stdout.trim(), mark = gitMark(xy);
-            let file = `${repo}/${entry.slice(3)}`;
-            if (file.endsWith("/")) file = file.slice(0, -1); // an untracked folder shown as one entry
-            marks[file] = mark;
-            // Every folder above it, up to the repo, shows the most severe status inside.
-            for (let dir = file.slice(0, file.lastIndexOf("/")); dir.length > repo.length; dir = dir.slice(0, dir.lastIndexOf("/"))) {
-              if ((SEVERITY[folderMarks[dir]] ?? 0) >= SEVERITY[mark]) break;
-              folderMarks[dir] = mark;
-            }
+          const status = await git(cwd, on, ["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"]);
+          if (status?.code === 0) ({ marks, folderMarks } = parseStatus(status.stdout, top.stdout.trim()));
+          // Recent changes: the changed files below the root edited in the last RECENT_MIN minutes.
+          const mine = Object.keys(marks).filter((p) => p.startsWith(cwd + "/")).slice(0, 400);
+          if (mine.length) {
+            const st = await statPaths(mine, on);
+            const since = Date.now() / 1000 - RECENT_MIN * 60;
+            recent = mine.map((p) => ({ path: p.slice(cwd.length + 1), mtime: st.get(p)?.mtime ?? 0 }))
+              .filter((x) => x.mtime >= since).sort((a, b) => b.mtime - a.mtime).slice(0, RECENT_MAX);
           }
         }
         if (!this.current(context)) return;
-        this.marks = marks; this.folderMarks = folderMarks; this.error = null; this.watch(cwd, cx);
+        this.inRepo = top?.code === 0;
+        this.marks = marks; this.folderMarks = folderMarks; this.recentChanged = recent; this.error = null; this.watch(cwd, cx);
       } catch (e) { if (this.current(context)) this.error = String(e); }
       finally { if (this.context === context) this.loading = false; cx.notify(); }
     });
   }
+
+  // Every file name for search, cached 30 s.
+  loadAllFiles(cx) {
+    if (!this.search.open || !this.root || this.search.loading) return;
+    if (this.search.files && this.search.key === this.context?.key && Date.now() - this.search.at < 30000) return;
+    const context = this.context;
+    this.search.loading = true;
+    cx.spawn(async (cx) => {
+      try {
+        const files = await listAllFiles(context.cwd, context.on, this.inRepo);
+        if (this.current(context)) Object.assign(this.search, { files, at: Date.now(), key: context.key });
+      } finally { this.search.loading = false; cx.notify(); }
+    });
+  }
+
+  // ------------------------------------------------------------------ tree actions
 
   toggle(path, cx) {
     if (this.folders.has(path)) {
@@ -315,18 +181,37 @@ export default class Files extends View {
         this.folders.delete(folder);
         this.entries.delete(folder);
       }
-    } else {
-      this.folders.add(path);
-      if (!this.entries.has(path) && !this.pending.has(path)) {
-        const context = this.context;
-        this.pending.add(path);
-        cx.spawn(async cx => {
-          try { await this.loadFolder(path, context); }
-          catch (e) { if (this.current(context)) this.error = String(e); }
-          finally { if (this.context === context) this.pending.delete(path); cx.notify(); }
-        });
-      }
-    }
+    } else this.openFolders([path], cx);
+    cx.notify();
+  }
+
+  // Opens folders (and loads the ones not loaded yet) in one batch.
+  openFolders(paths, cx, then) {
+    for (const p of paths) this.folders.add(p);
+    const missing = paths.filter((p) => !this.entries.has(p) && !this.pending.has(p));
+    if (!missing.length) { then?.(); return; }
+    const context = this.context;
+    for (const p of missing) this.pending.add(p);
+    cx.spawn(async (cx) => {
+      try { await this.loadFolders(missing, context); then?.(); }
+      catch (e) { if (this.current(context)) this.error = String(e); }
+      finally { if (this.context === context) for (const p of missing) this.pending.delete(p); cx.notify(); }
+    });
+  }
+
+  // Shows `path` (a file or folder, relative to the root) in the tree: opens its folders, closes
+  // the preview and the filters, puts the cursor on it and scrolls to it.
+  reveal(path, cx) {
+    this.show(null);
+    this.search.open = false; this.changedOnly = false;
+    const chain = [];
+    for (let p = parent(path); p; p = parent(p)) chain.unshift(p);
+    this.openFolders(chain, cx, () => {
+      this.cursor = `e:${path}`;
+      const i = this.cursorIndex();
+      if (i >= 0) this.listScroll.scroll_to_item(i, "center");
+      cx.notify();
+    });
     cx.notify();
   }
 
@@ -334,6 +219,7 @@ export default class Files extends View {
     this[name] = value;
     try { localStorage.setItem(name, value ? "1" : "0"); } catch {}
     if (name === "showSizes") this.refresh(cx); // re-list loaded folders with or without sizes
+    this.cursor = null;
     cx.notify();
   }
 
@@ -356,26 +242,25 @@ export default class Files extends View {
     cx.notify();
   }
 
-  // Opens every folder below the root, breadth first, but never an ignored one (node_modules,
-  // build output): at most EXPAND_FOLDERS folders and TOTAL entries.
+  // Opens every folder below the root, level by level (one batched listing per level), never an
+  // ignored one (node_modules, build output): at most EXPAND_FOLDERS folders and TOTAL entries.
   expandAll(cx) {
     if (this.expanding) return;
     const context = this.context;
     this.expanding = true;
     cx.notify();
-    cx.spawn(async cx => {
+    cx.spawn(async (cx) => {
       try {
-        // Level by level: each level's folders are listed with one batched call.
         let level = [""], opened = 0;
         while (level.length && opened < EXPAND_FOLDERS) {
           const missing = level.filter((p) => !this.entries.has(p));
           if (missing.length) await this.loadFolders(missing, context);
           if (!this.current(context)) return;
           const next = [];
-          for (const parent of level) {
-            for (const e of this.entries.get(parent) ?? []) {
+          for (const par of level) {
+            for (const e of this.entries.get(par) ?? []) {
               if (!e.dir || opened >= EXPAND_FOLDERS) continue;
-              const p = parent ? `${parent}/${e.name}` : e.name;
+              const p = par ? `${par}/${e.name}` : e.name;
               if (this.ignored.has(p)) continue;
               this.folders.add(p);
               next.push(p);
@@ -393,80 +278,408 @@ export default class Files extends View {
     });
   }
 
+  openSearch(cx) {
+    this.search.open = true;
+    this.cursor = null;
+    this.loadAllFiles(cx);
+    this.input.focus();
+    cx.notify();
+  }
+
+  closeSearch(cx) {
+    this.search.open = false;
+    this.search.query = "";
+    this.input.set_value("");
+    this.cursor = null;
+    this.kb.focus();
+    cx.notify();
+  }
+
+  // ------------------------------------------------------------------ recently viewed
+
+  recentFiles() {
+    try { return JSON.parse(localStorage.getItem(`recent:${this.root}`) ?? "[]"); } catch { return []; }
+  }
+
+  rememberViewed(path) {
+    if (!this.root || !path) return;
+    const next = [path, ...this.recentFiles().filter((p) => p !== path)].slice(0, RECENT_VIEWED);
+    try { localStorage.setItem(`recent:${this.root}`, JSON.stringify(next)); } catch {}
+  }
+
+  // ------------------------------------------------------------------ preview
+
   show(path, cx) {
     this.code?.release(); this.code = null; this.file = path; this.fileError = null;
-    this.fileHunks = []; this.fileLines = 0; this.lineStarts = null;
+    this.fileHunks = []; this.fileLines = 0; this.lineStarts = null; this.imageRel = null;
+    this.diff = null; this.diffMode = false; this.editing = false; this.dirty = false; this.original = null;
     if (!path || !cx) return;
+    this.rememberViewed(path);
     const context = this.context, root = this.root, on = this.on;
-    cx.spawn(async cx => {
+    if (IMAGE.test(path)) { this.showImage(path, cx); return; }
+    cx.spawn(async (cx) => {
       try {
         const text = await readTextFile(`${root}/${path}`, { on });
         if (this.file !== path || !this.current(context)) return;
         if (text === null) { this.fileError = "This file is no longer available"; return; }
         if (text.includes("\0")) { this.fileError = "Binary file · no text preview"; return; }
-        const t = theme(), ext = path.includes(".") ? path.split(".").pop() : "txt";
-        const value = text.length > 400000 ? text.slice(0, 400000) + "\n… (file truncated)" : text;
+        this.original = text;
+        this.truncated = text.length > 400000;
+        const value = this.truncated ? text.slice(0, 400000) + "\n… (file truncated)" : text;
         // Line start offsets (UTF-16, as the editor's selection uses) for jumping to a change.
         const starts = [0];
         for (let i = 0; i < value.length; i++) if (value.charCodeAt(i) === 10) starts.push(i + 1);
         this.lineStarts = starts; this.fileLines = starts.length;
-        // Changes against HEAD for the overview ruler; an untracked file is all added.
+        // Changes against HEAD for the ruler and the diff view; an untracked file is all added.
         const mark = this.marks[`${root}/${path}`];
-        if (mark === "U") this.fileHunks = [{ kind: "added", start: 1, count: starts.length }];
-        else if (mark) {
-          const d = await exec("git", ["--no-optional-locks", "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "-U0", "HEAD", "--", path], { cwd: root, on }).catch(() => null);
+        if (mark === "U") {
+          this.fileHunks = [{ kind: "added", start: 1, count: starts.length }];
+          this.diff = value.split("\n").map((l, i) => ({ kind: "add", text: l, new: i + 1 }));
+        } else if (mark) {
+          const d = await git(root, on, ["diff", "--no-color", "--no-ext-diff", "-U3", "HEAD", "--", path]);
           if (this.file !== path || !this.current(context)) return;
-          this.fileHunks = d?.code === 0 ? parseHunks(d.stdout) : [];
+          if (d?.code === 0) { this.fileHunks = parseHunks(d.stdout); this.diff = diffLines(d.stdout); }
         }
-        this.code = EditorState.new({ language: LANG[ext] ?? ext, readonly: true,
-          value,
-          font_family: settings().font_family, font_size: 12,
-          syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } });
+        this.makeEditor(value, true);
       } catch { if (this.file === path && this.current(context)) this.fileError = "Cannot preview this file (binary, too large, or unreadable)"; }
       finally { cx.notify(); }
     });
   }
 
-  rows(prefix, depth, out, t) {
-    if (out.length >= TOTAL || depth > 40) return out;
-    for (const entry of this.entries.get(prefix) ?? []) {
-      if (out.length >= TOTAL) break;
-      const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
-      const ignored = this.ignored.has(path);
-      if (ignored && !this.showIgnored) continue;
-      // A folder's own mark (an untracked folder) or the most severe one inside it.
-      const folderMark = entry.dir ? (mark ?? this.folderMarks?.[`${this.root}/${path}`]) : null;
-      const color = ignored ? t.dim : markColor(t, entry.dir ? folderMark : mark);
-      const meta = !this.showSizes ? "" : entry.dir ? (entry.counts ? fmtCounts(entry.counts.dirs, entry.counts.files) : "") : fmtSize(entry.size);
-      out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
-        // Drag a file or folder into a terminal: locally it types `@<path>` relative to this
-        // panel's folder (the focused terminal's), which Claude Code reads as a file mention;
-        // a folder ends in `/`. On another machine it stays the absolute path (Herdr copies those).
-        .drag_paths([this.on ? `${this.root}/${path}` : `@${path}${entry.dir ? "/" : ""}`], { on: this.on ?? null })
-        .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.show(path, cx))
-        .child(entry.dir ? svg(`mods/vnh-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
-        .child(svg(`mods/vnh-files/${entry.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(entry.dir && color ? color : t.muted))
-        .child(div().flex_1().min_w(0).truncate().when(Boolean(color), el => el.text_color(color)).child(entry.name))
-        .when(Boolean(meta), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(meta)))
-        .when(!entry.dir && Boolean(mark), el => el.child(div().flex_none().w(12).text_size(11).text_color(markColor(t, mark)).child(mark)))
-        .when(entry.dir && Boolean(folderMark) && !ignored, el => el.child(div().flex_none().w(12).text_size(11).text_color(markColor(t, folderMark)).child("•"))));
-      if (entry.dir && open) this.rows(path, depth + 1, out, t);
-    }
-    return out;
+  makeEditor(value, readonly) {
+    const t = theme(), e = ext(this.file ?? "") || "txt";
+    this.code?.release();
+    this.code = EditorState.new({ language: LANG[e] ?? e, readonly, value,
+      font_family: settings().font_family, font_size: 12,
+      syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } });
+    if (!readonly) this.code.on("change", (_e, cx) => { if (!this.dirty) { this.dirty = true; cx.notify(); } });
+  }
+
+  // image() only loads files under the app's folder: copy the image into data/vnh-files/preview
+  // (a fresh name per view, so an edited image reloads; the 20 newest are kept).
+  showImage(path, cx) {
+    if (this.on) { this.fileError = "Image preview works for this computer's files only"; cx.notify(); return; }
+    const context = this.context, dir = `${appHome()}/data/vnh-files/preview`;
+    const name = `${Date.now()}-${base(path).replace(/[^A-Za-z0-9._-]/g, "_")}`;
+    cx.spawn(async (cx) => {
+      const r = await exec("sh", ["-c", 'mkdir -p "$1" && cp -f "$2" "$1/$3" && cd "$1" && ls -t | tail -n +21 | while IFS= read -r f; do rm -f -- "$f"; done', "img", dir, `${this.root}/${path}`, name]).catch(() => null);
+      if (this.file !== path || !this.current(context)) return;
+      if (r?.code === 0) this.imageRel = `data/vnh-files/preview/${name}`;
+      else this.fileError = "Cannot show this image";
+      cx.notify();
+    });
+  }
+
+  startEdit(cx) {
+    if (!this.code || this.on || this.truncated || this.original == null) return;
+    this.editing = true; this.diffMode = false; this.dirty = false;
+    this.makeEditor(this.original, false);
+    this.code.focus();
+    cx.notify();
+  }
+
+  cancelEdit(cx) {
+    this.editing = false; this.dirty = false;
+    this.makeEditor(this.original, true);
+    this.kb.focus();
+    cx.notify();
+  }
+
+  // Saves only if the file is still what was loaded (writeTextFile's check); else says so.
+  save(cx) {
+    if (!this.editing || !this.code) return;
+    const path = this.file, text = this.code.value(), expected = this.original;
+    cx.spawn(async (cx) => {
+      try {
+        await writeTextFile(`${this.root}/${path}`, text, expected);
+        if (this.file !== path) return;
+        this.original = text; this.dirty = false;
+        notify({ title: "Saved", body: path, level: "success", timeout: 2000 });
+        this.refresh(cx);
+      } catch (e) {
+        notify({ title: "Not saved", body: `${path} changed on disk since it was opened. Cancel and reopen it to see the new version.`, level: "error" });
+      } finally { cx.notify(); }
+    });
   }
 
   openMarkdown() {
     if (!this.file || !this.root) return;
-    const space = spaces().find(s => s.active)?.id;
-    run("tab.new", { space, name: this.file.split("/").pop(), mod: "vnh-markdown",
+    const space = spaces().find((s) => s.active)?.id;
+    run("tab.new", { space, name: base(this.file), mod: "vnh-markdown",
       props: { path: `${this.root}/${this.file}`, on: this.on ?? null, back: focused()?.tab ?? null } });
   }
+
+  openMarkdownPath(path) {
+    const space = spaces().find((s) => s.active)?.id;
+    run("tab.new", { space, name: base(path), mod: "vnh-markdown",
+      props: { path: `${this.root}/${path}`, on: this.on ?? null, back: focused()?.tab ?? null } });
+  }
+
+  // ------------------------------------------------------------------ rows
+
+  // The rows shown now, as data: { key, kind: "entry" | "flat" | "section" | "note", path, dir, depth, ... }.
+  items() {
+    if (this.search.open) {
+      const q = this.search.query.trim();
+      if (!q) {
+        const recent = this.recentFiles();
+        return [{ key: "s:viewed", kind: "section", label: recent.length ? "Recently viewed" : "No recently viewed files", static: true },
+          ...recent.map((p) => ({ key: `f:${p}`, kind: "flat", path: p, dir: false }))];
+      }
+      if (!this.search.files) return [{ key: "n:loading", kind: "note", label: "Listing files…" }];
+      const hits = searchFiles(this.search.files, q);
+      return hits.length ? hits.map((p) => ({ key: `f:${p}`, kind: "flat", path: p, dir: false }))
+        : [{ key: "n:none", kind: "note", label: "No matching files" }];
+    }
+    if (this.changedOnly) {
+      const pre = this.root + "/";
+      const files = Object.keys(this.marks).filter((p) => p.startsWith(pre)).map((p) => p.slice(pre.length)).sort();
+      return files.length ? files.map((p) => ({ key: `f:${p}`, kind: "flat", path: p, dir: false, gone: this.marks[pre + p] === "D" }))
+        : [{ key: "n:clean", kind: "note", label: this.inRepo ? "No changes" : "Not a git repository" }];
+    }
+    const out = [];
+    if (this.recentChanged.length) {
+      out.push({ key: "s:recent", kind: "section", label: `Recent changes (${this.recentChanged.length})`, open: this.recentOpen });
+      if (this.recentOpen) for (const r of this.recentChanged) out.push({ key: `r:${r.path}`, kind: "flat", path: r.path, dir: false, mtime: r.mtime });
+    }
+    this.flatten("", 0, out);
+    return out;
+  }
+
+  flatten(prefix, depth, out) {
+    if (out.length >= TOTAL || depth > 40) return;
+    for (const entry of this.entries.get(prefix) ?? []) {
+      if (out.length >= TOTAL) break;
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (this.ignored.has(path) && !this.showIgnored) continue;
+      out.push({ key: `e:${path}`, kind: "entry", path, dir: entry.dir, depth, entry });
+      if (entry.dir && this.folders.has(path)) this.flatten(path, depth + 1, out);
+    }
+  }
+
+  cursorIndex(items = this.items()) {
+    return this.cursor ? items.findIndex((it) => it.key === this.cursor) : -1;
+  }
+
+  // Click or Enter on a row.
+  activate(it, cx) {
+    if (!it) return;
+    this.cursor = it.key;
+    if (it.kind === "section") { if (!it.static) this.setFlag("recentOpen", !this.recentOpen, cx); return; }
+    if (it.kind !== "entry" && it.kind !== "flat") return;
+    if (it.dir) this.toggle(it.path, cx);
+    else if (!it.gone) {
+      if (this.search.open) { this.search.open = false; this.kb.focus(); }
+      this.show(it.path, cx);
+    }
+    cx.notify();
+  }
+
+  menu(it, cx) {
+    if (!it || (it.kind !== "entry" && it.kind !== "flat") || !this.root) return;
+    this.cursor = it.key;
+    const space = spaces().find((s) => s.active)?.id ?? null;
+    openOverlay({ mod: "vnh-files-menu", kind: "popup", width: 260, height: 420,
+      props: { root: this.root, path: it.path, dir: Boolean(it.dir), on: this.on ?? null, space, gone: Boolean(it.gone) } });
+    cx.notify();
+  }
+
+  // Rendered inside the virtual list: no handlers here (they throw); see on_item_click.
+  row(it, i, t) {
+    const sel = it.key === this.cursor;
+    const base_ = h_flex().id(`row-${it.key}`).w_full().h(ROW).flex_none().pr(8).gap(7).items_center().rounded(7).cursor_pointer()
+      .when(sel, (el) => el.bg(alpha(t.accent, 0.18))).hover((s) => s.bg(t.hover));
+    if (it.kind === "note") return base_.id(`row-${it.key}`).pl(12).text_size(12).text_color(t.dim).child(it.label);
+    if (it.kind === "section") {
+      return base_.pl(8).text_size(11).text_color(t.dim).font_semibold()
+        .when(!it.static, (el) => el.child(svg(`mods/vnh-files/chevron-${it.open ? "down" : "right"}.svg`).size(12).flex_none()))
+        .child(svg(`mods/vnh-files/${it.key === "s:recent" ? "clock" : "search"}.svg`).size(12).flex_none())
+        .child(div().child(it.label.toUpperCase()));
+    }
+    const abs = `${this.root}/${it.path}`, mark = this.marks[abs];
+    const ignored = this.ignored.has(it.path);
+    const folderMark = it.dir ? (mark ?? this.folderMarks?.[abs]) : null;
+    const color = ignored ? t.dim : markColor(t, it.dir ? folderMark : mark);
+    const name = it.kind === "flat" ? base(it.path) : it.entry.name;
+    const meta = it.kind === "flat"
+      ? (it.mtime ? ago(it.mtime) : "")
+      : !this.showSizes ? "" : it.dir ? (it.entry.counts ? fmtCounts(it.entry.counts.dirs, it.entry.counts.files) : "") : fmtSize(it.entry.size);
+    return base_.pl(it.kind === "entry" ? 8 + it.depth * 18 : 8)
+      // Drag into a terminal: locally `@<path>` relative to this panel's folder (Claude Code reads
+      // it as a file mention; a folder ends in `/`); on another machine the absolute path.
+      .drag_paths([this.on ? abs : `@${it.path}${it.dir ? "/" : ""}`], { on: this.on ?? null })
+      .child(it.kind === "entry" && it.dir ? svg(`mods/vnh-files/chevron-${this.folders.has(it.path) ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
+      .child(svg(`mods/vnh-files/${it.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(it.dir && color ? color : t.muted))
+      .child(div().flex_none().max_w("70%").truncate().when(Boolean(color), (el) => el.text_color(color)).when(Boolean(it.gone), (el) => el.line_through()).child(name))
+      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(it.kind === "flat" ? parent(it.path) : ""))
+      .when(Boolean(meta), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(meta)))
+      .when(!it.dir && Boolean(mark), (el) => el.child(div().flex_none().w(12).text_size(11).text_color(markColor(t, mark)).child(mark)))
+      .when(it.dir && Boolean(folderMark) && !ignored, (el) => el.child(div().flex_none().w(12).text_size(11).text_color(markColor(t, folderMark)).child("•")));
+  }
+
+  // ------------------------------------------------------------------ keyboard
+
+  moveCursor(items, i, cx) {
+    if (!items.length) return;
+    const n = Math.max(0, Math.min(items.length - 1, i));
+    this.cursor = items[n].key;
+    if (n < this.range.start + 1 || n >= this.range.end - 1) this.listScroll.scroll_to_item(n, "center");
+    cx.notify();
+  }
+
+  onKey(e, cx) {
+    const m = e.modifiers ?? {}, k = e.key;
+    // ⌘S saves while editing; ⌘F opens search.
+    if (m.platform && k === "s") { if (this.editing) { cx.stop_propagation(); this.save(cx); } return; }
+    if (m.platform && k === "f" && !this.file) { cx.stop_propagation(); this.openSearch(cx); return; }
+    if (m.control || m.alt || m.platform) return;
+    if (this.file) {
+      if (this.editing) { if (k === "escape" && !this.dirty) { cx.stop_propagation(); this.cancelEdit(cx); } return; }
+      if (k === "space" && !m.shift && MARKDOWN.test(this.file)) { cx.stop_propagation(); this.openMarkdown(); }
+      else if (k === "escape") { cx.stop_propagation(); const p = this.file; this.show(null); this.cursor = this.cursor ?? `e:${p}`; this.kb.focus(); cx.notify(); }
+      return;
+    }
+    const items = this.items(), i = this.cursorIndex(items), it = items[i];
+    if (k === "escape") {
+      cx.stop_propagation();
+      if (this.search.open) this.closeSearch(cx);
+      else if (this.changedOnly) this.setFlag("changedOnly", false, cx);
+      return;
+    }
+    if (k === "down") { cx.stop_propagation(); this.moveCursor(items, i + 1, cx); return; }
+    if (k === "up") { cx.stop_propagation(); this.moveCursor(items, i < 0 ? 0 : i - 1, cx); return; }
+    if (this.search.open) return; // the box takes the other keys (Enter submits it)
+    if (e.key_char === "/") { cx.stop_propagation(); this.openSearch(cx); return; }
+    if (!it) return;
+    if (k === "enter") { cx.stop_propagation(); this.activate(it, cx); return; }
+    if (k === "space") {
+      cx.stop_propagation();
+      if (!it.dir && MARKDOWN.test(it.path)) this.openMarkdownPath(it.path); else this.activate(it, cx);
+      return;
+    }
+    if (k === "right" && it.kind === "entry" && it.dir) {
+      cx.stop_propagation();
+      if (!this.folders.has(it.path)) this.toggle(it.path, cx); else this.moveCursor(items, i + 1, cx);
+      return;
+    }
+    if (k === "left") {
+      cx.stop_propagation();
+      if (it.kind === "entry" && it.dir && this.folders.has(it.path)) this.toggle(it.path, cx);
+      else if (it.kind === "entry" && parent(it.path)) { this.cursor = `e:${parent(it.path)}`; this.moveCursor(items, this.cursorIndex(items), cx); }
+    }
+  }
+
+  // ------------------------------------------------------------------ render
 
   // A 24 px icon button in the header; `on` highlights a toggle that is active.
   tool(t, id, icon, label, on, action) {
     return div().id(id).size(24).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
-      .text_color(on ? t.foreground : t.muted).when(on, el => el.bg(t.selected)).hover(s => s.bg(t.hover).text_color(t.foreground))
+      .text_color(on ? t.foreground : t.muted).when(on, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover).text_color(t.foreground))
       .tooltip(label).on_click((_e, cx) => action(cx)).child(svg(`mods/vnh-files/${icon}.svg`).size(14));
+  }
+
+  // The preview's path as a breadcrumb: a folder opens it in the tree.
+  crumbs(t) {
+    const parts = this.file.split("/"), name = parts.pop();
+    const dirs = h_flex().flex_shrink(1).min_w(0).gap(2).items_center().justify_end().overflow_hidden();
+    parts.forEach((part, i) => {
+      const path = parts.slice(0, i + 1).join("/");
+      dirs.child(div().id(`crumb-${path}`).flex_shrink(1).min_w(0).max_w(140).truncate().cursor_pointer().rounded(4).px(2)
+        .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(`Show ${path} in the tree`)
+        .on_click((_e, cx) => this.reveal(path, cx)).child(part))
+        .child(div().flex_none().child("/"));
+    });
+    // The file name always shows; the folders before it shrink first.
+    return h_flex().flex_1().min_w(0).gap(2).items_center().justify_end().overflow_hidden().text_size(12).text_color(t.dim)
+      .child(dirs)
+      .child(div().flex_none().max_w("70%").truncate().text_color(t.foreground).child(name));
+  }
+
+  header(t) {
+    const md = Boolean(this.file) && MARKDOWN.test(this.file);
+    const canDiff = Boolean(this.file) && Boolean(this.diff?.length) && !this.editing;
+    const canEdit = Boolean(this.code) && !this.on && !this.truncated && !this.diffMode;
+    return h_flex().id("files-header").on_mouse_down("left", () => this.kb.focus()).h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
+      .when(Boolean(this.file), (el) => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted)
+        .on_click((_e, cx) => { if (this.editing && this.dirty) return; this.show(null); this.kb.focus(); cx.notify(); }).child("←")))
+      .child(div().flex_none().max_w(200).truncate().font_semibold().child(this.root?.split(/[\\/]/).pop() || "Files"))
+      .when(Boolean(this.file), (el) => el.child(this.crumbs(t)))
+      .when(!this.file, (el) => el.child(div().flex_1()))
+      .when(this.editing, (el) => el
+        .child(div().flex_none().text_size(11).text_color(this.dirty ? t.ansi3 : t.dim).child(this.dirty ? "● unsaved" : "editing"))
+        .child(this.tool(t, "files-save", "check", "Save (⌘S)", this.dirty, (cx) => this.save(cx)))
+        .child(this.tool(t, "files-cancel", "x", this.dirty ? "Discard changes" : "Stop editing (Esc)", false, (cx) => this.cancelEdit(cx))))
+      .when(!this.editing && canDiff, (el) => el.child(this.tool(t, "files-diff", "git-compare", this.diffMode ? "Show the file" : "Show changes against HEAD", this.diffMode,
+        (cx) => { this.diffMode = !this.diffMode; cx.notify(); })))
+      .when(!this.editing && canEdit, (el) => el.child(this.tool(t, "files-edit", "square-pen", "Edit", false, (cx) => this.startEdit(cx))))
+      .when(md && !this.editing, (el) => el.child(this.tool(t, "files-md-open", "eye", "Open rendered Markdown in a new tab (Space)", false, () => this.openMarkdown())))
+      .when(!this.file, (el) => el.child(h_flex().flex_none().gap(2).items_center()
+        .when(!this.panelHover && !this.sortOpen && !this.search.open && !this.changedOnly, (el) => el.invisible())
+        .child(this.tool(t, "files-search", "search", "Search files by name (/ or ⌘F)", this.search.open, (cx) => (this.search.open ? this.closeSearch(cx) : this.openSearch(cx))))
+        .child(this.tool(t, "files-changed", "git-compare", this.changedOnly ? "Show all files" : "Show changed files only", this.changedOnly, (cx) => this.setFlag("changedOnly", !this.changedOnly, cx)))
+        .child(this.tool(t, "files-sort", "sort", "Sort", this.sortOpen, (cx) => {
+          // The click that closed the menu (outside it) is this same press: don't reopen.
+          if (!this.sortOpen && Date.now() - (this.sortClosedAt ?? 0) < 250) return;
+          this.sortOpen = !this.sortOpen; cx.notify();
+        }))
+        .child(this.tool(t, "files-ignored", this.showIgnored ? "eye" : "eye-off", this.showIgnored ? "Hide ignored files" : "Show ignored files", !this.showIgnored, (cx) => this.setFlag("showIgnored", !this.showIgnored, cx)))
+        .child(this.tool(t, "files-sizes", "ruler", this.showSizes ? "Hide sizes" : "Show sizes", this.showSizes, (cx) => this.setFlag("showSizes", !this.showSizes, cx)))
+        .child(this.tool(t, "files-expand", "expand-all", this.expanding ? "Expanding…" : "Expand all", this.expanding, (cx) => this.expandAll(cx)))
+        .child(this.tool(t, "files-collapse", "collapse-all", "Collapse all", false, (cx) => this.collapseAll(cx)))));
+  }
+
+  list(t) {
+    const items = this.items();
+    const note = Boolean(this.error) || (!this.search.open && !this.changedOnly && !this.entries.get("")?.length)
+      ? (this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder")) : null;
+    return v_flex().flex_1().min_h(0)
+      .when(this.search.open, (el) => el.child(h_flex().h(34).flex_none().mx(6).mt(6).px(8).gap(6).items_center().rounded(7).border_1().border_color(t.accent).bg(t.background)
+        .child(svg("mods/vnh-files/search.svg").size(13).flex_none().text_color(t.dim))
+        .child(Input.new(this.input).flex_1().h_full().text_size(12.5).text_color(t.foreground))
+        .child(div().flex_none().text_size(11).text_color(t.dim).child(this.search.loading ? "…" : this.search.files ? `${this.search.files.length.toLocaleString()} files` : ""))))
+      .when(this.changedOnly && !this.search.open, (el) => el.child(h_flex().h(26).flex_none().px(14).gap(6).items_center().text_size(11).text_color(t.dim)
+        .child(svg("mods/vnh-files/git-compare.svg").size(12)).child(div().child("CHANGED FILES")).child(div().flex_1())
+        .child(div().id("files-changed-off").cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => this.setFlag("changedOnly", false, cx)).child("show all"))))
+      .child(div().id("files-tree").relative().flex_1().min_h(0).p(6).on_mouse_down("left", () => this.kb.focus())
+        .when(Boolean(note), (el) => el.child(div().p(8).text_size(12).text_color(t.dim).child(note)))
+        .when(!note, (el) => el
+          .child(v_virtual_list("files-rows", items.length, ROW, (i) => items[i].key, (range) => {
+            this.range = range;
+            return items.slice(range.start, range.end).map((it, j) => this.row(it, range.start + j, t));
+          })
+          // Handlers can't live in the row renderer (rows are rebuilt every frame): one for the list.
+          .on_item_click((k, cx) => this.activate(items.find((it) => it.key === k), cx))
+          .on_item_secondary_click((k, _e, cx) => this.menu(items.find((it) => it.key === k), cx))
+          .track_scroll(this.listScroll).size_full())
+          .child(Scrollbar.vertical("files-rows").absolute().inset_0())))
+      .when(this.limited && !this.search.open && !this.changedOnly, (el) => el.child(div().px(14).py(6).flex_none().text_size(11).text_color(t.dim)
+        .child(`File list limited to ${PER_FOLDER.toLocaleString()} entries per folder and ${TOTAL.toLocaleString()} total`)));
+  }
+
+  diffView(t) {
+    const lines = this.diff ?? [];
+    const bg = { add: alpha(t.ansi2, 0.16), del: alpha(t.ansi1, 0.16), hunk: alpha(t.ansi4, 0.12) };
+    const fg = { add: t.ansi2, del: t.ansi1, hunk: t.ansi4 };
+    const num = (n) => div().w(38).flex_none().text_right().pr(6).text_color(t.dim).child(n === undefined ? "" : String(n));
+    return div().relative().flex_1().min_h(0).font_family(settings().font_family).text_size(12)
+      .child(v_virtual_list("files-diff", lines.length, DIFF_ROW, (i) => String(i), (range) =>
+        lines.slice(range.start, range.end).map((l, j) => h_flex().id(`diff-${range.start + j}`).w_full().h(DIFF_ROW).flex_none().items_center().when(Boolean(bg[l.kind]), (el) => el.bg(bg[l.kind]))
+          .when(l.kind !== "hunk", (el) => el.child(num(l.old)).child(num(l.new)))
+          .child(div().w(14).flex_none().text_color(fg[l.kind] ?? t.dim).child(l.kind === "add" ? "+" : l.kind === "del" ? "−" : l.kind === "hunk" ? "" : " "))
+          .child(div().flex_1().min_w(0).truncate().text_color(l.kind === "hunk" ? fg.hunk : t.foreground).child(l.text || " "))))
+        .track_scroll(this.diffScroll).size_full())
+      .child(Scrollbar.vertical("files-diff").absolute().inset_0());
+  }
+
+  preview(t) {
+    if (this.imageRel) {
+      return div().id("files-image").flex_1().min_h(0).p(12).flex().items_center().justify_center().overflow_hidden()
+        .child(image(this.imageRel).max_w_full().max_h_full());
+    }
+    if (!this.code) return div().p(12).text_color(t.dim).child(this.fileError || "Loading file…");
+    if (this.diffMode) return this.diffView(t);
+    return h_flex().flex_1().min_h(0).child(Editor.new(this.code).flex_1().min_w(0).min_h(0))
+      .when(this.fileHunks.length > 0 && !this.editing, (el) => el.child(this.ruler(t)));
   }
 
   render(cx) {
@@ -474,37 +687,13 @@ export default class Files extends View {
     const t = theme();
     // The header's buttons show only while the pointer is over the panel (space kept, nothing shifts).
     return v_flex().id("files").track_focus(this.kb).relative().size_full().min_h(0).rounded(10).overflow_hidden()
-      .on_key_down((e, cx) => {
-        const m = e.modifiers ?? {};
-        if (e.key !== "space" || m.control || m.alt || m.platform || m.shift) return;
-        if (this.file && /\.(md|markdown|mdx)$/i.test(this.file)) { cx.stop_propagation(); this.openMarkdown(); }
-      })
-      .on_hover((hovered, cx) => { if (this.panelHover !== hovered) { this.panelHover = hovered; cx.notify(); } }).bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .child(h_flex().id("files-header").on_mouse_down("left", () => this.kb.focus()).h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-        .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
-        // VNH: the folder's name is the title (no "Files"); a previewed file's path stays on the right.
-        .child(div().flex_none().max_w(200).truncate().font_semibold().child(this.root?.split(/[\\/]/).pop() || "Files"))
-        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? ""))
-        // A Markdown file: the eye opens it rendered in a new tab (vnh-markdown).
-        .when(Boolean(this.file) && /\.(md|markdown|mdx)$/i.test(this.file), el => el.child(
-          this.tool(t, "files-md-open", "eye", "Open rendered Markdown in a new tab", false, () => this.openMarkdown())))
-        .when(!this.file, el => el.child(h_flex().flex_none().gap(2).items_center().when(!this.panelHover && !this.sortOpen, el => el.invisible())
-          .child(this.tool(t, "files-sort", "sort", "Sort", this.sortOpen, (cx) => {
-            // The click that closed the menu (outside it) is this same press: don't reopen.
-            if (!this.sortOpen && Date.now() - (this.sortClosedAt ?? 0) < 250) return;
-            this.sortOpen = !this.sortOpen; cx.notify();
-          }))
-          .child(this.tool(t, "files-ignored", this.showIgnored ? "eye" : "eye-off", this.showIgnored ? "Hide ignored files" : "Show ignored files", !this.showIgnored, (cx) => this.setFlag("showIgnored", !this.showIgnored, cx)))
-          .child(this.tool(t, "files-sizes", "ruler", this.showSizes ? "Hide sizes" : "Show sizes", this.showSizes, (cx) => this.setFlag("showSizes", !this.showSizes, cx)))
-          .child(this.tool(t, "files-expand", "expand-all", this.expanding ? "Expanding…" : "Expand all", this.expanding, (cx) => this.expandAll(cx)))
-          .child(this.tool(t, "files-collapse", "collapse-all", "Collapse all", false, (cx) => this.collapseAll(cx))))))
-      .when(!this.file, el => el.child(v_flex().id("files-tree").on_mouse_down("left", () => this.kb.focus()).flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
-        .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : "No folder"))))
-        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))
-      .when(Boolean(this.file), el => el.child(this.code
-        ? h_flex().flex_1().min_h(0).child(Editor.new(this.code).flex_1().min_w(0).min_h(0)).when(this.fileHunks.length > 0, el => el.child(this.ruler(t)))
-        : div().p(12).text_color(t.dim).child(this.fileError || "Loading file…")))
-      .when(this.sortOpen && !this.file, el => el.child(this.sortMenu(t)));
+      .on_key_down((e, cx) => this.onKey(e, cx))
+      .on_hover((hovered, cx) => { if (this.panelHover !== hovered) { this.panelHover = hovered; cx.notify(); } })
+      .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+      .child(this.header(t))
+      .when(!this.file, (el) => el.child(this.list(t)))
+      .when(Boolean(this.file), (el) => el.child(this.preview(t)))
+      .when(this.sortOpen && !this.file, (el) => el.child(this.sortMenu(t)));
   }
 
   // VS Code style overview ruler beside the preview: where the file's uncommitted changes are,
@@ -517,7 +706,7 @@ export default class Files extends View {
       .children(this.fileHunks.slice(0, 400).map((h, i) => {
         const top = (h.kind === "deleted" ? h.start : h.start - 1) / total;
         return div().id(`files-ruler-${i}`).absolute().left(2).w(6).top(pct(top)).min_h(3).rounded(1)
-          .when(h.count > 0, el => el.h(pct(h.count / total))).when(h.count === 0, el => el.h(3))
+          .when(h.count > 0, (el) => el.h(pct(h.count / total))).when(h.count === 0, (el) => el.h(3))
           .bg(color[h.kind]).cursor_pointer()
           .tooltip(h.kind === "deleted" ? `Removed after line ${h.start}` : `${h.kind === "added" ? "Added" : "Modified"} line${h.count > 1 ? `s ${h.start}–${h.start + h.count - 1}` : ` ${h.start}`}`)
           .on_click((_e, cx) => this.jumpTo(h.kind === "deleted" ? h.start + 1 : h.start, cx));
@@ -538,7 +727,7 @@ export default class Files extends View {
       .bg(t.surface).border_1().border_color(t.border).text_size(13)
       .on_mouse_down_out((_e, cx) => { if (this.sortOpen) { this.sortOpen = false; this.sortClosedAt = Date.now(); cx.notify(); } })
       .children(SORTS.map(([by, label]) => h_flex().id(`files-sort-${by}`).h(28).px(8).gap(8).items_center().rounded(6).cursor_pointer()
-        .hover(s => s.bg(t.hover)).on_click((_e, cx) => this.setSort(by, cx))
+        .hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.setSort(by, cx))
         .child(by === this.sortBy ? svg("mods/vnh-files/check.svg").size(14).flex_none() : div().w(14).flex_none())
         .child(div().child(label))));
   }
