@@ -264,12 +264,14 @@ export default class Files extends View {
     if (key() !== this.context?.key) this.refresh(cx);
     const t = theme();
     return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
+      // The header's buttons show only while the pointer is over the header (space kept, nothing shifts).
+      .child(h_flex().id("files-header").h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
+        .on_hover((hovered, cx) => { if (this.headerHover !== hovered) { this.headerHover = hovered; cx.notify(); } })
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         // VNH: the folder's name is the title (no "Files"); a previewed file's path stays on the right.
         .child(div().flex_none().max_w(200).truncate().font_semibold().child(this.root?.split(/[\\/]/).pop() || "Files"))
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? ""))
-        .when(!this.file, el => el.child(h_flex().flex_none().gap(2).items_center()
+        .when(!this.file, el => el.child(h_flex().flex_none().gap(2).items_center().when(!this.headerHover, el => el.invisible())
           .child(this.tool(t, "files-ignored", this.showIgnored ? "eye" : "eye-off", this.showIgnored ? "Hide ignored files" : "Show ignored files", !this.showIgnored, (cx) => this.setFlag("showIgnored", !this.showIgnored, cx)))
           .child(this.tool(t, "files-sizes", "ruler", this.showSizes ? "Hide sizes" : "Show sizes", this.showSizes, (cx) => this.setFlag("showSizes", !this.showSizes, cx)))
           .child(this.tool(t, "files-expand", "expand-all", this.expanding ? "Expanding…" : "Expand all", this.expanding, (cx) => this.expandAll(cx)))
