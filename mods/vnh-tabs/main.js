@@ -36,7 +36,67 @@ export default class Tabs extends View {
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
     try { this.focus = JSON.parse(localStorage.getItem("timelineFocus") ?? "null"); } catch { this.focus = null; }
     // keys.json: "vnh-tabs.timeline" (cmd-shift-b) toggles the Timeline the same way as its button.
-    cx?.spawn(async (cx) => { for (;;) { if ((await nextCommand()) === "timeline") this.toggleTimeline(); cx.notify(); } });
+    // "vnh-tabs.insights": the Insights toolbar button; "vnh-tabs.insights-close": Esc in the dashboard.
+    cx?.spawn(async (cx) => {
+      for (;;) {
+        const c = String(await nextCommand()).replace(/^vnh-tabs\./, "");
+        if (c === "timeline") this.toggleTimeline();
+        else if (c === "insights") this.toggleInsights();
+        else if (c === "insights-close") this.closeInsights();
+        cx.notify();
+      }
+    });
+  }
+
+  // VNH: the Insights tab takes the whole work area. Opening it hides the right panel and the
+  // Timeline and remembers what was open (this.insights); closing it (button again, Esc, or its
+  // tab's ×) brings that back and returns to the tab you came from.
+  insightsPane() {
+    const space = spaces().find((s) => s.active), ids = new Set(space?.tabs.map((t) => t.id) ?? []);
+    return { space, pane: panes().find((p) => p.mod === "insights" && ids.has(p.tab)) };
+  }
+
+  toggleInsights() {
+    const { space, pane } = this.insightsPane(), current = space?.tabs.find((t) => t.active)?.id;
+    if (pane && pane.tab === current) return this.closeInsights();
+    const root = layout(), panel = find(root, "panel"), body = find(root, "panel-body"), timeline = find(root, "timeline");
+    if (!this.insights) {
+      this.insights = { space: space?.id, back: current, panel: panel && !panel.hidden ? body?.active ?? null : null,
+        timeline: Boolean(timeline && !timeline.hidden), focus: this.focus };
+    }
+    if (timeline && !timeline.hidden) {
+      run("layout.hide", { id: "timeline" });
+      this.timelineShown = false;
+      this.timelineWant = { shown: false, until: Date.now() + 1000 };
+      this.focus = null; // kept in this.insights.focus; the Timeline isn't closing for good
+    }
+    if (panel && !panel.hidden) run("layout.hide", { id: "panel" });
+    if (pane) run("pane.focus", { pane: pane.pane });
+    else run("tab.new", { name: "Insights", mod: "insights" });
+  }
+
+  closeInsights() {
+    const { pane } = this.insightsPane();
+    if (pane) run("tab.close", { id: pane.tab, confirmed: true });
+    this.restoreInsights(true);
+  }
+
+  restoreInsights(goBack) {
+    const was = this.insights;
+    if (!was) return;
+    this.insights = null;
+    const space = spaces().find((s) => s.active);
+    if (goBack && was.back && space?.id === was.space && space.tabs.some((t) => t.id === was.back)) run("tab.select", { id: was.back });
+    if (was.timeline) {
+      this.focus = was.focus;
+      this.saveFocus();
+      run("layout.show", { id: "timeline" });
+      this.timelineShown = true;
+      this.timelineWant = { shown: true, until: Date.now() + 1000 };
+    } else if (was.panel) {
+      run("layout.select", { stack: "panel-body", child: was.panel });
+      run("layout.show", { id: "panel" });
+    }
   }
 
   // The Timeline button and cmd-shift-b: the panel and the Timeline change in the same
@@ -121,7 +181,7 @@ export default class Tabs extends View {
   // (closed if it never had one), and opening or closing it records it.
   syncPanel(space, panel, body, enabled) {
     // While the Timeline hides the panel (syncTimeline), that isn't the space's choice.
-    if (!space || !panel || this.focus) return;
+    if (!space || !panel || this.focus || this.insights) return;
     const now = panel.hidden ? null : body?.active ?? null;
     if (space.id !== this.space) {
       const first = this.space === undefined;
@@ -190,6 +250,7 @@ export default class Tabs extends View {
     const panel = find(root, "panel"), body = find(root, "panel-body");
     // VNH: the git-graph panel shows when the layout's panel holds it (Herdr's panel settings don't know it).
     const enabled = [...(shared("workspace.panels") ?? ["files", "changes"]), ...(body?.children?.some(c => c.id === "graph") ? ["graph"] : [])];
+    if (this.insights && !panes().some((p) => p.mod === "insights")) this.restoreInsights(false);
     this.syncTimeline(find(root, "timeline"), panel);
     this.syncPanel(space, panel, body, enabled);
     const panelButton = (id, label, icon) => {
