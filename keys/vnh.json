@@ -10,6 +10,7 @@
     "ctrl-shift-r": "mod.open:run",
     "ctrl-shift-q": "overlay.close",
     "ctrl-shift-u": "mod.open:portal",
-    "cmd-shift-k": "mod.open:walkthrough"
+    "cmd-shift-k": "mod.open:walkthrough",
+    "cmd-alt-,": "mod.open:better-config"
   }
 }
