@@ -78,6 +78,30 @@ function ciState(checks) {
   return pending ? "pending" : "pass";
 }
 
+// CI wall-clock time over CheckRuns: earliest start to latest finish (finish null while any runs).
+// Unset GitHub times come as 0001-01-01; StatusContexts carry no times and are skipped.
+function ciTiming(checks) {
+  const t = (v) => { const ms = v ? Date.parse(v) : NaN; return ms > Date.UTC(2000, 0, 1) ? ms : null; };
+  let start = null, end = null, running = false;
+  for (const c of Array.isArray(checks) ? checks : []) {
+    if (c.__typename === "StatusContext" || c.state) continue;
+    const s = t(c.startedAt), e = t(c.completedAt);
+    if (s != null) start = start == null ? s : Math.min(start, s);
+    if (String(c.status ?? "").toUpperCase() !== "COMPLETED") running = true;
+    else if (e != null) end = end == null ? e : Math.max(end, e);
+  }
+  if (start == null) return null;
+  return { start, end: running ? null : end };
+}
+
+// "45s" / "4m12s" / "1h05m".
+function fmtDuration(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+}
+
 // Clone of Herdr's workspace-status with Claude Code's model and usage limits next to the agents count.
 export default class ClaudeLimitsStatus extends View {
   init(_props, cx) {
@@ -108,6 +132,7 @@ export default class ClaudeLimitsStatus extends View {
   }
 
   refreshGit(cx) {
+    if (this.pr?.pr?.ci === "pending" && Date.now() - (this.tickAt ?? 0) >= 10000) { this.tickAt = Date.now(); cx.notify(); }
     const target = this.gitTarget();
     const moved = (target?.key ?? null) !== (this.git?.key ?? null);
     if (this.gitBusy || (!moved && Date.now() - this.gitAt < 6000)) return;
@@ -143,7 +168,8 @@ export default class ClaudeLimitsStatus extends View {
         if (r && r.code === 0) {
           try {
             const j = JSON.parse(r.stdout);
-            pr = { number: j.number, url: j.url, state: j.state, draft: j.isDraft, review: j.reviewDecision, ci: ciState(j.statusCheckRollup) };
+            pr = { number: j.number, url: j.url, state: j.state, draft: j.isDraft, review: j.reviewDecision,
+              ci: ciState(j.statusCheckRollup), ciTime: ciTiming(j.statusCheckRollup) };
           } catch { pr = null; }
         }
         const next = { key, pr };
@@ -166,6 +192,8 @@ export default class ClaudeLimitsStatus extends View {
     if (pr.ci === "pass") row.child(div().text_color(t.ansi2).child("✓"));
     else if (pr.ci === "fail") row.child(div().text_color(t.blocked).child("✗"));
     else if (pr.ci === "pending") row.child(div().text_color(t.ansi3).child("●"));
+    // How long CI took, or has been running so far (kept fresh by the git timer).
+    if (pr.ci && pr.ciTime) row.child(div().child(fmtDuration((pr.ciTime.end ?? Date.now()) - pr.ciTime.start)));
     if (pr.draft) row.child(div().child("draft"));
     else if (pr.state === "MERGED") row.child(div().child("merged"));
     else if (pr.state === "CLOSED") row.child(div().child("closed"));
