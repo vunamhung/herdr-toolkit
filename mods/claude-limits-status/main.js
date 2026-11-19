@@ -39,7 +39,8 @@ function parseGit(out) {
   if (!sections.status) return null;
   const info = { staged: 0, modified: 0, untracked: 0, conflicts: 0, ahead: 0, behind: 0, added: 0, removed: 0, stash: 0, state: [] };
   for (const l of sections.status) {
-    if (l.startsWith("# branch.ab ")) {
+    if (l.startsWith("# branch.head ")) info.head = l.slice(14).trim();
+    else if (l.startsWith("# branch.ab ")) {
       const m = l.match(/\+(\d+) -(\d+)/);
       if (m) { info.ahead = +m[1]; info.behind = +m[2]; }
     } else if (l.startsWith("? ")) info.untracked++;
@@ -59,6 +60,24 @@ function parseGit(out) {
   return info;
 }
 
+// Overall CI from gh's statusCheckRollup: "fail" > "pending" > "pass"; null with no checks.
+function ciState(checks) {
+  if (!Array.isArray(checks) || checks.length === 0) return null;
+  let pending = false;
+  for (const c of checks) {
+    if (c.__typename === "StatusContext" || c.state) {
+      const st = String(c.state ?? "").toUpperCase();
+      if (st === "FAILURE" || st === "ERROR") return "fail";
+      if (st === "PENDING" || st === "EXPECTED" || !st) pending = true;
+    } else {
+      if (String(c.status ?? "").toUpperCase() !== "COMPLETED") { pending = true; continue; }
+      const co = String(c.conclusion ?? "").toUpperCase();
+      if (["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(co)) return "fail";
+    }
+  }
+  return pending ? "pending" : "pass";
+}
+
 // Clone of Herdr's workspace-status with Claude Code's model and usage limits next to the agents count.
 export default class ClaudeLimitsStatus extends View {
   init(_props, cx) {
@@ -66,6 +85,9 @@ export default class ClaudeLimitsStatus extends View {
     this.git = null; // { key, info }
     this.gitAt = 0;
     this.gitBusy = false;
+    this.pr = null; // { key, pr }  key: machine:cwd:branch
+    this.prAt = 0;
+    this.prBusy = false;
     if (checking()) return;
     this.refresh(cx);
     // Gentle poll: the file changes at most every few seconds, and timers keep running while hidden.
@@ -97,11 +119,59 @@ export default class ClaudeLimitsStatus extends View {
         const info = r && r.code === 0 ? parseGit(r.stdout) : null;
         const next = { key: target.key, info };
         if (JSON.stringify(next) !== JSON.stringify(this.git)) { this.git = next; cx.notify(); }
+        this.refreshPr(cx, target, info?.head);
       } finally {
         this.gitAt = Date.now();
         this.gitBusy = false;
       }
     });
+  }
+
+  // The branch's pull request via `gh`, at most once a minute per branch (it goes to the network).
+  refreshPr(cx, target, head) {
+    const key = head && head !== "(detached)" ? `${target.key}:${head}` : null;
+    if (!key) { if (this.pr) { this.pr = null; cx.notify(); } return; }
+    const moved = key !== this.pr?.key;
+    if (this.prBusy || (!moved && Date.now() - this.prAt < 60000)) return;
+    if (moved && this.pr) { this.pr = null; cx.notify(); } // don't show another branch's PR meanwhile
+    this.prBusy = true;
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("gh", ["pr", "view", "--json", "number,url,state,isDraft,reviewDecision,statusCheckRollup"],
+          { cwd: target.cwd, on: target.on, timeout: 20000 }).catch(() => null);
+        let pr = null;
+        if (r && r.code === 0) {
+          try {
+            const j = JSON.parse(r.stdout);
+            pr = { number: j.number, url: j.url, state: j.state, draft: j.isDraft, review: j.reviewDecision, ci: ciState(j.statusCheckRollup) };
+          } catch { pr = null; }
+        }
+        const next = { key, pr };
+        if (JSON.stringify(next) !== JSON.stringify(this.pr)) { this.pr = next; cx.notify(); }
+      } finally {
+        this.prAt = Date.now();
+        this.prBusy = false;
+      }
+    });
+  }
+
+  // "#123 ✓ approved": click opens the PR.
+  prStatus(t) {
+    const pr = this.pr?.pr;
+    if (!pr || !pr.number) return null;
+    const row = h_flex().id("pr").gap(6).items_center().cursor_pointer()
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click(() => { if (pr.url) exec("open", [pr.url]).catch(() => {}); })
+      .child(div().child(`#${pr.number}`));
+    if (pr.ci === "pass") row.child(div().text_color(t.ansi2).child("✓"));
+    else if (pr.ci === "fail") row.child(div().text_color(t.blocked).child("✗"));
+    else if (pr.ci === "pending") row.child(div().text_color(t.ansi3).child("●"));
+    if (pr.draft) row.child(div().child("draft"));
+    else if (pr.state === "MERGED") row.child(div().child("merged"));
+    else if (pr.state === "CLOSED") row.child(div().child("closed"));
+    if (pr.review === "APPROVED") row.child(div().text_color(t.ansi2).child("approved"));
+    else if (pr.review === "CHANGES_REQUESTED") row.child(div().text_color(t.blocked).child("changes requested"));
+    return row;
   }
 
   // "⚔1 ●2 ✚3 ?1 ↑2 ↓1 +40/−7 stash 1 REBASING": zero counts are left out.
@@ -183,10 +253,12 @@ export default class ClaudeLimitsStatus extends View {
     const label = (icon, text) => h_flex().gap(6).items_center().child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
     const claude = this.claude(t);
     const gitStats = this.gitStats(t);
+    const prStatus = this.prStatus(t);
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
       .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
       .when(Boolean(space?.branch), el => el.child(h_flex().gap(8).items_center().child(label("branch", space.branch))
-        .when(Boolean(gitStats), el => el.child(gitStats))))
+        .when(Boolean(gitStats), el => el.child(gitStats))
+        .when(Boolean(prStatus), el => el.child(prStatus))))
       .child(h_flex().gap(6).items_center().child(div().size(6).rounded(3).bg(t.dim)).child(`${list.length} agents`)
         .when(needs > 0, el => el.child(div().text_color(t.blocked).child(`· ${needs} needs you`))))
       .when(Boolean(claude), el => el.child(claude))
