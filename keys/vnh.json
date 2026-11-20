@@ -12,7 +12,6 @@
     "ctrl-shift-q": "overlay.close",
     "ctrl-shift-u": "mod.open:portal",
     "cmd-shift-k": "mod.open:walkthrough",
-    "cmd-alt-,": "mod.open:better-config",
     "ctrl-i": "mod.open:vnh-sessions"
   }
 }

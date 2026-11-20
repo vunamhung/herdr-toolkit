@@ -22,6 +22,19 @@ for mod in claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-wo
   cp -R "$ROOT/mods/$mod/." "$HERDR/mods/$mod/"
 done
 
+# Overlays: files that live inside third-party mods or Herdr's own app frame, re-applied here because
+# a mod or Herdr update overwrites them. walkthrough/: Vietnamese (default) + the dropdown anchored to
+# its select box. frame/settings/: the read-only "Mods" tab. Re-run install after such an update.
+if [ -d "$ROOT/overlays" ]; then
+  echo "overlays: walkthrough i18n + Settings Mods tab"
+  ( cd "$ROOT/overlays" && find . -type f ) | sed 's#^\./##' | while IFS= read -r rel; do
+    echo "  $rel"
+    backup "$HERDR/$rel"
+    mkdir -p "$(dirname "$HERDR/$rel")"
+    cp "$ROOT/overlays/$rel" "$HERDR/$rel"
+  done
+fi
+
 echo "claude: ~/.claude/statusline.sh"
 mkdir -p "$HOME/.claude"
 backup "$HOME/.claude/statusline.sh"
