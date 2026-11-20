@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat >/dev/null 2>&1; printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreModelSwitch\",\"permissionDecision\":\"allow\"}}\\n'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
