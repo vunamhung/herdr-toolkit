@@ -69,9 +69,10 @@ export default class RunMenu extends View {
     const t = theme(), p = props()?.project, rows = this.rows();
     if (this.at >= rows.length) this.at = Math.max(0, rows.length - 1);
     const selected = props()?.selected;
-    // The popup has a fixed height: the list takes what the search row leaves and scrolls inside it
-    // (a max height alone left nothing to scroll in).
-    return v_flex().id("run-menu").track_focus(this.handle).size_full().min_h(0).bg(t.popover).text_size(13)
+    // A popup is as tall as its content, so the list gets a definite height (its rows, at most 380 px):
+    // with only a max height there was nothing to scroll in, and flex_1 had nothing to grow into.
+    const listH = Math.min(380, Math.max(44, rows.length * 31 + 8));
+    return v_flex().id("run-menu").track_focus(this.handle).w_full().bg(t.popover).text_size(13)
       .on_key_down((e, cx) => {
         const k = e.key;
         if (k === "escape") return this.close();
@@ -86,7 +87,7 @@ export default class RunMenu extends View {
       .child(h_flex().h(40).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
         .child(svg("mods/vnh-run-menu/search.svg").size(14).flex_none().text_color(t.dim))
         .child(Input.new(this.input).flex_1().h_full().text_size(13).text_color(t.foreground)))
-      .child(v_flex().id("run-menu-rows").flex_1().min_h(0).p(4).gap(1).overflow_y_scrollbar().track_scroll(this.scroll)
+      .child(v_flex().id("run-menu-rows").h(listH).flex_none().p(4).gap(1).overflow_y_scrollbar().track_scroll(this.scroll)
         .when(rows.length === 0, (el) => el.child(div().p(10).text_size(12).text_color(t.dim).child(p ? "No matching scripts" : "No package.json scripts")))
         .children(rows.map((r, i) => {
           const on = i === this.at, current = r.name === selected;
