@@ -15,7 +15,7 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 
 backup() { [ -e "$1" ] && cp -R "$1" "$1.bak-$STAMP" && echo "  backup: $1.bak-$STAMP"; return 0; }
 
-for mod in claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces; do
+for mod in claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions; do
   echo "mod: $mod"
   backup "$HERDR/mods/$mod"
   mkdir -p "$HERDR/mods/$mod"
@@ -79,6 +79,6 @@ if want --gestures; then
 fi
 
 if command -v herdr-app >/dev/null; then
-  for mod in claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces; do herdr-app check "$HERDR/mods/$mod"; done
+  for mod in claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions; do herdr-app check "$HERDR/mods/$mod"; done
 fi
 echo "done"
