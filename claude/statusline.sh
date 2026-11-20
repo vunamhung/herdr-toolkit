@@ -64,6 +64,18 @@ tmp=$(mktemp "$DATA/limits.XXXXXX") && jq -n --argjson prev "$prev" \
   + ({five: ($five | num), five_reset: ($five_reset | num), seven: ($seven | num), seven_reset: ($seven_reset | num), ctx: ($ctx | num)}
      | with_entries(select(.value != null)))' > "$tmp" 2>/dev/null && mv -f "$tmp" "$LIMITS" || rm -f "$tmp"
 
+# The same model / effort / context, per terminal (HC_TERMINAL_ID is set for everything running in a
+# Herdr terminal). limits.json above holds whichever session refreshed last, so on its own it shows
+# another tab's model; the status bar reads limits-<terminal>.json for the terminal you're looking at.
+# Account-wide numbers (5h / 7d) stay in limits.json. Files of terminals idle for 2 days are dropped.
+if [ -n "${HC_TERMINAL_ID:-}" ]; then
+  tmp=$(mktemp "$DATA/limits-term.XXXXXX") && jq -n --arg model "$model" --arg effort "$effort" --arg ctx "$ctx" '
+    def num: if . == "" then null else tonumber end;
+    {model: $model, effort: (if $effort == "" then null else $effort end), ctx: ($ctx | num), updated: now | floor}' > "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$DATA/limits-${HC_TERMINAL_ID}.json" || rm -f "$tmp"
+  find "$DATA" -maxdepth 1 -name 'limits-t*.json' -mtime +2 -delete 2>/dev/null
+fi
+
 # Status line moved to the Herdr status bar: print nothing here.
 # To bring the in-terminal status line back, delete the next line.
 exit 0

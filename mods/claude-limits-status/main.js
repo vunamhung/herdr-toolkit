@@ -155,7 +155,7 @@ export default class ClaudeLimitsStatus extends View {
     cx.timer.every(5000, (cx) => this.refresh(cx));
     // Git: re-read at once when the shown folder changes, else every 6 s.
     this.refreshGit(cx);
-    cx.timer.every(1500, (cx) => this.refreshGit(cx));
+    cx.timer.every(1500, (cx) => { this.followFocus(cx); this.refreshGit(cx); });
     // Prices: at once, then every 2 min while the window is active (none while it's in the background).
     this.refreshPrices(cx);
     cx.timer.every(PRICE_MS, (cx) => this.refreshPrices(cx));
@@ -352,11 +352,31 @@ export default class ClaudeLimitsStatus extends View {
     return parts.length ? h_flex().gap(6).items_center().children(parts) : null;
   }
 
+  // The terminal under the keyboard changed: re-read at once. A mod pane (the Files panel…) has no
+  // terminal, so the last one stays.
+  followFocus(cx) {
+    const t = focused()?.terminal ?? null;
+    if (t && t !== this.focusTerm) { this.focusTerm = t; this.refresh(cx); }
+  }
+
+  // The bar shows the Claude session you're looking at: model, effort and context from that terminal's
+  // limits-<terminal>.json, and the account-wide 5h / 7d from limits.json (the last session to refresh).
+  // A shell or another non-Claude terminal keeps showing the last Claude one; a Claude session that
+  // hasn't written its file yet shows no model rather than another session's.
   refresh(cx) {
     cx.spawn(async (cx) => {
       try {
-        const text = await readTextFile(home() + LIMITS_FILE);
-        const next = text ? JSON.parse(text) : null;
+        const read = async (name) => { const text = await readTextFile(`${home()}/.cache/claude-statusline/${name}`); return text ? JSON.parse(text) : null; };
+        const shared = await read("limits.json");
+        const term = this.focusTerm && /^[\w-]+$/.test(this.focusTerm) ? this.focusTerm : null;
+        const mine = term ? await read(`limits-${term}.json`).catch(() => null) : null;
+        if (mine) this.lastSession = mine;
+        const isClaude = Boolean(term) && agents().some((a) => a.address === term && (a.app === "claude-code" || a.program?.key === "claude"));
+        const next = !shared ? null
+          : mine ? { ...shared, ...mine }
+          : isClaude ? { ...shared, model: null, effort: null, ctx: null }
+          : this.lastSession ? { ...shared, ...this.lastSession }
+          : shared;
         if (JSON.stringify(next) !== JSON.stringify(this.limits)) {
           this.limits = next;
           cx.notify();
@@ -390,7 +410,7 @@ export default class ClaudeLimitsStatus extends View {
 
   claude(t) {
     const l = this.limits;
-    if (!l || !l.model) return null;
+    if (!l) return null;
     const row = h_flex().gap(10).items_center()
       .child(div().child("|"))
       .child(this.modelMenu(t, l));
@@ -408,7 +428,8 @@ export default class ClaudeLimitsStatus extends View {
       .when(this.menuOpen, (el) => el.text_color(t.foreground))
       .hover((s) => s.text_color(t.foreground))
       .tooltip("Default model for new sessions · hover a model for its effort")
-      .child(div().child(l.model))
+      // A Claude session that hasn't reported yet has no model: "…" instead of another session's.
+      .child(div().child(l.model ?? "…"))
       .when(Boolean(l.effort), (el) => el.child(div().text_color(t.dim).child(l.effort)));
     return Popover.new("vnh-model-menu").anchor("bottom_left").open(this.menuOpen)
       .on_open_change((open, cx) => { this.menuOpen = open; cx.notify(); })
