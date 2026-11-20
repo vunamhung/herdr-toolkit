@@ -1,6 +1,20 @@
 --- a/mods/filetree/main.js
 +++ b/mods/filetree/main.js
-@@ -284,6 +284,7 @@
+@@ -7,10 +7,12 @@
+ import { View, div, svg, image } from "gpui-kit";
+ import { v_flex, h_flex, Editor, EditorState, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, TextView } from "gpui-base";
+ import ICONS from "./icons.js"; // copied from the file-icons mod (mods cannot import across folders)
+-import { spaces, panes, agents, focused, exec, readTextFile, watchFolder, theme, settings, window, layout, home, appHome, props, run, notify, openOverlay, closeOverlay, shared, setShared } from "herdr";
++import { spaces, panes, agents, focused, exec, readTextFile, watchFolder, theme, settings, window, layout, home, appHome, props, run, notify, openOverlay, closeOverlay, shared, setShared, nextCommand } from "herdr";
+ 
+ const NAME = "filetree";
+ const ICON = (name) => `mods/${NAME}/${name}.svg`;
++// VNH: Markdown opens rendered in its own tab (vnh-markdown): the eye in a preview, or Space.
++const MARKDOWN = /\.(md|markdown|mdx)$/i;
+ const ROW = 26;
+ const PER_FOLDER = 2000;
+ const FIND_LIMIT = 200;
+@@ -284,6 +286,7 @@
      let prefs = {};
      try { prefs = JSON.parse(localStorage.getItem("prefs") ?? "{}"); } catch {}
      this.showHidden = prefs.showHidden ?? true;
@@ -8,7 +22,7 @@
      this.showSize = prefs.showSize ?? null;
      this.follow = true; this.pinned = null;
      this.view = VIEWS.some(([v]) => v === prefs.view) ? prefs.view : "tree";
-@@ -308,12 +309,23 @@
+@@ -308,12 +311,32 @@
        cx.notify();
      });
      this.watchActivity(cx);
@@ -16,6 +30,8 @@
 +    // VNH: no reads while the side panel hides the tree; it catches up when it shows.
 +    cx.timer.every(10000, (cx) => { if (this.shownNow()) this.refresh(cx); else this.stale = true; });
 +    cx.timer.every(1000, (cx) => { if (this.stale && this.shownNow()) { this.stale = false; this.refresh(cx); } });
++    // "filetree.focus": the Markdown tab hands the keyboard back here when it closes.
++    cx.spawn(async (cx) => { for (;;) { if (String(await nextCommand()).replace(/^filetree\./, "") === "focus") this.handle?.focus(); cx.notify(); } });
      cx.timer.every(1000, (cx) => this.tick(cx));
    }
  
@@ -28,13 +44,20 @@
 +    return Boolean(panel && !panel.hidden && body.active === block.id);
 +  }
 +
++  // VNH: a rendered Markdown tab; Esc or Space there closes it and comes back to the tab it came from.
++  openMarkdown(rel) {
++    if (!rel || !this.root) return;
++    run("tab.new", { space: spaces().find((s) => s.active)?.id, name: baseOf(rel), mod: "vnh-markdown",
++      props: { path: join(this.root, rel), on: this.on ?? null, back: focused()?.tab ?? null } });
++  }
++
    savePrefs() {
 -    try { localStorage.setItem("prefs", JSON.stringify({ showHidden: this.showHidden, showSize: this.showSize, view: this.view })); } catch {}
 +    try { localStorage.setItem("prefs", JSON.stringify({ showHidden: this.showHidden, showIgnored: this.showIgnored, showSize: this.showSize, view: this.view })); } catch {}
    }
  
    setView(view, cx) {
-@@ -425,15 +437,22 @@
+@@ -425,15 +448,22 @@
      const now = Date.now();
      this.recent = this.recent.filter((r) => now - r.at < 15000);
      this.recent.push({ at: now, paths });
@@ -60,7 +83,7 @@
    }
  
    toggle(path, cx) {
-@@ -479,7 +498,7 @@
+@@ -479,7 +509,7 @@
            this.index = index;
          }
          if (seq !== this.searchSeq) return;
@@ -69,7 +92,7 @@
          const named = matches.filter((rel) => baseOf(rel).toLowerCase().includes(q));
          this.hits = [...new Set([...named, ...matches])].slice(0, FIND_LIMIT);
          this.cursor = this.hits[0] ?? "";
-@@ -529,6 +548,7 @@
+@@ -529,6 +559,7 @@
        for (const e of this.entries.get(prefix) ?? []) {
          if (!this.showHidden && e.name.startsWith(".")) continue;
          const rel = prefix ? `${prefix}/${e.name}` : e.name, open = e.dir && this.folders.has(rel);
@@ -77,7 +100,15 @@
          out.push({ rel, e, depth, open });
          if (open && depth < 40) walk(rel, depth + 1);
        }
-@@ -807,6 +827,7 @@
+@@ -795,6 +826,7 @@
+     if (this.file) {
+       if (k === "escape" || k === "left" || k === "h") this.closePreview();
+       else if (k === "o" && !this.on) openExternal(join(this.root, this.file)).catch(() => {});
++      else if (k === "space" && MARKDOWN.test(this.file)) this.openMarkdown(this.file);
+       else return;
+       cx.stop_propagation(); cx.notify(); return;
+     }
+@@ -807,6 +839,7 @@
      else if (k === "end") this.move(rows, rows.length);
      else if (k === "/") { this.input.focus(); }
      else if (k === ".") { this.showHidden = !this.showHidden; this.savePrefs(); }
@@ -85,7 +116,16 @@
      else if (k === "escape") { if (this.query) this.clearSearch(cx); else this.cursor = ""; }
      else if (/^[1-9]$/.test(k) && VIEWS[Number(k) - 1]) this.setView(VIEWS[Number(k) - 1][0], cx);
      else if (!cur) return;
-@@ -838,12 +859,20 @@
+@@ -816,7 +849,7 @@
+     else if ((k === "right" || k === "l") && cur.e.dir && !cur.open) this.toggle(cur.rel, cx);
+     else if (k === "left" || k === "h") { if (cur.e.dir && cur.open && !this.hits) this.toggle(cur.rel, cx); else if (dirOf(cur.rel) || cur.depth) { this.cursor = dirOf(cur.rel); this.scrollTo = this.cursor; } }
+     else if (k === "enter") { if (this.hits) this.jump(cx); else if (cur.e.dir) this.toggle(cur.rel, cx); else this.openFile(cur.rel, cx); }
+-    else if (k === "space") { if (cur.e.dir) this.toggle(cur.rel, cx); else this.show(cur.rel, cx); }
++    else if (k === "space") { if (cur.e.dir) this.toggle(cur.rel, cx); else if (MARKDOWN.test(cur.rel)) this.openMarkdown(cur.rel); else this.show(cur.rel, cx); }
+     else if (k === "p" && !cur.e.dir) this.show(cur.rel, cx);
+     else if (k === "y") copy(cx, shift ? join(this.root, cur.rel) : cur.rel);
+     else if (k === "a") sendToAgent(cx, join(this.root, cur.rel));
+@@ -838,12 +871,20 @@
    }
  
    // A row of Recent: a status pill, the name, then what happened to it.
@@ -107,7 +147,7 @@
        .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
        .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
        .child(this.pill(h.kind === "read" ? "R" : h.kind === "commit" ? "C" : "W", color, R))
-@@ -867,7 +896,7 @@
+@@ -867,7 +908,7 @@
        : (!e.dir && !loc && this.width > 250 ? stamp(e.mtime) : "");
      const selected = rel === this.cursor;
      const pulse = (el) => el.loop("opacity", { from: 0.35, to: 1, period: 900 });
@@ -116,7 +156,15 @@
        .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
        .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
        .child(e.dir ? svg(ICON(`chevron-${open ? "down" : "right"}`)).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
-@@ -986,6 +1015,7 @@
+@@ -969,6 +1010,7 @@
+       .when(Boolean(this.file), (el) => el.child(image(fileIcon(this.file, false, false, settings().dark !== false)).size(14).flex_none()))
+       .child(div().flex_1().min_w(0).truncate().font_medium().text_color(this.file ? t.foreground : t.muted).child(title))
+       .when(Boolean(this.file), (el) => el
++        .when(MARKDOWN.test(this.file ?? ""), (el) => el.child(btn("ft-md", svg(ICON("eye")).size(13), "Open rendered in a new tab (Space)", false, () => this.openMarkdown(this.file))))
+         .when(!this.on, (el) => el.child(btn("ft-ext", "↗", "Open in default app (o)", false, () => openExternal(join(this.root, this.file)).catch(() => {}))))
+         .child(btn("ft-copy", "⧉", "Copy path", false, (cx) => copy(cx, this.file)))
+         .child(btn("ft-send", "@", "Send to agent", false, (cx) => sendToAgent(cx, join(this.root, this.file)))))
+@@ -986,6 +1028,7 @@
        btn("ft-up", "↑", "Up a folder", false, () => { if (!this.root) return; this.follow = false; this.pinned = this.root.replace(/[\\/][^\\/]+[\\/]?$/, "") || "/"; this.pinnedOn = this.on; }),
        btn("ft-home", "⌂", this.follow ? "Following the focused pane" : "Back to the focused pane's folder", this.follow, () => { this.follow = true; this.pinned = null; }),
        btn("ft-hidden", this.showHidden ? "◉" : "○", this.showHidden ? "Hide dotfiles (.)" : "Show dotfiles (.)", this.showHidden, () => { this.showHidden = !this.showHidden; this.savePrefs(); }),
@@ -124,3 +172,10 @@
        btn("ft-size", "Σ", this.showSize ? "Show dates" : "Show sizes", Boolean(this.showSize), () => { this.showSize = !this.showSize; this.savePrefs(); }),
        btn("ft-collapse", "⊟", "Collapse all", false, (cx) => this.collapseAll(cx)),
      ] : [
+--- /dev/null
++++ b/mods/filetree/eye.svg
+@@ -0,0 +1,4 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
++  <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
++  <circle cx="12" cy="12" r="3" />
++</svg>

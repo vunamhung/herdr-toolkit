@@ -62,9 +62,10 @@ export default class MarkdownView extends View {
     run("tab.close", { id: me.tab, confirmed: true });
     const back = props()?.back;
     if (back) run("tab.select", { id: back });
-    // The Files panel takes the keyboard back (when the layout's Files panel is vnh-files).
-    const walk = (n) => n?.content?.mod === "vnh-files" || (n?.children ?? []).some(walk);
-    if (walk(layout())) run("vnh-files.focus");
+    // The Files panel (vnh-files or filetree) takes the keyboard back.
+    const has = (mod) => { const walk = (n) => n?.content?.mod === mod || (n?.children ?? []).some(walk); return walk(layout()); };
+    if (has("vnh-files")) run("vnh-files.focus");
+    else if (has("filetree")) run("filetree.focus");
   }
 
   openLink(url) {
