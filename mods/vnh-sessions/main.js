@@ -8,7 +8,7 @@
 // result is cached in shared "vnh.sessions.cache".
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, ScrollHandle } from "gpui-base";
-import { theme, props, closeOverlay, exec, run, spaces, shared, setShared, notify, home } from "herdr";
+import { theme, props, closeOverlay, exec, run, spaces, shared, setShared, notify, home, panes } from "herdr";
 
 const ICON = (n) => `mods/vnh-sessions/${n}.svg`;
 const CACHE = "vnh.sessions.cache.v2"; // v2: entries carry `sdk`
@@ -95,15 +95,34 @@ export default class Sessions extends View {
     });
   }
 
+  // Conversations open in a Herdr pane right now. Herdr doesn't name a terminal's session, but
+  // Claude Code titles its terminal with the session's title: a Claude pane whose title and folder
+  // match a conversation's is that conversation. -> Map("title\0cwd" -> { pane, space, tab label })
+  openPanes() {
+    const names = new Map();
+    for (const sp of spaces()) for (const tb of sp.tabs ?? []) names.set(tb.id, { space: sp.name, tab: tb.name, spaceId: sp.id });
+    const out = new Map();
+    for (const p of panes()) {
+      if (p.app !== "claude-code" || !p.title) continue;
+      const title = p.title.replace(/^[^\p{L}\p{N}]+/u, "").trim(), where = names.get(p.tab);
+      out.set(`${title}\0${p.cwd ?? ""}`, { pane: p.pane, label: where ? `${where.space} · ${where.tab}` : "open", spaceId: where?.spaceId });
+    }
+    return out;
+  }
+
+  liveOf(s, open) { return s.title ? open.get(`${s.title}\0${s.cwd ?? ""}`) ?? null : null; }
+
   rows() {
     const q = this.query.trim().toLowerCase();
     if (!q) return this.order;
+    const open = this.openPanes();
     const words = q.split(/\s+/);
     const scored = [];
     for (const s of this.order) {
-      const title = (s.title || "").toLowerCase(), hay = `${title} ${s.prompt.toLowerCase()} ${(s.cwd ?? "").toLowerCase()} ${(s.branch ?? "").toLowerCase()} ${s.id}`;
+      const live = this.liveOf(s, open);
+      const title = (s.title || "").toLowerCase(), hay = `${title} ${(live?.label ?? "").toLowerCase()} ${s.prompt.toLowerCase()} ${(s.cwd ?? "").toLowerCase()} ${(s.branch ?? "").toLowerCase()} ${s.id}`;
       if (!words.every((w) => hay.includes(w))) continue;
-      scored.push({ s, rank: words.every((w) => title.includes(w)) ? 0 : 1 });
+      scored.push({ s, rank: words.every((w) => title.includes(w) || (live?.label ?? "").toLowerCase().includes(w)) ? 0 : 1 });
     }
     return scored.sort((a, b) => a.rank - b.rank).map((x) => x.s);
   }
@@ -137,13 +156,16 @@ export default class Sessions extends View {
   open(s) {
     if (!s) return;
     this.close();
+    // Already open in a pane: go there instead of resuming a second copy.
+    const live = this.liveOf(s, this.openPanes());
+    if (live) { if (live.spaceId) run("space.select", { id: live.spaceId }); run("pane.focus", { pane: live.pane }); return; }
     const space = spaces().find((x) => x.active);
     run("tab.new", { space: space?.id, folder: s.cwd ?? undefined, name: (s.title || s.prompt || "claude").slice(0, 40),
       argv: ["sh", "-lc", 'exec claude --resume "$1"', "resume", s.id] });
   }
 
   render() {
-    const t = theme(), rows = this.rows(), h = home();
+    const t = theme(), rows = this.rows(), h = home(), open = this.openPanes();
     if (this.at >= rows.length) this.at = Math.max(0, rows.length - 1);
     const tilde = (p) => (p && h && p.startsWith(h) ? "~" + p.slice(h.length) : p ?? "");
     const listH = Math.min(460, Math.max(60, rows.length * 52 + 8));
@@ -167,7 +189,7 @@ export default class Sessions extends View {
         .when(!rows.length, (el) => el.child(div().p(12).text_size(12).text_color(t.dim).child(this.busy ? "Reading conversations…" : "No conversation matches")))
         .children(rows.map((s, i) => {
           const on = i === this.at;
-          const title = s.title || s.prompt || "(no prompt)";
+          const title = s.title || s.prompt || "(no prompt)", live = this.liveOf(s, open);
           const asking = this.confirm === s.f, shown = asking || this.hover === s.f;
           // Bare icons, no box: they brighten under the pointer.
           const small = (id, icon, color, tip, action) => div().id(id).size(20).flex_none().flex().items_center().justify_center()
@@ -189,6 +211,9 @@ export default class Sessions extends View {
             .child(h_flex().gap(8).items_center()
               .child(svg(ICON("chat")).size(13).flex_none().text_color(on ? t.accent : t.muted))
               .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).when(on, (el) => el.font_medium()).child(title))
+              // Open in a Herdr tab now: which one (Enter goes there).
+              .when(Boolean(live) && !shown, (el) => el.child(h_flex().flex_none().gap(4).items_center().text_size(10.5).text_color(t.ansi2)
+                .child(div().size(6).rounded(3).bg(t.ansi2)).child(div().max_w(160).truncate().child(live.label))))
               // Hidden on hover, where the trash (and its ✓ / ✗) take the spot.
               .when(!shown, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${s.n} prompt${s.n === 1 ? "" : "s"} · ${ago(s.m)}`))))
             .child(h_flex().pl(21).gap(8).items_center().text_size(11).text_color(t.dim)
@@ -198,7 +223,6 @@ export default class Sessions extends View {
               .when(Boolean(s.title && s.prompt), (el) => el.child(div().flex_1().min_w(0).truncate().child(s.prompt))));
         })))
       .child(h_flex().h(26).flex_none().px(12).items_center().border_t(1).border_color(t.border).text_size(10.5).text_color(t.dim)
-        .child(div().flex_1().child("Enter resumes in a new tab · ⌘Enter copies the id · Esc"))
-        .child(div().child("claude --resume")));
+        .child(div().flex_1().min_w(0).truncate().child("Enter resumes, or goes to its open tab · ⌘Enter copies the id · Esc")));
   }
 }
