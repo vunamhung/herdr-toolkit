@@ -26,14 +26,27 @@ export default class RunMenu extends View {
     this.input.focus();
     cx.timer.after(300, () => this.input.focus());
     this.at = Math.max(0, this.rows().findIndex((s) => s.name === props()?.selected));
+    // Show the selected script, wherever it is in a long list.
+    cx.timer.after(60, () => this.scroll.scroll_to_item(this.at));
     this.handle = cx.focus_handle();
   }
 
+  // Alphabetical, as JetBrains lists run configurations. A search ranks the names: starts with it,
+  // then has every word ("gate dev"), then has its letters in order ("dgw"); a script whose command
+  // alone matches comes last. A–Z within a rank.
   rows() {
-    // Alphabetical, as JetBrains lists run configurations.
     const scripts = [...(props()?.project?.scripts ?? [])].sort((a, b) => a.name.localeCompare(b.name));
-    const f = this.filter.trim().toLowerCase();
-    return f ? scripts.filter((s) => s.name.toLowerCase().includes(f) || s.cmd.toLowerCase().includes(f)) : scripts;
+    const q = this.filter.trim().toLowerCase();
+    if (!q) return scripts;
+    const words = q.split(/\s+/), letters = q.replace(/\s+/g, "");
+    const inOrder = (text) => { let i = 0; for (const ch of text) if (ch === letters[i]) i++; return i === letters.length; };
+    const ranked = [];
+    for (const s of scripts) {
+      const name = s.name.toLowerCase(), cmd = s.cmd.toLowerCase();
+      const rank = name.startsWith(q) ? 0 : words.every((w) => name.includes(w)) ? 1 : inOrder(name) ? 2 : words.every((w) => cmd.includes(w)) ? 3 : -1;
+      if (rank >= 0) ranked.push({ s, rank });
+    }
+    return ranked.sort((a, b) => a.rank - b.rank).map((x) => x.s); // stable: A–Z within a rank
   }
 
   close() { closeOverlay(props().overlay); }
@@ -56,8 +69,9 @@ export default class RunMenu extends View {
     const t = theme(), p = props()?.project, rows = this.rows();
     if (this.at >= rows.length) this.at = Math.max(0, rows.length - 1);
     const selected = props()?.selected;
-    // A popup is as tall as its content: the list gets a max height and scrolls past it.
-    return v_flex().id("run-menu").track_focus(this.handle).w_full().bg(t.popover).text_size(13)
+    // The popup has a fixed height: the list takes what the search row leaves and scrolls inside it
+    // (a max height alone left nothing to scroll in).
+    return v_flex().id("run-menu").track_focus(this.handle).size_full().min_h(0).bg(t.popover).text_size(13)
       .on_key_down((e, cx) => {
         const k = e.key;
         if (k === "escape") return this.close();
@@ -72,7 +86,7 @@ export default class RunMenu extends View {
       .child(h_flex().h(40).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
         .child(svg("mods/vnh-run-menu/search.svg").size(14).flex_none().text_color(t.dim))
         .child(Input.new(this.input).flex_1().h_full().text_size(13).text_color(t.foreground)))
-      .child(v_flex().id("run-menu-rows").max_h(380).p(4).gap(1).overflow_y_scrollbar().track_scroll(this.scroll)
+      .child(v_flex().id("run-menu-rows").flex_1().min_h(0).p(4).gap(1).overflow_y_scrollbar().track_scroll(this.scroll)
         .when(rows.length === 0, (el) => el.child(div().p(10).text_size(12).text_color(t.dim).child(p ? "No matching scripts" : "No package.json scripts")))
         .children(rows.map((r, i) => {
           const on = i === this.at, current = r.name === selected;
