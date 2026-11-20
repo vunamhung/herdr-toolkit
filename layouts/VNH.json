@@ -19,14 +19,37 @@
           "type": "column",
           "children": [
             {
-              "id": "brand",
-              "type": "block",
-              "content": {
-                "mod": "vnh-chrome"
-              },
+              "id": "brand-row",
+              "type": "row",
               "size": {
                 "px": 46
               },
+              "children": [
+                {
+                  "id": "brand",
+                  "type": "block",
+                  "content": {
+                    "mod": "vnh-chrome"
+                  },
+                  "size": {
+                    "weight": 1
+                  },
+                  "window_drag": true
+                },
+                {
+                  "id": "cloudflare-bar",
+                  "type": "block",
+                  "size": {
+                    "px": 40
+                  },
+                  "content": {
+                    "mod": "cloudflare-deploys",
+                    "props": {
+                      "bar": true
+                    }
+                  }
+                }
+              ],
               "window_drag": true
             },
             {
@@ -124,19 +147,6 @@
                     "mod": "insights",
                     "props": {
                       "mode": "toolbar"
-                    }
-                  }
-                },
-                {
-                  "id": "cloudflare-bar",
-                  "type": "block",
-                  "size": {
-                    "px": 44
-                  },
-                  "content": {
-                    "mod": "cloudflare-deploys",
-                    "props": {
-                      "bar": true
                     }
                   }
                 }
