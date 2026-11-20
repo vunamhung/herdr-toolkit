@@ -559,6 +559,21 @@ export default class Spaces extends View {
       .child(div().absolute().right(5).text_color(tone(t, w.status)).child(glyph(w.status))));
   }
 
+  // Dropped paths: each folder opens as a new space on this computer (an existing space whose
+  // folder is exactly that one is selected instead); files are ignored.
+  dropFolders(paths, cx) {
+    if (!paths.length) return;
+    cx.spawn(async () => {
+      const r = await exec("sh", ["-c", 'for p in "$@"; do [ -d "$p" ] && printf "%s\\n" "$p"; done; true', "dirs", ...paths]).catch(() => null);
+      const dirs = (r?.stdout ?? "").split("\n").map((d) => d.replace(/\/+$/, "")).filter(Boolean);
+      for (const dir of dirs) {
+        const open = spaces().find((p) => !p.machine && p.folder === dir);
+        if (open) run("space.select", { id: open.id });
+        else run("space.new", { folder: dir, machine: "" });
+      }
+    });
+  }
+
   render() {
     const t = theme();
     const collapsed = narrow();
@@ -582,7 +597,9 @@ export default class Spaces extends View {
       this.revealedAt = this.activeAt;
       if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
     }
-    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
+    return v_flex().id("spaces-root").size_full().min_h(0).bg(t.chrome).text_size(13)
+      // VNH: a folder dropped here (from Finder) becomes a new space; one already open is shown.
+      .on_drop((e, cx) => this.dropFolders(e.paths ?? [], cx))
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child("Spaces"))
