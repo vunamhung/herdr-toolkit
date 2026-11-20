@@ -62,20 +62,6 @@ export function tone(t, status) {
   return t[status] ?? t.unknown;
 }
 
-// VNH: a trackpad pinch over this bar runs git: spreading out (zoom in) pulls, pinching in (zoom
-// out) pushes the branch and its tags (vnh-tabs.git-pull / git-push, on the work folder's repo).
-// One action per gesture, only past a clear threshold, at most every 3 s.
-function pinchGit(state, e) {
-  if (e.touch_phase === "started") { state.sum = 0; return; }
-  if (e.touch_phase === "moved") { state.sum = (state.sum ?? 0) + (e.delta ?? 0); return; }
-  if (e.touch_phase !== "ended") { state.sum = 0; return; }
-  const sum = (state.sum ?? 0) + (e.delta ?? 0);
-  state.sum = 0;
-  if (Date.now() - (state.at ?? 0) < 3000) return;
-  if (sum >= 0.35) { state.at = Date.now(); run("vnh-tabs.git-pull"); }
-  else if (sum <= -0.3) { state.at = Date.now(); run("vnh-tabs.git-push"); }
-}
-
 export default class Spaces extends View {
   init(_props, cx) {
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
@@ -597,7 +583,6 @@ export default class Spaces extends View {
       if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
     }
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
-      .on_pinch((e) => pinchGit(this.pinch ??= {}, e))
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child("Spaces"))

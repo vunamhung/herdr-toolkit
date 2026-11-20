@@ -4,7 +4,9 @@
 #   ./install.sh            mods + Claude Code status line script
 #   ./install.sh --layout   also install layouts/VNH.json and switch Herdr to it
 #   ./install.sh --karabiner  also add the Cmd+` -> Herdr rule to Karabiner-Elements
-# Options can be combined: ./install.sh --layout --karabiner
+#   ./install.sh --gestures  also build gestures/HerdrPinch.swift and run it as a LaunchAgent
+#                            (trackpad pinch anywhere in Herdr: zoom in pulls, zoom out pushes)
+# Options can be combined: ./install.sh --layout --karabiner --gestures
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -58,6 +60,16 @@ if want --karabiner; then
           .complex_modifications.rules = ($new + ((.complex_modifications.rules // []) | map(select(.description as $d | $names | index($d) | not))))
         else . end)' "$KB" > "$KB.tmp" && mv "$KB.tmp" "$KB"
   fi
+fi
+
+if want --gestures; then
+  echo "gestures: trackpad pinch in Herdr pulls / pushes"
+  mkdir -p "$HOME/.local/bin" "$HOME/Library/LaunchAgents"
+  swiftc -O -o "$HOME/.local/bin/herdr-pinch" "$ROOT/gestures/HerdrPinch.swift"
+  PL="$HOME/Library/LaunchAgents/dev.vnh.herdr-pinch.plist"
+  [ -f "$PL" ] && { launchctl bootout "gui/$(id -u)" "$PL" 2>/dev/null; backup "$PL"; }
+  sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.herdr-pinch.plist" > "$PL"
+  launchctl bootstrap "gui/$(id -u)" "$PL"
 fi
 
 if command -v herdr-app >/dev/null; then

@@ -51,20 +51,6 @@ function runTarget() {
 // VNH: the branch button. One read: the repo's top and its branch (or the short hash when detached).
 const BRANCH_SCRIPT = 'top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || exit 0; echo "$top"; git -C "$1" symbolic-ref -q --short HEAD || git -C "$1" rev-parse --short HEAD';
 
-// VNH: a trackpad pinch over this bar runs git: spreading out (zoom in) pulls, pinching in (zoom
-// out) pushes the branch and its tags (vnh-tabs.git-pull / git-push, on the work folder's repo).
-// One action per gesture, only past a clear threshold, at most every 3 s.
-function pinchGit(state, e) {
-  if (e.touch_phase === "started") { state.sum = 0; return; }
-  if (e.touch_phase === "moved") { state.sum = (state.sum ?? 0) + (e.delta ?? 0); return; }
-  if (e.touch_phase !== "ended") { state.sum = 0; return; }
-  const sum = (state.sum ?? 0) + (e.delta ?? 0);
-  state.sum = 0;
-  if (Date.now() - (state.at ?? 0) < 3000) return;
-  if (sum >= 0.35) { state.at = Date.now(); run("vnh-tabs.git-pull"); }
-  else if (sum <= -0.3) { state.at = Date.now(); run("vnh-tabs.git-push"); }
-}
-
 export default class WorkspaceChrome extends View {
   init(_props, cx) {
     this.repo = null; // { key, root, on, space, branch }
@@ -139,7 +125,6 @@ export default class WorkspaceChrome extends View {
         .child(row("machine", "plus", "Add machine", true, () => run("mod.open", { name: "machine-add" })));
     }
     return h_flex().size_full().bg(t.chrome).pl(collapsed ? 6 : 14).pr(10).gap(4).items_center().text_size(13.5)
-      .on_pinch((e) => pinchGit(this.pinch ??= {}, e))
       .when(window()?.platform === "macos" && !window()?.fullscreen && !collapsed, el => el.pl(76))
       // VNH: the branch button replaces the logo, search (⌘P) and the sidebar toggle (⌘B).
       .when(!collapsed, el => el.child(this.branchBar(t)))
