@@ -342,8 +342,8 @@ export default class Agents extends View {
       // Without a space header above (priority, pinned) the row names its space.
       const full = byPriority || isPinned;
       const name = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
-      // VNH: every agent of the shown space, idle or working, gets a bar in that space's color on
-      // its left edge and a bright name, not just the focused one.
+      // VNH: every agent of the shown space gets a bar on its left edge, not just the focused one:
+      // the space's color while it works, gray while it idles. Names keep their usual colors.
       const here = a.space === spaces().find((s) => s.active)?.id;
       const spaceColor = (() => {
         const c = (shared("space.colors") ?? {})[a.space] ?? "ansi6";
@@ -374,14 +374,14 @@ export default class Agents extends View {
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-          .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle && !here ? t.muted : t.foreground).child(name))
+          .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
           .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(pin))
         .when(this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
         .child(this.status(t, a, byPriority && !isPinned))
-        .when(here, el => el.child(div().absolute().left(0).top(7).w(3).h(16).rounded(2).bg(spaceColor)));
+        .when(here, el => el.child(div().absolute().left(0).top(7).w(3).h(16).rounded(2).bg(a.status === "idle" ? t.dim : spaceColor)));
     };
 
     // Groups in list order: spaces (grouped) or priority sections. Agents of a
