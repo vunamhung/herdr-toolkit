@@ -216,7 +216,7 @@
        .when(Boolean(this.file), (el) => el.child(image(fileIcon(this.file, false, false, settings().dark !== false)).size(14).flex_none()))
        .child(div().flex_1().min_w(0).truncate().font_medium().text_color(this.file ? t.foreground : t.muted).child(title))
        .when(Boolean(this.file), (el) => el
-+        .when(MARKDOWN.test(this.file ?? ""), (el) => el.child(btn("ft-md", svg(ICON("eye")).size(13), "Open rendered in a new tab (Space)", false, () => this.openMarkdown(this.file))))
++        .when(MARKDOWN.test(this.file ?? ""), (el) => el.child(btn("ft-md-open", svg(ICON("eye")).size(13), "Open rendered in a new tab (Space)", false, () => this.openMarkdown(this.file))))
          .when(!this.on, (el) => el.child(btn("ft-ext", "↗", "Open in default app (o)", false, () => openExternal(join(this.root, this.file)).catch(() => {}))))
          .child(btn("ft-copy", "⧉", "Copy path", false, (cx) => copy(cx, this.file)))
          .child(btn("ft-send", "@", "Send to agent", false, (cx) => sendToAgent(cx, join(this.root, this.file)))))

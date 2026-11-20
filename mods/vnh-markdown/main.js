@@ -27,8 +27,16 @@ export default class MarkdownView extends View {
     this.text = null;
     this.error = null;
     this.kb = cx.focus_handle();
-    // Take the keyboard on open, and again whenever Herdr hands it to this pane.
-    cx.timer.after(150, () => this.kb.focus());
+    // This copy's own tab: a new tab is the active one when it opens. Closing uses it, not "the
+    // focused Markdown pane", which could be another of these tabs.
+    const activeTab = () => spaces().find((s) => s.active)?.tabs.find((t) => t.active)?.id ?? null;
+    this.myTab = activeTab();
+    // Take the keyboard on open, but only while this tab shows and the window is in use: grabbing it
+    // later made a Space typed elsewhere (a prompt) close the tab at once.
+    cx.timer.after(150, () => {
+      this.myTab ??= activeTab();
+      if (window()?.active && activeTab() === this.myTab) this.kb.focus();
+    });
     cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); if (c === "focus") { this.kb.focus(); cx.notify(); } } });
     this.load(cx);
     cx.timer.every(2000, (cx) => { if (window()?.active) this.load(cx); });
@@ -56,7 +64,7 @@ export default class MarkdownView extends View {
     // ("tab.close failed: no tab …").
     if (this.closing) return;
     const mine = panes().filter((p) => p.mod === "vnh-markdown");
-    const me = mine.find((p) => p.pane === props()?.pane) ?? mine.find((p) => p.focused);
+    const me = (this.myTab && mine.find((p) => p.tab === this.myTab)) ?? mine.find((p) => p.pane === props()?.pane);
     if (!me) return;
     this.closing = true;
     run("tab.close", { id: me.tab, confirmed: true });
