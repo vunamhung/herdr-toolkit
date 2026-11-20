@@ -63,6 +63,7 @@ export default class Tabs extends View {
         else if (c === "git-push") {
           const body = find(layout(), "panel-body");
           if (body?.children?.some((x) => x.id === "graph")) {
+            this.leaveTimeline();
             run("layout.select", { stack: "panel-body", child: "graph" }); run("layout.show", { id: "panel" });
             setShared("vnh.git-graph.push", Date.now()); // git-graph opens its push dialog once it shows
           }
@@ -74,11 +75,23 @@ export default class Tabs extends View {
 
   // "vnh-tabs.files" (cmd-e), "vnh-tabs.changes" (alt-a), "vnh-tabs.graph": what the panel's
   // button does: close it when it already shows that panel, otherwise show that panel.
+  // VNH: one right-side view at a time. Showing Files / Changes / Git while the Timeline shows
+  // closes the Timeline for good (no panel to bring back: the person just picked one).
+  leaveTimeline() {
+    const timeline = find(layout(), "timeline");
+    if (!timeline || timeline.hidden) return;
+    this.focus = null;
+    this.saveFocus();
+    run("layout.hide", { id: "timeline" });
+    this.timelineShown = false;
+    this.timelineWant = { shown: false, until: Date.now() + 1000 };
+  }
+
   togglePanel(id) {
     const root = layout(), panel = find(root, "panel"), body = find(root, "panel-body");
     if (!panel || !body?.children?.some((c) => c.id === id)) return;
     if (!panel.hidden && body.active === id) run("layout.hide", { id: "panel" });
-    else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
+    else { this.leaveTimeline(); run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
   }
 
   // VNH: the Insights tab takes the whole work area. Opening it hides the right panel and the
@@ -293,7 +306,7 @@ export default class Tabs extends View {
         .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
         .on_click(() => {
           if (on) run("layout.hide", { id: "panel" });
-          else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
+          else { this.leaveTimeline(); run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
         }).child(svg(icon).size(14)).child(label);
     };
     // VNH: the Timeline panel (over9k-prompts) is its own layout block, toggled like Files/Changes.
