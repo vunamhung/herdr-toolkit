@@ -1,6 +1,27 @@
 import { View, div, svg } from "gpui-kit";
-import { h_flex } from "gpui-base";
-import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, exec, checking, shared, focused } from "herdr";
+import { h_flex, v_flex, Popover, HoverCard } from "gpui-base";
+import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, exec, checking, shared, focused, notify } from "herdr";
+
+// The model picker's two tiers. Tier 1 switches the model (`/model <alias>`); tier 2 also sets the
+// thinking level (`/effort <level>`). Aliases are what Claude Code's `/model` accepts with an
+// argument (it switches at once, no picker); `key` is the word its status line prints for that
+// family, used only to light up the current row.
+const MODELS = [
+  { label: "Default", alias: "default", key: null },
+  { label: "Opus", alias: "opus", key: "opus" },
+  { label: "Sonnet", alias: "sonnet", key: "sonnet" },
+  { label: "Haiku", alias: "haiku", key: "haiku" },
+  { label: "Fable", alias: "fable", key: "fable" },
+  { label: "Opus Plan", alias: "opusplan", key: null },
+];
+const EFFORTS = [
+  { label: "Low", value: "low" },
+  { label: "Medium", value: "medium" },
+  { label: "High", value: "high" },
+  { label: "Xhigh", value: "xhigh" },
+  { label: "Max", value: "max" },
+  { label: "Auto", value: "auto" },
+];
 
 const PRICE_MS = 120000;
 const PRICES = [{ id: "bitcoin", label: "BTC" }, { id: "ethereum", label: "ETH" }, { id: "tether-gold", label: "Gold" }];
@@ -126,6 +147,7 @@ function workFolder(space, f) {
 export default class ClaudeLimitsStatus extends View {
   init(_props, cx) {
     this.limits = null;
+    this.menuOpen = false; // the model picker's dropup
     this.git = null; // { key, info }
     this.gitAt = 0;
     this.gitBusy = false;
@@ -331,11 +353,87 @@ export default class ClaudeLimitsStatus extends View {
     if (!l || !l.model) return null;
     const row = h_flex().gap(10).items_center()
       .child(div().child("|"))
-      .child(div().child(l.effort ? `${l.model} (${l.effort})` : l.model));
+      .child(this.modelMenu(t, l));
     if (typeof l.five === "number") row.child(this.limit(t, l.five, "5h", l.five_reset));
     if (typeof l.seven === "number") row.child(this.limit(t, l.seven, "7d", l.seven_reset));
     if (typeof l.ctx === "number") row.child(this.limit(t, l.ctx, "ctx", null));
     return row;
+  }
+
+  // The model name as a dropup menu anchored to itself: click opens tier 1 (models); hovering a
+  // model opens tier 2 (thinking level). The content is built only while open, so the bar pays
+  // nothing for it on its timer re-renders.
+  modelMenu(t, l) {
+    const trigger = div().id("vnh-model").cursor_pointer()
+      .when(this.menuOpen, (el) => el.text_color(t.foreground))
+      .hover((s) => s.text_color(t.foreground))
+      .tooltip("Change model · hover a model for its thinking level")
+      .child(l.effort ? `${l.model} (${l.effort})` : l.model);
+    return Popover.new("vnh-model-menu").anchor("bottom_left").open(this.menuOpen)
+      .on_open_change((open, cx) => { this.menuOpen = open; cx.notify(); })
+      .trigger(trigger)
+      .when(this.menuOpen, (el) => el.content(this.modelMenuContent(t)));
+  }
+
+  modelMenuContent(t) {
+    const cur = (this.limits?.model || "").toLowerCase();
+    const effortNow = this.limits?.effort || null;
+    const modelRow = (m) => {
+      const on = Boolean(m.key) && cur.startsWith(m.key);
+      const row = h_flex().id(`vm-${m.alias}`).h(28).px(8).gap(8).items_center().rounded(5).cursor_pointer()
+        .text_size(12).text_color(on ? t.foreground : t.muted)
+        .when(on, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => this.switchModel(cx, m.alias, null))
+        .child(div().flex_1().child(m.label))
+        .child(div().flex_none().text_color(t.dim).child("›"));
+      const sub = v_flex().w(116).p(4).gap(1).ml(6).rounded(8).border_1().border_color(t.border).bg(t.popover)
+        .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Thinking"))
+        .children(EFFORTS.map((e) => {
+          const eon = on && effortNow === e.value;
+          return h_flex().id(`ve-${m.alias}-${e.value}`).h(26).px(8).items_center().rounded(5).cursor_pointer()
+            .text_size(12).text_color(eon ? t.foreground : t.muted)
+            .when(eon, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
+            .on_click((_e, cx) => this.switchModel(cx, m.alias, e.value))
+            .child(e.label);
+        }));
+      return HoverCard.new(`vm-hc-${m.alias}`).anchor("right_center").open_delay(120).close_delay(250)
+        .trigger(row).content(sub);
+    };
+    return v_flex().w(150).p(4).gap(1).rounded(8).border_1().border_color(t.border).bg(t.popover)
+      .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Model"))
+      .children(MODELS.map(modelRow));
+  }
+
+  // The Claude Code agent to retarget: the focused terminal when it is one, else the focused agent.
+  targetAgent() {
+    const list = agents();
+    const f = focused();
+    const isClaude = (a) => Boolean(a) && (a.app === "claude-code" || a.program?.key === "claude");
+    let a = f?.terminal ? list.find((x) => x.address === f.terminal) : null;
+    if (!isClaude(a)) a = list.find((x) => x.focused && isClaude(x)) ?? null;
+    return isClaude(a) ? a : null;
+  }
+
+  // Send `/model <alias>` (and, for a tier-2 pick, `/effort <level>`) to that agent via `hc send`,
+  // which pastes the line and presses Enter. The two commands go in one shell call with a short gap
+  // so the first is submitted before the second arrives.
+  switchModel(cx, alias, effort) {
+    this.menuOpen = false;
+    cx.notify();
+    const a = this.targetAgent();
+    if (!a) {
+      notify({ title: "No Claude Code agent focused", body: "Focus a Claude Code terminal, then pick a model.", level: "warning", timeout: 3500 });
+      return;
+    }
+    const space = spaces().find((s) => s.id === a.space);
+    const on = space?.machine ?? null;
+    const script = effort
+      ? 'hc send "$1" "/model $2"; sleep 0.35; hc send "$1" "/effort $3"'
+      : 'hc send "$1" "/model $2"';
+    const args = effort ? ["-c", script, "_", a.address, alias, effort] : ["-c", script, "_", a.address, alias];
+    exec("sh", args, { on, timeout: 15000 })
+      .then((r) => { if (!r || r.code !== 0) notify({ title: "Couldn't switch model", body: (r?.stderr || "").trim().slice(0, 200) || "hc send failed", level: "error", timeout: 4000 }); })
+      .catch((e) => notify({ title: "Couldn't switch model", body: String(e?.message ?? e), level: "error", timeout: 4000 }));
   }
 
   render() {
