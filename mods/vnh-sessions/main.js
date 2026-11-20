@@ -188,7 +188,8 @@ export default class Sessions extends View {
             .child(h_flex().gap(8).items_center()
               .child(svg(ICON("chat")).size(13).flex_none().text_color(on ? t.accent : t.muted))
               .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).when(on, (el) => el.font_medium()).child(title))
-              .child(div().flex_none().text_size(11).text_color(t.dim).child(`${s.n} prompt${s.n === 1 ? "" : "s"} · ${ago(s.m)}`)))
+              // Hidden on hover, where the trash (and its ✓ / ✗) take the spot.
+              .when(!shown, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${s.n} prompt${s.n === 1 ? "" : "s"} · ${ago(s.m)}`))))
             .child(h_flex().pl(21).gap(8).items_center().text_size(11).text_color(t.dim)
               .child(div().flex_none().max_w(260).truncate().child(tilde(s.cwd) || "?"))
               .when(Boolean(s.branch), (el) => el.child(h_flex().flex_none().gap(3).items_center()
