@@ -169,9 +169,10 @@ export default class Sessions extends View {
           const on = i === this.at;
           const title = s.title || s.prompt || "(no prompt)";
           const asking = this.confirm === s.f, shown = asking || this.hover === s.f;
-          const small = (id, icon, color, tip, action) => div().id(id).size(24).flex_none().flex().items_center().justify_center().rounded(6)
-            .bg(t.raised).border_1().border_color(t.border).text_color(color).cursor_pointer().tooltip(tip)
-            .hover((st) => st.bg(t.hover))
+          // Bare icons, no box: they brighten under the pointer.
+          const small = (id, icon, color, tip, action) => div().id(id).size(20).flex_none().flex().items_center().justify_center()
+            .text_color(color).opacity(0.8).cursor_pointer().tooltip(tip)
+            .hover((st) => st.opacity(1))
             .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .on_click((_e, cx) => { cx.stop_propagation(); action(cx); })
             .child(svg(ICON(icon)).size(13));
@@ -180,11 +181,11 @@ export default class Sessions extends View {
             .on_hover((over, cx) => { const next = over ? s.f : this.hover === s.f ? null : this.hover; if (next !== this.hover) { this.hover = next; if (!over && this.confirm === s.f) this.confirm = null; cx.notify(); } })
             .on_click(() => this.open(s))
             // VNH: on hover a trash at the right edge; a press asks ✓ / ✗ right beside it.
-            .when(shown, (el) => el.child(h_flex().absolute().right(8).top(0).bottom(0).gap(4).items_center()
+            .when(shown, (el) => el.child(h_flex().absolute().right(8).top(5).h(20).gap(6).items_center()
               .when(asking, (r) => r
                 .child(small(`del-yes-${s.id}`, "check", t.ansi1, "Move to the Trash", (cx) => this.remove(s, cx)))
                 .child(small(`del-no-${s.id}`, "x", t.muted, "Keep it", (cx) => { this.confirm = null; cx.notify(); })))
-              .when(!asking, (r) => r.child(small(`del-${s.id}`, "trash", t.dim, "Delete this conversation", (cx) => { this.confirm = s.f; cx.notify(); })))))
+              .when(!asking, (r) => r.child(small(`del-${s.id}`, "trash", t.ansi1, "Delete this conversation", (cx) => { this.confirm = s.f; cx.notify(); })))))
             .child(h_flex().gap(8).items_center()
               .child(svg(ICON("chat")).size(13).flex_none().text_color(on ? t.accent : t.muted))
               .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).when(on, (el) => el.font_medium()).child(title))
