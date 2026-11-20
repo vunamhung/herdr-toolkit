@@ -16,6 +16,13 @@ const SECTIONS = [
   { id: "mods", title: "Mods", icon: "blocks" },
 ];
 
+// The Mods tab groups by where a mod came from, yours first. ids match modRow's `source`.
+const MODS_GROUPS = [
+  { id: "vnh", label: "VNH · yours" },
+  { id: "other", label: "Third-party" },
+  { id: "herdr", label: "Herdr" },
+];
+
 const LOOKS = { main: "Herdr", terminals: "Terminals", win98: "Herdr 98" };
 const APPEARANCES = [
   [null, "System"],
@@ -58,6 +65,12 @@ export default class Settings extends View {
     this.handle = cx.focus_handle();
     this.handle.focus();
     this.modsData = null; // the Mods tab's list, loaded on demand
+    this.modsFilter = "all"; // "all" | "layout" | "vnh" | "other" | "herdr"
+    this.modsCollapsed = new Set(["herdr"]); // shipped mods folded by default (they're the longest group)
+    this.modsSearch = InputState.new({ placeholder: "Search mods" });
+    this.modsSearch.on("change", (_e, cx) => cx.notify());
+    this.modsSearch.on("focus", (_e, cx) => { this.modsSearchFocused = true; cx.notify(); });
+    this.modsSearch.on("blur", (_e, cx) => { this.modsSearchFocused = false; cx.notify(); });
     cx.spawn(async (cx) => {
       await this.load();
       if (this.section === "machines") await this.loadMachines();
@@ -868,26 +881,93 @@ export default class Settings extends View {
     this.modsData = { layoutName, rows };
   }
 
-  modRow(t, r) {
+  modRow(t, r, showSource) {
     const badge = (text, color) => div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.raised).text_size(11).font_medium().text_color(color ?? t.dim).child(text);
     const srcLabel = { vnh: "VNH", herdr: "Herdr", other: "3rd-party" };
     const srcColor = { vnh: t.accent, herdr: t.dim, other: t.ansi3 ?? t.muted };
     const control = h_flex().gap(6).items_center()
       .when(r.used, (e) => e.child(badge("in layout", t.ansi2)))
-      .child(badge(srcLabel[r.source], srcColor[r.source]))
+      .when(Boolean(showSource), (e) => e.child(badge(srcLabel[r.source], srcColor[r.source])))
       .when(Boolean(r.version), (e) => e.child(div().flex_none().text_size(12).text_color(t.dim).child(`v${r.version}`)));
     return this.row(t, r.title, r.name, control);
+  }
+
+  // A rounded search field matching the font picker's.
+  modsSearchBox(t) {
+    const has = Boolean(this.modsSearch?.value());
+    return h_flex().w_full().h(32).px(10).gap(8).items_center().rounded(8).border_1()
+      .border_color(this.modsSearchFocused ? t.accent : t.input).bg(t.background).cursor_text()
+      .on_mouse_down("left", (_e, cx) => { this.modsSearch.focus(); cx.stop_propagation(); })
+      .child(Input.new(this.modsSearch).flex_1().min_w(0).h_full().text_size(13).text_color(t.foreground))
+      .when(has, (el) => el.child(div().id("mods-clear").flex_none().text_size(12).text_color(t.dim).cursor_pointer()
+        .hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => { this.modsSearch.set_value(""); cx.notify(); }).child("✕")));
+  }
+
+  // Filter chips with live counts; the active one is accented.
+  modsChips(t, d, active) {
+    const n = (p) => d.rows.filter(p).length;
+    const defs = [
+      { id: "all", label: "All", n: d.rows.length },
+      { id: "layout", label: "In layout", n: n((r) => r.used) },
+      { id: "vnh", label: "VNH", n: n((r) => r.source === "vnh") },
+      { id: "other", label: "3rd-party", n: n((r) => r.source === "other") },
+      { id: "herdr", label: "Herdr", n: n((r) => r.source === "herdr") },
+    ];
+    return h_flex().w_full().gap(6).flex_wrap().children(defs.map((c) => {
+      const on = active === c.id;
+      return h_flex().id(`mc-${c.id}`).h(26).px(10).gap(6).items_center().rounded(7).cursor_pointer().border_1()
+        .border_color(on ? t.accent : t.border).bg(on ? t.selected : t.raised)
+        .on_click((_e, cx) => { this.modsFilter = c.id; cx.notify(); })
+        .child(div().text_size(12).text_color(on ? t.foreground : t.muted).child(c.label))
+        .child(div().text_size(11).text_color(t.dim).child(String(c.n)));
+    }));
+  }
+
+  // A collapsible group header + its rows.
+  modsGroup(t, g, rows) {
+    const collapsed = this.modsCollapsed.has(g.id);
+    const header = h_flex().id(`mg-${g.id}`).w_full().pt(12).pb(6).gap(8).items_center().cursor_pointer()
+      .on_click((_e, cx) => { if (collapsed) this.modsCollapsed.delete(g.id); else this.modsCollapsed.add(g.id); cx.notify(); })
+      .child(div().flex_none().w(12).text_size(10).text_color(t.dim).child(collapsed ? "▸" : "▾"))
+      .child(div().flex_none().text_size(12).font_semibold().text_color(t.dim).child(g.label.toUpperCase()))
+      .child(div().flex_1())
+      .child(div().flex_none().text_size(11).text_color(t.dim).child(String(rows.length)));
+    const sec = v_flex().w_full().child(header);
+    if (!collapsed) sec.child(v_flex().w_full().children(rows.map((r) => this.modRow(t, r, false))));
+    return sec;
   }
 
   modsPanel(t) {
     const d = this.modsData;
     if (!d) return v_flex().w_full().child(this.heading(t, "Mods")).child(div().py(12).text_size(13).text_color(t.dim).child("Loading…"));
-    const used = d.rows.filter((r) => r.used).length;
-    return v_flex().w_full()
-      .child(this.heading(t, `Mods · ${d.rows.length} installed · ${used} in layout`))
-      .child(div().pb(6).text_size(12.5).line_height("18px").text_color(t.dim)
-        .child(`Every mod under mods/, and whether the “${d.layoutName}” layout places it. Read-only — change a mod's settings in Better Config (⌘⌥,), and what the layout shows in Look.`))
-      .children(d.rows.map((r) => this.modRow(t, r)));
+    const q = (this.modsSearch?.value() ?? "").trim().toLowerCase();
+    const filter = this.modsFilter ?? "all";
+    const inFilter = (r) => filter === "all" ? true : filter === "layout" ? r.used : r.source === filter;
+    const inSearch = (r) => !q || r.name.toLowerCase().includes(q) || (r.title || "").toLowerCase().includes(q);
+    const rows = d.rows.filter((r) => inFilter(r) && inSearch(r));
+    // In-layout mods first, then by title — so the ones actually in use sit at the top.
+    const bySort = (a, b) => (Number(b.used) - Number(a.used)) || a.title.localeCompare(b.title);
+    const grouped = filter === "all" && !q;
+
+    const panel = v_flex().w_full().gap(10)
+      .child(this.heading(t, `Mods · ${d.rows.length} installed · ${d.rows.filter((r) => r.used).length} in layout`))
+      .child(div().text_size(12.5).line_height("18px").text_color(t.dim).child(`Every mod under mods/ and whether the “${d.layoutName}” layout places it. Read-only.`))
+      .child(this.modsSearchBox(t))
+      .child(this.modsChips(t, d, filter));
+
+    if (grouped) {
+      const sections = [];
+      for (const g of MODS_GROUPS) {
+        const gr = rows.filter((r) => r.source === g.id).sort(bySort);
+        if (gr.length) sections.push(this.modsGroup(t, g, gr));
+      }
+      panel.child(v_flex().w_full().mt(2).children(sections));
+    } else if (rows.length) {
+      panel.child(v_flex().w_full().mt(2).children(rows.sort(bySort).map((r) => this.modRow(t, r, true))));
+    } else {
+      panel.child(div().py(20).text_size(13).text_color(t.dim).child("No mods match."));
+    }
+    return panel;
   }
 
   privacy(t) {
