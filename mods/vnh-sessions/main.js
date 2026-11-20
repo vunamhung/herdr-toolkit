@@ -183,7 +183,7 @@ export default class Sessions extends View {
             // VNH: on hover a trash at the right edge; a press asks ✓ / ✗ right beside it.
             .when(shown, (el) => el.child(h_flex().absolute().right(8).top(5).h(20).gap(6).items_center()
               .when(asking, (r) => r
-                .child(small(`del-yes-${s.id}`, "check", t.ansi1, "Move to the Trash", (cx) => this.remove(s, cx)))
+                .child(small(`del-yes-${s.id}`, "check", t.ansi2, "Move to the Trash", (cx) => this.remove(s, cx)))
                 .child(small(`del-no-${s.id}`, "x", t.muted, "Keep it", (cx) => { this.confirm = null; cx.notify(); })))
               .when(!asking, (r) => r.child(small(`del-${s.id}`, "trash", t.ansi1, "Delete this conversation", (cx) => { this.confirm = s.f; cx.notify(); })))))
             .child(h_flex().gap(8).items_center()
