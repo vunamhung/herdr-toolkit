@@ -185,7 +185,7 @@
                               },
                               "focus": {
                                 "width": 1,
-                                "color": "border"
+                                "color": "#96b2d766"
                               },
                               "radius": 10,
                               "gap": 8,

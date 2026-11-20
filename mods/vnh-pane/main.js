@@ -67,12 +67,8 @@ export default class Pane extends View {
     const st = p.status;
     const pane = p.pane;
     const bottom = paneFrame(layout())?.header?.position === "bottom";
-    // VNH: the pane with the keyboard shows it here, not with a bright frame (the layout's pane.focus
-    // keeps the plain border): a thin accent line along the header's outer edge and a brighter title.
-    const on = Boolean(p.focused);
     return h_flex()
       .id(`pane-head-${pane}`)
-      .relative()
       .size_full()
       .px(10)
       .gap(8)
@@ -85,8 +81,7 @@ export default class Pane extends View {
       .on_hover((hovered, cx) => { this.hovered = hovered; cx.notify(); })
       .on_click(() => run("pane.focus", { pane }))
       .when(Boolean(pic), (el) => el.child(pic))
-      .when(on, (el) => el.child(div().absolute().left(10).right(10).h(2).rounded(1).bg(t.accent + "b3").when(bottom, (b) => b.bottom(0)).when(!bottom, (b) => b.top(0))))
-      .child(div().flex_none().truncate().max_w(260).font_medium().text_color(on ? t.foreground : t.muted).child(name))
+      .child(div().flex_none().truncate().max_w(260).font_medium().text_color(t.foreground).child(name))
       .child(div().flex_1().truncate().text_color(t.dim).child(folder(p.cwd)))
       // VNH: no working spinner here; the Agents list in the sidebar is the one that shows it.
       .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")))
