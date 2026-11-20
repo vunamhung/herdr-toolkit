@@ -236,7 +236,7 @@
          .when(!this.on, (el) => el.child(btn("ft-ext", "↗", "Open in default app (o)", false, () => openExternal(join(this.root, this.file)).catch(() => {}))))
          .child(btn("ft-copy", "⧉", "Copy path", false, (cx) => copy(cx, this.file)))
          .child(btn("ft-send", "@", "Send to agent", false, (cx) => sendToAgent(cx, join(this.root, this.file)))))
-@@ -986,6 +1074,7 @@
+@@ -986,13 +1074,17 @@
        btn("ft-up", "↑", "Up a folder", false, () => { if (!this.root) return; this.follow = false; this.pinned = this.root.replace(/[\\/][^\\/]+[\\/]?$/, "") || "/"; this.pinnedOn = this.on; }),
        btn("ft-home", "⌂", this.follow ? "Following the focused pane" : "Back to the focused pane's folder", this.follow, () => { this.follow = true; this.pinned = null; }),
        btn("ft-hidden", this.showHidden ? "◉" : "○", this.showHidden ? "Hide dotfiles (.)" : "Show dotfiles (.)", this.showHidden, () => { this.showHidden = !this.showHidden; this.savePrefs(); }),
@@ -244,7 +244,17 @@
        btn("ft-size", "Σ", this.showSize ? "Show dates" : "Show sizes", Boolean(this.showSize), () => { this.showSize = !this.showSize; this.savePrefs(); }),
        btn("ft-collapse", "⊟", "Collapse all", false, (cx) => this.collapseAll(cx)),
      ] : [
-@@ -1017,6 +1106,10 @@
+       btn("ft-forget", "⊘", "Clear the list", false, () => { this.history = []; try { localStorage.setItem("history", "[]"); } catch {} }),
+     ];
+ 
++    // VNH: in the side panel, a rounded, bordered card like the Changes panel's; a pane has Herdr's own frame.
++    const inPanel = (() => { const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((h, c) => h ?? find(c, id), null)); return Boolean(find(layout(), "panel-body")?.children?.some((c) => c.content?.mod === NAME)); })();
+     const root = v_flex().id(NAME).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13)
++      .when(inPanel, (el) => el.rounded(10).border_1().border_color(t.border))
+       .track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
+       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 4) { this.width = size.width; cx.notify(); } })
+       .child(header);
+@@ -1017,6 +1109,10 @@
            .when(Boolean(this.query), (el) => el.child(div().id("ft-clear").flex_none().text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => this.clearSearch(cx)).child("×"))))
          .children(tools))
        .child(div().flex_1().min_h(0).relative().px(4)
