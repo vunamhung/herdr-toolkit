@@ -2,26 +2,14 @@ import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex, Popover, HoverCard } from "gpui-base";
 import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, exec, checking, shared, focused, notify } from "herdr";
 
-// The model picker's two tiers. Tier 1 switches the model (`/model <alias>`); tier 2 also sets the
-// thinking level (`/effort <level>`). Aliases are what Claude Code's `/model` accepts with an
-// argument (it switches at once, no picker); `key` is the word its status line prints for that
-// family, used only to light up the current row.
-const MODELS = [
-  { label: "Default", alias: "default", key: null },
-  { label: "Opus", alias: "opus", key: "opus" },
-  { label: "Sonnet", alias: "sonnet", key: "sonnet" },
-  { label: "Haiku", alias: "haiku", key: "haiku" },
-  { label: "Fable", alias: "fable", key: "fable" },
-  { label: "Opus Plan", alias: "opusplan", key: null },
-];
-const EFFORTS = [
-  { label: "Low", value: "low" },
-  { label: "Medium", value: "medium" },
-  { label: "High", value: "high" },
-  { label: "Xhigh", value: "xhigh" },
-  { label: "Max", value: "max" },
-  { label: "Auto", value: "auto" },
-];
+// The model picker's two tiers come from Claude Code's own model catalog, which it refreshes itself —
+// so the menu never invents a model or an effort level. ~/.claude/cache/model-catalog/<account>.json:
+//   catalog.config.models[]  { id, name ("Opus 5.5"), section ("main" = the quick picker), quick_select,
+//                              thinking: { effort_options: [{ id, name, badge? }] } }  the real effort
+//                              levels that model supports, named as Claude shows them ("Extra" = xhigh).
+//   catalog.state.thinking_by_model[]  { id, thinking: { effort } }  each model's persisted effort.
+// Tier 1 sends `/model <id>` (or `/model default`); tier 2 also sends `/effort <id>`.
+const CATALOG_DIR = "/.claude/cache/model-catalog";
 
 const PRICE_MS = 120000;
 const PRICES = [{ id: "bitcoin", label: "BTC" }, { id: "ethereum", label: "ETH" }, { id: "tether-gold", label: "Gold" }];
@@ -148,6 +136,7 @@ export default class ClaudeLimitsStatus extends View {
   init(_props, cx) {
     this.limits = null;
     this.menuOpen = false; // the model picker's dropup
+    this.catalog = null; // Claude Code's model catalog (models + per-model effort), loaded below
     this.git = null; // { key, info }
     this.gitAt = 0;
     this.gitBusy = false;
@@ -164,6 +153,29 @@ export default class ClaudeLimitsStatus extends View {
     // Prices: at once, then every 2 min while the window is active (none while it's in the background).
     this.refreshPrices(cx);
     cx.timer.every(PRICE_MS, (cx) => this.refreshPrices(cx));
+    // Model catalog: once now, then every 30 s (Claude Code rewrites it rarely).
+    cx.spawn(async (cx) => { await this.loadCatalog(); cx.notify(); });
+    cx.timer.every(30000, (cx) => cx.spawn(async (cx) => { await this.loadCatalog(); cx.notify(); }));
+  }
+
+  // Read Claude Code's own model catalog (newest file in the per-account folder). Keeps the last good
+  // one on any failure so the menu never empties.
+  async loadCatalog() {
+    try {
+      const dir = home() + CATALOG_DIR;
+      const r = await exec("sh", ["-c", 'ls -t "$1"/*.json 2>/dev/null | head -1', "_", dir]).catch(() => null);
+      const file = (r?.stdout ?? "").trim();
+      if (!file) return;
+      const cat = JSON.parse(await readTextFile(file))?.catalog;
+      if (!cat?.config?.models) return;
+      const next = {
+        models: cat.config.models,
+        effortByModel: Object.fromEntries((cat.state?.thinking_by_model ?? []).map((m) => [m.id, m.thinking?.effort ?? null])),
+      };
+      if (JSON.stringify(next) !== JSON.stringify(this.catalog)) this.catalog = next;
+    } catch {
+      // half-written or missing: keep the last good catalog
+    }
   }
 
   // BTC, ETH and gold (Tether Gold, one token per troy ounce) from CoinGecko's public price API:
@@ -361,47 +373,71 @@ export default class ClaudeLimitsStatus extends View {
   }
 
   // The model name as a dropup menu anchored to itself: click opens tier 1 (models); hovering a
-  // model opens tier 2 (thinking level). The content is built only while open, so the bar pays
-  // nothing for it on its timer re-renders.
+  // model opens tier 2 (effort). The effort sits beside the model, no parentheses, dimmer than the
+  // model. The content is built only while open, so the bar pays nothing for it on timer re-renders.
   modelMenu(t, l) {
-    const trigger = div().id("vnh-model").cursor_pointer()
+    const trigger = h_flex().id("vnh-model").gap(5).items_center().cursor_pointer()
       .when(this.menuOpen, (el) => el.text_color(t.foreground))
       .hover((s) => s.text_color(t.foreground))
-      .tooltip("Change model · hover a model for its thinking level")
-      .child(l.effort ? `${l.model} (${l.effort})` : l.model);
+      .tooltip("Change model · hover a model for its effort level")
+      .child(div().child(l.model))
+      .when(Boolean(l.effort), (el) => el.child(div().text_color(t.dim).child(l.effort)));
     return Popover.new("vnh-model-menu").anchor("bottom_left").open(this.menuOpen)
       .on_open_change((open, cx) => { this.menuOpen = open; cx.notify(); })
       .trigger(trigger)
       .when(this.menuOpen, (el) => el.content(this.modelMenuContent(t)));
   }
 
+  // Tier-1 rows: "Default" (recommended), then the catalog's quick-pick models, then the running
+  // model when it isn't one of them — each with its real version name, the running one ticked.
+  modelRows() {
+    const models = this.catalog?.models ?? [];
+    const curName = (this.limits?.model || "").toLowerCase();
+    const quick = models.filter((m) => m.quick_select || m.section === "main");
+    const rows = [{ id: "default", name: "Default", hint: "recommended", default: true, thinking: null }];
+    for (const m of quick) rows.push(m);
+    const cur = models.find((m) => (m.name || "").toLowerCase() === curName);
+    if (cur && !quick.some((m) => m.id === cur.id)) rows.push(cur);
+    return rows;
+  }
+
   modelMenuContent(t) {
-    const cur = (this.limits?.model || "").toLowerCase();
-    const effortNow = this.limits?.effort || null;
+    if (!this.catalog) return v_flex().w(190).p(4).rounded(8).border_1().border_color(t.border).bg(t.popover)
+      .child(div().px(8).py(6).text_size(12).text_color(t.dim).child("Loading models…"));
+    const curName = (this.limits?.model || "").toLowerCase();
+    const curEffort = this.limits?.effort || null;
     const modelRow = (m) => {
-      const on = Boolean(m.key) && cur.startsWith(m.key);
-      const row = h_flex().id(`vm-${m.alias}`).h(28).px(8).gap(8).items_center().rounded(5).cursor_pointer()
+      const on = !m.default && (m.name || "").toLowerCase() === curName;
+      const efforts = m.thinking?.effort_options ?? [];
+      const modelId = m.default ? "default" : m.id;
+      const row = h_flex().id(`vm-${m.id}`).h(28).px(8).gap(8).items_center().rounded(5).cursor_pointer()
         .text_size(12).text_color(on ? t.foreground : t.muted)
         .when(on, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => this.switchModel(cx, m.alias, null))
-        .child(div().flex_1().child(m.label))
-        .child(div().flex_none().text_color(t.dim).child("›"));
-      const sub = v_flex().w(116).p(4).gap(1).ml(6).rounded(8).border_1().border_color(t.border).bg(t.popover)
-        .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Thinking"))
-        .children(EFFORTS.map((e) => {
-          const eon = on && effortNow === e.value;
-          return h_flex().id(`ve-${m.alias}-${e.value}`).h(26).px(8).items_center().rounded(5).cursor_pointer()
+        .on_click((_e, cx) => this.switchModel(cx, modelId, null))
+        .child(div().flex_1().child(m.name))
+        .when(on, (el) => el.child(div().flex_none().text_color(t.accent).child("✓")))
+        .when(m.hint === "recommended", (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("default")))
+        .when(efforts.length > 0, (el) => el.child(div().flex_none().text_color(t.dim).child("›")));
+      if (!efforts.length) return row;
+      // This model's current effort: the running one for the active model, else its persisted level.
+      const effortNow = on ? curEffort : (this.catalog.effortByModel[m.id] ?? null);
+      const sub = v_flex().w(150).p(4).gap(1).ml(6).rounded(8).border_1().border_color(t.border).bg(t.popover)
+        .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Effort"))
+        .children(efforts.map((e) => {
+          const eon = effortNow === e.id;
+          return h_flex().id(`ve-${m.id}-${e.id}`).h(26).px(8).gap(6).items_center().rounded(5).cursor_pointer()
             .text_size(12).text_color(eon ? t.foreground : t.muted)
             .when(eon, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-            .on_click((_e, cx) => this.switchModel(cx, m.alias, e.value))
-            .child(e.label);
+            .on_click((_e, cx) => this.switchModel(cx, modelId, e.id))
+            .child(div().flex_1().child(e.name))
+            .when(Boolean(e.badge?.message), (el) => el.child(div().flex_none().text_size(10).text_color(e.badge.variant === "warning" ? t.ansi3 : t.dim).child(e.badge.message)));
         }));
-      return HoverCard.new(`vm-hc-${m.alias}`).anchor("right_center").open_delay(120).close_delay(250)
+      return HoverCard.new(`vm-hc-${m.id}`).anchor("right_center").open_delay(120).close_delay(250)
         .trigger(row).content(sub);
     };
-    return v_flex().w(150).p(4).gap(1).rounded(8).border_1().border_color(t.border).bg(t.popover)
+    return v_flex().w(200).p(4).gap(1).rounded(8).border_1().border_color(t.border).bg(t.popover)
       .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Model"))
-      .children(MODELS.map(modelRow));
+      .children(this.modelRows().map(modelRow));
   }
 
   // The Claude Code agent to retarget: the focused terminal when it is one, else the focused agent.
