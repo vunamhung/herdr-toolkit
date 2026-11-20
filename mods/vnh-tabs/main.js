@@ -118,6 +118,28 @@ export default class Tabs extends View {
       .finally(() => { this.pulling = false; });
   }
 
+  // VNH: the side panel (Files / Changes) and the Timeline share one width (this.width, kept in
+  // localStorage). Dragging whichever shows sets it; the one that shows next opens at it, and the
+  // hidden one is kept at it too.
+  syncWidths(panel, timeline) {
+    const pw = panel?.size?.px, tw = timeline?.size?.px;
+    if (!pw || !tw) return;
+    const visible = !panel.hidden ? "panel" : !timeline.hidden ? "timeline" : null;
+    if (this.width === undefined) { try { this.width = Number(localStorage.getItem("sideWidth")) || null; } catch { this.width = null; } }
+    if (!visible) { this.shownSide = null; return; }
+    const vw = visible === "panel" ? pw : tw, hidden = visible === "panel" ? "timeline" : "panel", hw = visible === "panel" ? tw : pw;
+    if (visible !== this.shownSide) {
+      // Just shown: take the shared width (unless there is none yet).
+      this.shownSide = visible;
+      if (this.width && Math.abs(vw - this.width) >= 1) { run("layout.resize", { id: visible, px: Math.round(this.width) }); return; }
+    }
+    if (!this.width || Math.abs(vw - this.width) >= 1) {
+      this.width = vw;
+      try { localStorage.setItem("sideWidth", String(Math.round(vw))); } catch {}
+    }
+    if (Math.abs(hw - this.width) >= 1) run("layout.resize", { id: hidden, px: Math.round(this.width) });
+  }
+
   // VNH: one right-side view at a time. Showing Files / Changes / Git while the Timeline shows
   // closes the Timeline for good (no panel to bring back: the person just picked one).
   leaveTimeline() {
@@ -341,6 +363,7 @@ export default class Tabs extends View {
     const enabled = [...(shared("workspace.panels") ?? ["files", "changes"]), ...(body?.children?.some(c => c.id === "graph") ? ["graph"] : [])];
     if (this.insights && !panes().some((p) => p.mod === "insights")) this.restoreInsights(false);
     this.syncTimeline(find(root, "timeline"), panel);
+    this.syncWidths(panel, find(root, "timeline"));
     this.syncPanel(space, panel, body, enabled);
     const panelButton = (id, label, icon) => {
       const on = panel && !panel.hidden && body?.active === id;
