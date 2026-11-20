@@ -555,7 +555,10 @@ export default class FileTree extends View {
   rootRow(r, t, R) {
     const o = r.owner, g = o.git, b = g.branch, tone = tones(t), selected = r.key === this.cursor;
     const c = g.counts.get("") ?? [0, 0, 0], changes = c[0] + c[1] + c[2], gc = changes ? gitColor(t, g.status.get("")) : null;
-    return h_flex().id(`ft-${r.key}`).h(ROW).flex_none().pl(6).pr(10).gap(6).items_center().rounded(R).cursor_pointer()
+    // Drag a root into a terminal or Claude Code's input: `@<absolute folder>` (a root outside the
+    // agent's folder, so never relative); another machine's root gives its plain path.
+    return h_flex().drag_paths([o.on ? o.root : `@${o.root}`], { on: o.on ?? null })
+      .id(`ft-${r.key}`).h(ROW).flex_none().pl(6).pr(10).gap(6).items_center().rounded(R).cursor_pointer()
       .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
       .child(svg(ICON(`chevron-${r.open ? "down" : "right"}`)).size(12).flex_none().text_color(t.dim))
       .child(image(fileIcon(o.root, true, r.open, settings().dark !== false)).size(16).flex_none())
