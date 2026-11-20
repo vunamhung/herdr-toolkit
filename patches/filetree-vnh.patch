@@ -49,8 +49,8 @@
 +    // "filetree.focus": the Markdown tab hands the keyboard back here when it closes.
 +    cx.spawn(async (cx) => { for (;;) { if (String(await nextCommand()).replace(/^filetree\./, "") === "focus") this.handle?.focus(); cx.notify(); } });
      cx.timer.every(1000, (cx) => this.tick(cx));
-   }
- 
++  }
++
 +  // VNH: on screen? Only while the layout's side panel shows this block; anywhere else always.
 +  shownNow() {
 +    const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((hit, c) => hit ?? find(c, id), null));
@@ -58,8 +58,8 @@
 +    const block = body?.children?.find((c) => c.content?.mod === NAME);
 +    if (!block) return true;
 +    return Boolean(panel && !panel.hidden && body.active === block.id);
-+  }
-+
+   }
+ 
 +  // VNH: a rendered Markdown tab; Esc or Space there closes it and comes back to the tab it came from.
 +  openMarkdown(rel) {
 +    if (!rel || !this.root) return;
@@ -118,7 +118,110 @@
          out.push({ rel, e, depth, open });
          if (open && depth < 40) walk(rel, depth + 1);
        }
-@@ -755,9 +795,26 @@
+@@ -702,7 +742,7 @@
+   // ── preview and opening ──────────────────────────────────────────────────────────────
+   closePreview() {
+     this.code?.release();
+-    this.code = null; this.md = null; this.file = null; this.fileError = null;
++    this.code = null; this.md = null; this.mm = null; this.file = null; this.fileError = null;
+   }
+ 
+   // inRender: called while drawing (a request from another mod), where notify is refused.
+@@ -720,6 +760,15 @@
+         const ext = rel.includes(".") ? rel.split(".").pop().toLowerCase() : "txt";
+         if (ext === "md" || ext === "markdown" || ext === "mdx") { this.md = value; return; }
+         const t = theme();
++        // VNH: what the minimap draws: each line's indent and length, where each starts (to jump),
++        // and the file's changes against HEAD.
++        const lines = value.split("\n");
++        this.mm = { lines: lines.length, shape: lines.slice(0, 50000).map((l) => {
++          const indent = l.length - l.trimStart().length, body = l.trim();
++          return [Math.min(indent, 60), Math.min(body.length, 120), /^(\/\/|#|\/\*|\*|--|;)/.test(body) ? 1 : 0];
++        }), starts: [], hunks: [] };
++        let at = 0; for (const l of lines) { this.mm.starts.push(at); at += l.length + 1; }
++        this.loadHunks(rel, ctx, cx);
+         this.code = EditorState.new({ language: LANG[ext] ?? ext, readonly: true, value,
+           font_family: settings().font_family, font_size: 12,
+           syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } });
+@@ -727,8 +776,77 @@
+       finally { cx.notify(); }
+     });
+     if (!inRender) cx.notify();
++  }
++
++  // VNH: the previewed file's changes against HEAD, for the minimap's left edge.
++  loadHunks(rel, ctx, cx) {
++    if (!this.git?.top) return;
++    cx.spawn(async (cx) => {
++      const r = await exec("git", [...READ, "diff", "--no-color", "-U0", "HEAD", "--", rel], { cwd: ctx.root, on: ctx.on }).catch(() => null);
++      if (this.file !== rel || !this.mm) return;
++      const hunks = [];
++      for (const line of (r?.stdout ?? "").split("\n")) {
++        const m = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
++        if (!m) continue;
++        const removed = m[1] === undefined ? 1 : Number(m[1]), start = Number(m[2]), added = m[3] === undefined ? 1 : Number(m[3]);
++        hunks.push({ start, count: added, kind: added === 0 ? "deleted" : removed === 0 ? "added" : "modified" });
++      }
++      if (!hunks.length && this.git.status?.get(rel) === "?") hunks.push({ start: 1, count: this.mm.lines, kind: "added" });
++      this.mm.hunks = hunks;
++      cx.notify();
++    });
++  }
++
++  // Puts the caret on a line, which scrolls the read-only editor there.
++  jumpTo(line, cx) {
++    if (!this.code || !this.mm) return;
++    const at = this.mm.starts[Math.min(this.mm.starts.length, Math.max(1, line)) - 1] ?? 0;
++    this.code.focus();
++    this.code.set_selected_range({ start: at, end: at });
++    cx.notify();
+   }
+ 
++  // VNH: a VS Code style minimap beside the code: every line (or a group of them in a long file) as a
++  // bar with its indent and length, comments fainter; the changes against HEAD on its left edge; the
++  // caret as an accent line. Press or drag on it to jump there. (The editor can't report its scroll,
++  // so there is no viewport box.)
++  minimap(t) {
++    const mm = this.mm, H = Math.max(40, this.mmH ?? 400), W = 56;
++    const rows = Math.max(1, Math.min(mm.lines, Math.floor(H / 2))), per = mm.lines / rows, step = H / rows;
++    const bars = [];
++    for (let i = 0; i < rows; i++) {
++      // A group's longest line stands for it.
++      let best = null;
++      for (let j = Math.floor(i * per); j < Math.min(mm.shape.length, Math.floor((i + 1) * per) || 1); j++) {
++        const s = mm.shape[j];
++        if (s && s[1] && (!best || s[1] > best[1])) best = s;
++      }
++      if (!best) continue;
++      bars.push(div().absolute().top(i * step).left(6 + best[0] * 0.5).h(Math.max(1, Math.min(2, step - 0.4)))
++        .w(Math.max(1, Math.min(W - 8 - best[0] * 0.5, best[1] * 0.42))).rounded(0.5)
++        .bg(best[2] ? `${t.dim}66` : `${t.foreground}40`));
++    }
++    const color = { added: t.ansi2, modified: t.ansi4 ?? t.ansi3, deleted: t.ansi1 };
++    const marks = mm.hunks.slice(0, 300).map((h) => div().absolute().left(1).w(3)
++      .top(((h.kind === "deleted" ? h.start : h.start - 1) / mm.lines) * H).h(Math.max(2, (h.count / mm.lines) * H)).bg(color[h.kind]));
++    const caret = this.code?.selected_range?.()?.start;
++    let caretLine = null;
++    if (typeof caret === "number" && caret > 0) { let lo = 0, hi = mm.starts.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (mm.starts[m] <= caret) lo = m; else hi = m - 1; } caretLine = lo; }
++    const go = (e, cx) => {
++      const y = e.local_position?.y, h = e.bounds?.height;
++      if (typeof y !== "number" || !h) return;
++      this.jumpTo(Math.max(1, Math.round((y / h) * mm.lines)), cx);
++    };
++    return div().id("ft-minimap").relative().w(W).flex_none().h_full().border_l(1).border_color(t.border).overflow_hidden().cursor_pointer()
++      .on_size_change((size, cx) => { const z = Number(settings().zoom) > 0 ? Number(settings().zoom) : 1, h = size.height / z; if (Math.abs(h - (this.mmH ?? 0)) > 2) { this.mmH = h; cx.notify(); } })
++      .on_mouse_down("left", (e, cx) => { this.mmDrag = true; go(e, cx); })
++      .on_mouse_up("left", () => { this.mmDrag = false; })
++      .on_hover((over) => { if (!over) this.mmDrag = false; })
++      .on_mouse_move((e, cx) => { if (this.mmDrag) go(e, cx); })
++      .children(bars).children(marks)
++      .when(caretLine !== null, (el) => el.child(div().absolute().left(0).right(0).top((caretLine / mm.lines) * H).h(2).bg(t.accent)));
++  }
++
+   // Double-click and Enter: config.json's "open". "preview" shows it here; "" the default
+   // app; anything else is a command with {path} and {dir}, run without a shell.
+   openFile(rel, cx) {
+@@ -755,9 +873,26 @@
  
    // A virtual list's rows can't hold handlers, so the list reports the row and
    // a second press on the same row within 450 ms is the double-click.
@@ -145,7 +248,7 @@
      const now = Date.now(), double = this.lastPress?.rel === rel && now - this.lastPress.at < 450;
      this.lastPress = double ? null : { rel, at: now };
      this.handle.focus();
-@@ -795,6 +852,7 @@
+@@ -795,6 +930,7 @@
      if (this.file) {
        if (k === "escape" || k === "left" || k === "h") this.closePreview();
        else if (k === "o" && !this.on) openExternal(join(this.root, this.file)).catch(() => {});
@@ -153,7 +256,7 @@
        else return;
        cx.stop_propagation(); cx.notify(); return;
      }
-@@ -807,6 +865,7 @@
+@@ -807,6 +943,7 @@
      else if (k === "end") this.move(rows, rows.length);
      else if (k === "/") { this.input.focus(); }
      else if (k === ".") { this.showHidden = !this.showHidden; this.savePrefs(); }
@@ -161,7 +264,7 @@
      else if (k === "escape") { if (this.query) this.clearSearch(cx); else this.cursor = ""; }
      else if (/^[1-9]$/.test(k) && VIEWS[Number(k) - 1]) this.setView(VIEWS[Number(k) - 1][0], cx);
      else if (!cur) return;
-@@ -816,7 +875,7 @@
+@@ -816,7 +953,7 @@
      else if ((k === "right" || k === "l") && cur.e.dir && !cur.open) this.toggle(cur.rel, cx);
      else if (k === "left" || k === "h") { if (cur.e.dir && cur.open && !this.hits) this.toggle(cur.rel, cx); else if (dirOf(cur.rel) || cur.depth) { this.cursor = dirOf(cur.rel); this.scrollTo = this.cursor; } }
      else if (k === "enter") { if (this.hits) this.jump(cx); else if (cur.e.dir) this.toggle(cur.rel, cx); else this.openFile(cur.rel, cx); }
@@ -170,7 +273,7 @@
      else if (k === "p" && !cur.e.dir) this.show(cur.rel, cx);
      else if (k === "y") copy(cx, shift ? join(this.root, cur.rel) : cur.rel);
      else if (k === "a") sendToAgent(cx, join(this.root, cur.rel));
-@@ -838,12 +897,20 @@
+@@ -838,12 +975,20 @@
    }
  
    // A row of Recent: a status pill, the name, then what happened to it.
@@ -192,7 +295,7 @@
        .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
        .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
        .child(this.pill(h.kind === "read" ? "R" : h.kind === "commit" ? "C" : "W", color, R))
-@@ -867,13 +934,17 @@
+@@ -867,13 +1012,17 @@
        : (!e.dir && !loc && this.width > 250 ? stamp(e.mtime) : "");
      const selected = rel === this.cursor;
      const pulse = (el) => el.loop("opacity", { from: 0.35, to: 1, period: 900 });
@@ -212,7 +315,7 @@
        .when(Boolean(meta), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(meta)))
        .when(Boolean(loc?.[0]), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi2).child(`+${loc[0]}`)))
        .when(Boolean(loc?.[1]), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${loc[1]}`)))
-@@ -969,6 +1040,7 @@
+@@ -969,6 +1118,7 @@
        .when(Boolean(this.file), (el) => el.child(image(fileIcon(this.file, false, false, settings().dark !== false)).size(14).flex_none()))
        .child(div().flex_1().min_w(0).truncate().font_medium().text_color(this.file ? t.foreground : t.muted).child(title))
        .when(Boolean(this.file), (el) => el
@@ -220,7 +323,7 @@
          .when(!this.on, (el) => el.child(btn("ft-ext", "↗", "Open in default app (o)", false, () => openExternal(join(this.root, this.file)).catch(() => {}))))
          .child(btn("ft-copy", "⧉", "Copy path", false, (cx) => copy(cx, this.file)))
          .child(btn("ft-send", "@", "Send to agent", false, (cx) => sendToAgent(cx, join(this.root, this.file)))))
-@@ -986,6 +1058,7 @@
+@@ -986,6 +1136,7 @@
        btn("ft-up", "↑", "Up a folder", false, () => { if (!this.root) return; this.follow = false; this.pinned = this.root.replace(/[\\/][^\\/]+[\\/]?$/, "") || "/"; this.pinnedOn = this.on; }),
        btn("ft-home", "⌂", this.follow ? "Following the focused pane" : "Back to the focused pane's folder", this.follow, () => { this.follow = true; this.pinned = null; }),
        btn("ft-hidden", this.showHidden ? "◉" : "○", this.showHidden ? "Hide dotfiles (.)" : "Show dotfiles (.)", this.showHidden, () => { this.showHidden = !this.showHidden; this.savePrefs(); }),
@@ -228,7 +331,16 @@
        btn("ft-size", "Σ", this.showSize ? "Show dates" : "Show sizes", Boolean(this.showSize), () => { this.showSize = !this.showSize; this.savePrefs(); }),
        btn("ft-collapse", "⊟", "Collapse all", false, (cx) => this.collapseAll(cx)),
      ] : [
-@@ -1017,6 +1090,9 @@
+@@ -998,7 +1149,7 @@
+       .child(header);
+ 
+     if (this.file) {
+-      return root.child(this.code ? Editor.new(this.code).flex_1().min_h(0)
++      return root.child(this.code ? h_flex().flex_1().min_h(0).child(Editor.new(this.code).flex_1().min_w(0).h_full()).when(Boolean(this.mm), (el) => el.child(this.minimap(t)))
+         : this.md !== null ? div().id("ft-md").flex_1().min_h(0).overflow_y_scrollbar().px(14).py(10).child(TextView.markdown("ft-md-text", this.md).selectable(true))
+         : div().p(12).text_color(t.dim).child(this.fileError || "Loading file…"));
+     }
+@@ -1017,6 +1168,9 @@
            .when(Boolean(this.query), (el) => el.child(div().id("ft-clear").flex_none().text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => this.clearSearch(cx)).child("×"))))
          .children(tools))
        .child(div().flex_1().min_h(0).relative().px(4)
