@@ -44,6 +44,7 @@ function ago(sec) {
 export default class Sessions extends View {
   init(_props, cx) {
     this.query = ""; this.at = 0; this.busy = false;
+    this.hover = null; this.confirm = null; // the row under the pointer, the one asking ✓ / ✗
     this.cache = shared(CACHE) ?? {};
     this.order = Object.values(this.cache).filter((x) => !x.sdk).sort((a, b) => b.m - a.m);
     this.handle = cx.focus_handle();
@@ -107,6 +108,32 @@ export default class Sessions extends View {
     return scored.sort((a, b) => a.rank - b.rank).map((x) => x.s);
   }
 
+  // Moves the conversation to the Trash (Finder, so Put Back works): its .jsonl and its <id>/ folder
+  // (subagents, tool results). A conversation written in the last 5 min, or one a `claude --resume`
+  // process has open, is refused: it may be live and still writing.
+  remove(s, cx) {
+    this.confirm = null;
+    if (Date.now() / 1000 - s.m < 300) { notify({ title: "Not deleted: the conversation is active", body: "It was written in the last 5 minutes. Close it first.", level: "warning", timeout: 5000 }); cx.notify(); return; }
+    cx.spawn(async (cx) => {
+      const live = await exec("sh", ["-c", 'ps -ax -o args= | grep -F -- "$1" | grep -v grep | grep -q claude && echo live; true', "ps", s.id]).catch(() => null);
+      if ((live?.stdout ?? "").includes("live")) { notify({ title: "Not deleted: the conversation is open", body: "A claude --resume process uses it.", level: "warning", timeout: 5000 }); return; }
+      const dir = s.f.replace(/\.jsonl$/, "");
+      const script = 'on run argv\ntell application "Finder"\nrepeat with p in argv\ndelete (POSIX file (contents of p) as alias)\nend repeat\nend tell\nend run';
+      const args = ["-e", script, s.f];
+      const hasDir = await exec("test", ["-d", dir]).then((r) => r.code === 0).catch(() => false);
+      if (hasDir) args.push(dir);
+      const r = await exec("osascript", args).catch((e) => ({ code: 1, stderr: String(e) }));
+      if (r.code === 0) {
+        const { [s.f]: _gone, ...rest } = shared(CACHE) ?? {};
+        setShared(CACHE, rest);
+        delete this.cache[s.f];
+        this.order = this.order.filter((x) => x.f !== s.f);
+        notify({ title: "Moved to the Trash", body: s.title || s.prompt || s.id, level: "success", timeout: 3000 });
+      } else notify({ title: "Couldn't delete the conversation", body: (r.stderr || "").trim(), level: "error", timeout: 6000 });
+      cx.notify();
+    });
+  }
+
   open(s) {
     if (!s) return;
     this.close();
@@ -141,9 +168,23 @@ export default class Sessions extends View {
         .children(rows.map((s, i) => {
           const on = i === this.at;
           const title = s.title || s.prompt || "(no prompt)";
-          return v_flex().id(`ses-${s.id}`).h(50).flex_none().px(10).py(5).gap(3).justify_center().rounded(7).cursor_pointer()
+          const asking = this.confirm === s.f, shown = asking || this.hover === s.f;
+          const small = (id, icon, color, tip, action) => div().id(id).size(24).flex_none().flex().items_center().justify_center().rounded(6)
+            .bg(t.raised).border_1().border_color(t.border).text_color(color).cursor_pointer().tooltip(tip)
+            .hover((st) => st.bg(t.hover))
+            .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .on_click((_e, cx) => { cx.stop_propagation(); action(cx); })
+            .child(svg(ICON(icon)).size(13));
+          return v_flex().id(`ses-${s.id}`).relative().h(50).flex_none().px(10).py(5).gap(3).justify_center().rounded(7).cursor_pointer()
             .when(on, (el) => el.bg(t.accent + "33")).hover((st) => st.bg(t.hover))
+            .on_hover((over, cx) => { const next = over ? s.f : this.hover === s.f ? null : this.hover; if (next !== this.hover) { this.hover = next; if (!over && this.confirm === s.f) this.confirm = null; cx.notify(); } })
             .on_click(() => this.open(s))
+            // VNH: on hover a trash at the right edge; a press asks ✓ / ✗ right beside it.
+            .when(shown, (el) => el.child(h_flex().absolute().right(8).top(0).bottom(0).gap(4).items_center()
+              .when(asking, (r) => r
+                .child(small(`del-yes-${s.id}`, "check", t.ansi1, "Move to the Trash", (cx) => this.remove(s, cx)))
+                .child(small(`del-no-${s.id}`, "x", t.muted, "Keep it", (cx) => { this.confirm = null; cx.notify(); })))
+              .when(!asking, (r) => r.child(small(`del-${s.id}`, "trash", t.dim, "Delete this conversation", (cx) => { this.confirm = s.f; cx.notify(); })))))
             .child(h_flex().gap(8).items_center()
               .child(svg(ICON("chat")).size(13).flex_none().text_color(on ? t.accent : t.muted))
               .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).when(on, (el) => el.font_medium()).child(title))
