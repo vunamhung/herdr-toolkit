@@ -7,7 +7,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, TextView } from "gpui-base";
 import ICONS from "./icons.js"; // copied from the file-icons mod (mods cannot import across folders)
-import { spaces, panes, agents, focused, exec, readTextFile, watchFolder, theme, settings, window, layout, home, appHome, props, run, notify, openOverlay, closeOverlay, shared, setShared, nextCommand } from "herdr";
+import { spaces, panes, agents, focused, exec, readTextFile, writeTextFile, watchFolder, theme, settings, window, layout, home, appHome, props, run, notify, openOverlay, closeOverlay, shared, setShared, nextCommand, hc } from "herdr";
 
 const NAME = "vnh-filetree"; // VNH clone of filetree (the hook bridge stays in mods/filetree)
 const ICON = (name) => `mods/${NAME}/${name}.svg`;
@@ -155,6 +155,79 @@ function fileIcon(path, dir, open, dark) {
   id ??= lookup(table, name, dark);
   for (let dot = name.indexOf("."); !id && dot !== -1; dot = name.indexOf(".", dot + 1)) id = lookup("fileExtensions", name.slice(dot + 1), dark);
   return `${ICON_DIR}/${id ?? ICONS.file}.svg`;
+}
+
+// ── VNH: more folders in a space (multi-root, as VS Code's "Add Folder to Workspace") ──────
+// A folder dropped on the panel joins the active space as another root, listed under the space's
+// own folder; right-click a root to remove it. Roots are kept per space in shared FOLDERS. Claude
+// sees them too: new agents through the project's .claude/settings.local.json
+// (permissions.additionalDirectories, only entries we added are ever removed), idle running ones
+// through `/add-dir` (Claude then asks to trust the folder in that agent).
+const FOLDERS = "vnh.space.folders";              // { [spaceId]: [absolute folder, …] }
+const CLAUDE_DIRS = "vnh.space.folders.claude";   // { [settings file]: [folders we added there] }
+const MAX_ROOTS = 8;
+// Row keys of the extra roots; the space's own folder keeps plain relative keys.
+const keyOf = (rid, rel) => `\u0001${rid}\u0002${rel}`;
+const headKey = (rid) => `\u0001${rid}\u0003`;
+function parseKey(k) {
+  const m = typeof k === "string" ? /^\u0001(\d+)([\u0002\u0003])(.*)$/s.exec(k) : null;
+  return m ? { rid: Number(m[1]), head: m[2] === "\u0003", rel: m[3] } : null;
+}
+const activeSpace = () => spaces().find((s) => s.active) ?? null;
+
+async function claudeDirs(project, add, remove) {
+  if (!project || (!add.length && !remove.length)) return;
+  const file = `${project}/.claude/settings.local.json`;
+  const before = await readTextFile(file).catch(() => null);
+  let json = {};
+  try { json = before ? JSON.parse(before) : {}; } catch { notify({ title: "Not shared with Claude", body: `${file} is not valid JSON`, level: "warning", timeout: 5000 }); return; }
+  if (!before && !add.length) return;
+  const mine = new Set((shared(CLAUDE_DIRS) ?? {})[file] ?? []);
+  const dirs = new Set(Array.isArray(json.permissions?.additionalDirectories) ? json.permissions.additionalDirectories : []);
+  for (const p of add) if (!dirs.has(p)) { dirs.add(p); mine.add(p); }
+  for (const p of remove) if (mine.has(p)) { dirs.delete(p); mine.delete(p); }
+  const permissions = { ...(json.permissions ?? {}), additionalDirectories: [...dirs] };
+  if (!dirs.size) delete permissions.additionalDirectories;
+  const next = { ...json, permissions };
+  if (!Object.keys(permissions).length) delete next.permissions;
+  try {
+    await exec("mkdir", ["-p", `${project}/.claude`]);
+    await writeTextFile(file, JSON.stringify(next, null, 2) + "\n", before);
+    setShared(CLAUDE_DIRS, { ...(shared(CLAUDE_DIRS) ?? {}), [file]: [...mine] });
+  } catch (e) { notify({ title: "Not shared with Claude", body: String(e?.message ?? e), level: "warning", timeout: 5000 }); }
+}
+
+// Idle Claude agents of the space get `/add-dir <folder>` typed in (hc waits for an unfinished draft).
+function tellAgents(spaceId, folders) {
+  for (const a of agents()) {
+    if (a.space !== spaceId || a.status !== "idle" || a.app !== "claude-code") continue;
+    for (const p of folders) hc(["send", "--if", "idle", a.address, `/add-dir ${p}`]).catch(() => {});
+  }
+}
+
+async function addSpaceFolders(dirs, primary, project) {
+  const sp = activeSpace();
+  if (!sp) return [];
+  const all = shared(FOLDERS) ?? {}, list = [...(all[sp.id] ?? [])], added = [];
+  for (let p of dirs) {
+    p = p.replace(/\/+$/, "") || "/";
+    if (p === primary || list.includes(p)) continue;
+    if (list.length >= MAX_ROOTS - 1) { notify({ title: `A space holds at most ${MAX_ROOTS} folders`, level: "warning", timeout: 4000 }); break; }
+    list.push(p); added.push(p);
+  }
+  if (!added.length) return added;
+  setShared(FOLDERS, { ...all, [sp.id]: list });
+  await claudeDirs(project, added, []);
+  tellAgents(sp.id, added);
+  notify({ title: added.length > 1 ? `Added ${added.length} folders to ${sp.name}` : `Added ${baseOf(added[0])} to ${sp.name}`, body: "Claude agents in this space can use it too.", level: "success", timeout: 3000 });
+  return added;
+}
+
+async function removeSpaceFolder(spaceId, path, project) {
+  const all = shared(FOLDERS) ?? {}, list = (all[spaceId] ?? []).filter((p) => p !== path);
+  setShared(FOLDERS, { ...all, [spaceId]: list });
+  await claudeDirs(project, [], [path]);
+  notify({ title: `Removed ${baseOf(path)} from the space`, body: "Its files are untouched.", level: "info", timeout: 3000 });
 }
 
 // ── where to look ──────────────────────────────────────────────────────────────────────
@@ -334,8 +407,8 @@ export default class FileTree extends View {
     });
     this.watchActivity(cx);
     // VNH: no reads while the side panel hides the tree; it catches up when it shows.
-    cx.timer.every(10000, (cx) => { if (this.shownNow()) this.refresh(cx); else this.stale = true; });
-    cx.timer.every(1000, (cx) => { if (this.stale && this.shownNow()) { this.stale = false; this.refresh(cx); } });
+    cx.timer.every(10000, (cx) => { if (this.shownNow()) this.refreshAll(cx); else this.stale = true; });
+    cx.timer.every(1000, (cx) => { if (this.stale && this.shownNow()) { this.stale = false; this.refreshAll(cx); } });
     // "filetree.focus": the Markdown tab hands the keyboard back here when it closes.
     cx.spawn(async (cx) => { for (;;) { if (String(await nextCommand()).replace(/^filetree\./, "") === "focus") this.handle?.focus(); cx.notify(); } });
     cx.timer.every(1000, (cx) => this.tick(cx));
@@ -353,6 +426,7 @@ export default class FileTree extends View {
   // VNH: a rendered Markdown tab; Esc or Space there closes it and comes back to the tab it came from.
   openMarkdown(rel) {
     if (!rel || !this.root) return;
+    if (rel === this.file && this.fileAbs) { openMarkdownTab(this.fileAbs, null); return; }
     openMarkdownTab(join(this.root, rel), this.on);
   }
 
@@ -390,6 +464,154 @@ export default class FileTree extends View {
   }
 
   current(ctx) { return this.ctx === ctx; }
+
+  // ── VNH: extra roots ─────────────────────────────────────────────────────────────────
+  // Each extra root is a copy of this panel (Object.create) with its own tree, git status, index
+  // and folder watch; the shared UI state (cursor, scroll target) maps to keyOf(rid, rel).
+  extraPaths() {
+    const sp = activeSpace();
+    if (!sp || sp.machine || this.on) return [];
+    const seen = new Set([this.root]);
+    return ((shared(FOLDERS) ?? {})[sp.id] ?? []).filter((p) => !seen.has(p) && seen.add(p)).slice(0, MAX_ROOTS - 1);
+  }
+
+  subList() { return this.isSub ? [] : (this.subs ?? []); }
+
+  syncRoots(cx) {
+    const want = this.extraPaths(), have = this.subs ?? [];
+    if (want.length === have.length && want.every((p, i) => have[i].root === p)) return;
+    const keep = new Map(have.map((s) => [s.root, s]));
+    for (const s of have) if (!want.includes(s.root)) s.ctx = { gone: true };
+    this.subs = want.map((p, i) => { const s = keep.get(p) ?? this.makeSub(p, cx); s.rid = i + 1; return s; });
+  }
+
+  makeSub(path, cx) {
+    const view = this, sub = Object.create(view);
+    sub.isSub = true; sub.view = view;
+    sub.ctx = { key: JSON.stringify([path, null]), root: path, on: null }; sub.root = path; sub.on = null;
+    sub.entries = new Map(); sub.folders = new Set(); sub.pending = new Set(); sub.git = emptyGit(); sub.index = null;
+    sub.hits = null; sub.sizes = new Map(); sub.sizing = new Set(); sub.error = null; sub.limited = false;
+    sub.loading = false; sub.again = false; sub.watched = null; sub.visible = []; sub.recent = [];
+    const map = (name) => Object.defineProperty(sub, name, {
+      get() { const k = parseKey(view[name]); return k && !k.head && k.rid === sub.rid ? k.rel : view[name] == null ? view[name] : "\u0000"; },
+      set(v) { view[name] = v == null ? v : v === "" ? headKey(sub.rid) : keyOf(sub.rid, v); },
+    });
+    map("cursor"); map("scrollTo");
+    sub.refresh(cx);
+    return sub;
+  }
+
+  refreshAll(cx) { this.refresh(cx); for (const s of this.subList()) s.refresh(cx); }
+
+  ownerOf(rid) { return rid === 0 ? this : this.subList().find((s) => s.rid === rid) ?? null; }
+
+  rootOpen(R) { return !(this.closedRoots ?? new Set()).has(R.root); }
+  toggleRoot(R, cx) {
+    this.closedRoots ??= new Set();
+    if (this.closedRoots.has(R.root)) this.closedRoots.delete(R.root); else this.closedRoots.add(R.root);
+    cx.notify();
+  }
+
+  // Dropped from Finder: folders join the space (not ones already shown inside a root).
+  dropFolders(paths, cx) {
+    if (!paths?.length || this.isSub) return;
+    cx.spawn(async () => {
+      const r = await exec("sh", ["-c", 'for p in "$@"; do [ -d "$p" ] && printf "%s\\n" "$p"; done; true', "dirs", ...paths]).catch(() => null);
+      const roots = [this.root, ...this.subList().map((s) => s.root)].filter(Boolean);
+      const dirs = (r?.stdout ?? "").split("\n").map((d) => d.replace(/\/+$/, "")).filter(Boolean)
+        .filter((d) => !roots.some((root) => d !== root && relTo(root, d) !== null));
+      if (!dirs.length) { notify({ title: "Drop a folder to add it to the space", body: "Files and folders already shown here are left out.", level: "info", timeout: 3000 }); return; }
+      await addSpaceFolders(dirs, this.root, this.git.top || this.root);
+    });
+  }
+
+  // The panel's rows with several roots: a header per root, then its tree (one level in).
+  multiRows(subs) {
+    const out = [], searching = Boolean(this.query.trim());
+    for (const R of [this, ...subs]) {
+      const rid = R === this ? 0 : R.rid, key = headKey(rid), open = searching || this.rootOpen(R);
+      out.push({ rel: key, key, head: true, rid, owner: R, e: { name: baseOf(R.root) || R.root, dir: true }, depth: 0, open });
+      if (!open || (searching && R.hits === null)) continue;
+      for (const r of R.treeRows(1)) out.push(R === this ? r : { ...r, rel: keyOf(rid, r.rel), key: keyOf(rid, r.rel), local: r.rel, owner: R, rid });
+    }
+    return out;
+  }
+
+  searchSub(S, q, seq, cx) {
+    const ctx = S.ctx;
+    cx.spawn(async (cx) => {
+      try {
+        if (!S.index) { const index = await buildIndex(S.root, S.on); if (S.ctx !== ctx) return; S.index = index; }
+        if (seq !== this.searchSeq) return;
+        const matches = S.index.all.filter((rel) => rel.toLowerCase().includes(q) && (this.showHidden || !rel.split("/").some((x) => x.startsWith("."))) && (this.showIgnored || !S.isIgnored(rel)));
+        const named = matches.filter((rel) => baseOf(rel).toLowerCase().includes(q));
+        S.hits = [...new Set([...named, ...matches])].slice(0, FIND_LIMIT);
+      } catch { if (seq === this.searchSeq) S.hits = []; }
+      finally { cx.notify(); }
+    });
+  }
+
+  // A root's header: chevron, folder, name in its git color, branch and counts.
+  rootRow(r, t, R) {
+    const o = r.owner, g = o.git, b = g.branch, tone = tones(t), selected = r.key === this.cursor;
+    const c = g.counts.get("") ?? [0, 0, 0], changes = c[0] + c[1] + c[2], gc = changes ? gitColor(t, g.status.get("")) : null;
+    return h_flex().id(`ft-${r.key}`).h(ROW).flex_none().pl(6).pr(10).gap(6).items_center().rounded(R).cursor_pointer()
+      .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
+      .child(svg(ICON(`chevron-${r.open ? "down" : "right"}`)).size(12).flex_none().text_color(t.dim))
+      .child(image(fileIcon(o.root, true, r.open, settings().dark !== false)).size(16).flex_none())
+      .child(div().flex_1().min_w(0).truncate().font_semibold().text_color(gc ?? t.foreground).child(r.e.name))
+      .when(Boolean(b?.head) && this.width > 230, (el) => el.child(h_flex().flex_none().gap(3).items_center().text_size(11).text_color(t.dim)
+        .child(svg(ICON("git-branch")).size(10).flex_none()).child(div().max_w(96).truncate().child(b.head))))
+      .when(Boolean(b?.ahead), (el) => el.child(div().flex_none().text_size(11).text_color(tone.teal).child(`↑${b.ahead}`)))
+      .when(Boolean(b?.behind), (el) => el.child(div().flex_none().text_size(11).text_color(tone.blue).child(`↓${b.behind}`)))
+      .when(changes > 0, (el) => el.child(div().flex_none().size(6).rounded(3).bg(gc ?? t.ansi3)));
+  }
+
+  // Presses, keys and menus on an extra root's rows (and on root headers).
+  pressMulti(k, key, cx) {
+    const R = this.ownerOf(k.rid);
+    if (!R) return;
+    this.handle.focus();
+    this.cursor = key;
+    if (k.head) { this.toggleRoot(R, cx); return; }
+    const r = this.rows().find((x) => x.rel === key);
+    if (!r) return;
+    const x = this.downX; this.downX = null;
+    const abs = join(R.root, k.rel);
+    if (x !== null && x !== undefined && !r.e?.dir && MARKDOWN.test(k.rel) && this.onEye(r, x)) { openMarkdownTab(abs, null); cx.notify(); return; }
+    const now = Date.now(), double = this.lastPress?.rel === key && now - this.lastPress.at < 450;
+    this.lastPress = double ? null : { rel: key, at: now };
+    if (r.e.dir) { if (r.flat || R.hits) { this.clearSearch(cx); this.setView("tree", cx); R.open([...ancestors(k.rel), k.rel], cx, () => { this.scrollTo = key; }); } else R.toggle(k.rel, cx); }
+    else if (double) this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx);
+    cx.notify();
+  }
+
+  keyMulti(k, cur, e, cx) {
+    const kk = e.key, R = this.ownerOf(k.rid);
+    if (!R) return false;
+    if (k.head) {
+      const open = this.rootOpen(R);
+      if (((kk === "right" || kk === "l") && !open) || ((kk === "left" || kk === "h") && open) || kk === "enter" || kk === "space") this.toggleRoot(R, cx);
+      else if (kk === "y") copy(cx, R.root);
+      else return false;
+      return true;
+    }
+    const abs = join(R.root, k.rel), shift = e.modifiers?.shift;
+    if ((kk === "right" || kk === "l") && cur.e.dir && !cur.open) R.toggle(k.rel, cx);
+    else if (kk === "left" || kk === "h") { if (cur.e.dir && cur.open) R.toggle(k.rel, cx); else this.cursor = dirOf(k.rel) ? keyOf(k.rid, dirOf(k.rel)) : headKey(k.rid); this.scrollTo = this.cursor; }
+    else if (kk === "enter") { if (cur.e.dir) R.toggle(k.rel, cx); else this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx); }
+    else if (kk === "space") { if (cur.e.dir) R.toggle(k.rel, cx); else if (MARKDOWN.test(k.rel)) openMarkdownTab(abs, null); else this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx); }
+    else if (kk === "p" && !cur.e.dir) this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx);
+    else if (kk === "y") copy(cx, shift ? abs : k.rel);
+    else if (kk === "a") sendToAgent(cx, abs);
+    else return false;
+    return true;
+  }
+
+  // A file of another root in the preview: `abs` is read, `label` titles it.
+  showAbs(abs, label, cx) {
+    this.show(label, cx, false, abs);
+  }
 
   sync(cx) {
     const { root, on } = this.wanted();
@@ -519,8 +741,10 @@ export default class FileTree extends View {
     this.query = query;
     const q = query.trim().toLowerCase();
     // Recent filters its own short list in rows(); only the tree searches disk.
+    for (const S of this.subList()) S.hits = null;
     if (!q || this.view !== "tree") { this.hits = null; cx.notify(); return; }
     const seq = ++this.searchSeq, ctx = this.ctx;
+    for (const S of this.subList()) this.searchSub(S, q, seq, cx);
     this.searching = true;
     cx.spawn(async (cx) => {
       try {
@@ -542,6 +766,7 @@ export default class FileTree extends View {
 
   clearSearch(cx) {
     this.query = ""; this.hits = null; this.searchSeq++;
+    for (const S of this.subList()) S.hits = null;
     this.input.set_value("");
     cx.notify();
   }
@@ -552,6 +777,8 @@ export default class FileTree extends View {
       if (first) { this.cursor = first.rel; this.handle.focus(); this.openFile(first.rel, cx); }
       return;
     }
+    const mk = parseKey(this.cursor);
+    if (mk && !mk.head) { const R = this.ownerOf(mk.rid), key = this.cursor; this.clearSearch(cx); this.cursor = key; this.handle.focus(); R?.open(ancestors(mk.rel), cx, () => { this.scrollTo = key; }); return; }
     const target = this.hits?.includes(this.cursor) ? this.cursor : this.hits?.[0];
     this.clearSearch(cx);
     if (!target) return;
@@ -562,8 +789,15 @@ export default class FileTree extends View {
 
   // ── rows ─────────────────────────────────────────────────────────────────────────────
   rows() {
-    const out = [], q = this.query.trim().toLowerCase();
+    const q = this.query.trim().toLowerCase();
     if (this.view === "recent") return this.recentRows(q);
+    const subs = this.subList();
+    return subs.length ? this.multiRows(subs) : this.treeRows(0);
+  }
+
+  // One root's tree (or its search hits), `base` levels in.
+  treeRows(base) {
+    const out = [];
     if (this.hits) {
       const keep = new Set(), kids = new Map(), dirs = this.index?.dirs ?? new Set();
       for (const h of this.hits) { keep.add(h); for (const a of ancestors(h)) keep.add(a); }
@@ -573,7 +807,7 @@ export default class FileTree extends View {
         const list = (kids.get(p) ?? []).sort((a, b) => Number(dirs.has(b)) - Number(dirs.has(a)) || collator.compare(baseOf(a), baseOf(b)));
         for (const rel of list) { const e = entryOf(rel); out.push({ rel, e, depth, open: kids.has(rel) }); if (kids.has(rel)) walk(rel, depth + 1); }
       };
-      walk("", 0);
+      walk("", base);
       return out;
     }
     const walk = (prefix, depth) => {
@@ -585,19 +819,22 @@ export default class FileTree extends View {
         if (open && depth < 40) walk(rel, depth + 1);
       }
     };
-    walk("", 0);
+    walk("", base);
     return out;
   }
 
   // Recent: what Claude read, wrote or committed here, newest first, one row per file.
   recentRows(q) {
-    const seen = new Set(), out = [];
+    const seen = new Set(), out = [], subs = this.subList();
     for (let i = this.history.length - 1; i >= 0; i--) {
-      const h = this.history[i], rel = relTo(this.root, h.abs);
-      if (!rel || seen.has(rel) || (q && !rel.toLowerCase().includes(q))) continue;
-      seen.add(rel);
-      const e = this.entries.get(dirOf(rel))?.find((x) => x.name === baseOf(rel)) ?? { name: baseOf(rel), dir: false, size: null, mtime: 0 };
-      out.push({ rel, e, depth: 0, flat: true, recent: h });
+      const h = this.history[i];
+      let owner = this, rel = relTo(this.root, h.abs);
+      if (!rel) for (const S of subs) { const x = relTo(S.root, h.abs); if (x) { owner = S; rel = x; break; } }
+      const key = owner === this ? rel : rel && keyOf(owner.rid, rel);
+      if (!rel || seen.has(key) || (q && !rel.toLowerCase().includes(q))) continue;
+      seen.add(key);
+      const e = owner.entries.get(dirOf(rel))?.find((x) => x.name === baseOf(rel)) ?? { name: baseOf(rel), dir: false, size: null, mtime: 0 };
+      out.push(owner === this ? { rel, e, depth: 0, flat: true, recent: h } : { rel: key, key, local: rel, owner, rid: owner.rid, e, depth: 0, flat: true, recent: h });
     }
     return out;
   }
@@ -688,6 +925,11 @@ export default class FileTree extends View {
     }
     if (this.history.length > 120) this.history = this.history.slice(-80);
     try { localStorage.setItem("history", JSON.stringify(this.history)); } catch {}
+    // VNH: what Claude touched in another root opens there too.
+    if (this.config.follow && !this.query && this.view === "tree") for (const S of this.subList()) {
+      const rels = paths.map((p) => relTo(S.root, p)).filter(Boolean).slice(0, limit);
+      if (rels.length) { const last = rels[rels.length - 1]; S.open(rels.flatMap((rel) => ancestors(rel)), cx, () => { if (!inside.length) this.scrollTo = keyOf(S.rid, last); }); }
+    }
     if (!inside.length || !this.config.follow || this.hits || this.view !== "tree") { cx.notify(); return; }
     const shown = inside.slice(0, limit), last = shown[shown.length - 1];
     this.open(shown.flatMap((rel) => ancestors(rel)), cx, () => { this.scrollTo = last; });
@@ -726,7 +968,7 @@ export default class FileTree extends View {
     }
     if (this.chip && now - this.chip.at > (this.chip.state === "running" ? RUNNING_MS : CHIP_MS)) { this.chip = null; dirty = true; }
     if (this.branchFlash && now - this.branchFlash.at > FLASH_MS) { this.branchFlash = null; dirty = true; }
-    if (this.showSize && this.view === "tree") this.pumpSizes(cx);
+    if (this.showSize && this.view === "tree") { this.pumpSizes(cx); for (const S of this.subList()) S.pumpSizes(cx); }
     // Recent shows "4m ago"-style times; refresh them twice a minute, only while shown.
     if (this.view === "recent" && now - this.agoAt > 30000) { this.agoAt = now; dirty = true; }
     if (dirty) cx.notify();
@@ -754,17 +996,17 @@ export default class FileTree extends View {
   // ── preview and opening ──────────────────────────────────────────────────────────────
   closePreview() {
     this.code?.release();
-    this.code = null; this.md = null; this.file = null; this.fileError = null;
+    this.code = null; this.md = null; this.file = null; this.fileError = null; this.fileAbs = null;
   }
 
   // inRender: called while drawing (a request from another mod), where notify is refused.
-  show(rel, cx, inRender = false) {
+  show(rel, cx, inRender = false, abs = null) {
     this.closePreview();
-    this.file = rel;
+    this.file = rel; this.fileAbs = abs;
     const ctx = this.ctx;
     cx.spawn(async (cx) => {
       try {
-        const text = await readTextFile(join(ctx.root, rel), { on: ctx.on });
+        const text = await readTextFile(abs ?? join(ctx.root, rel), { on: abs ? null : ctx.on });
         if (this.file !== rel || !this.current(ctx)) return;
         if (text === null) { this.fileError = "This file is no longer available"; return; }
         if (text.includes("\0")) { this.fileError = "Binary file · no text preview"; return; }
@@ -805,6 +1047,13 @@ export default class FileTree extends View {
     openOverlay({ mod: NAME, kind: "popup", width: 210, height: dir ? 5 * 28 + 10 : 7 * 28 + 10, props: { menu: { root: this.root, rel, abs, dir, local: !this.on } } });
   }
 
+  // VNH: a root's menu; the space's own folder can't be removed.
+  openRootMenu(R) {
+    const sp = activeSpace(), main = R === this;
+    openOverlay({ mod: NAME, kind: "popup", width: 230, height: (main ? 3 : 5) * 28 + 10 + (main ? 0 : 9),
+      props: { menu: { rootMenu: true, main, root: R.root, abs: R.root, rel: "", dir: true, local: true, space: sp?.id ?? null, project: this.git.top || this.root } } });
+  }
+
   // A virtual list's rows can't hold handlers, so the list reports the row and
   // a second press on the same row within 450 ms is the double-click.
   // VNH: whether a press at x (in the list's box) fell on the eye after a Markdown row's name. The
@@ -827,6 +1076,8 @@ export default class FileTree extends View {
   }
 
   press(rel, cx) {
+    const mk = parseKey(rel);
+    if (mk) { this.pressMulti(mk, rel, cx); return; }
     const r = this.rows().find((x) => x.rel === rel);
     if (!r) return;
     const x = this.downX; this.downX = null;
@@ -867,12 +1118,17 @@ export default class FileTree extends View {
     }
     if (this.file) {
       if (k === "escape" || k === "left" || k === "h") this.closePreview();
-      else if (k === "o" && !this.on) openExternal(join(this.root, this.file)).catch(() => {});
+      else if (k === "o" && !this.on) openExternal(this.fileAbs ?? join(this.root, this.file)).catch(() => {});
       else if (k === "space" && MARKDOWN.test(this.file)) this.openMarkdown(this.file);
       else return;
       cx.stop_propagation(); cx.notify(); return;
     }
     const shift = e.modifiers?.shift;
+    const mk = parseKey(this.cursor);
+    if (mk && cur && !["up", "k", "down", "j", "pageup", "pagedown", "home", "end", "/", ".", "i", "escape"].includes(k) && !/^[1-9]$/.test(k)) {
+      if (this.keyMulti(mk, cur, e, cx)) { cx.stop_propagation(); cx.notify(); }
+      return;
+    }
     if (k === "up" || k === "k") this.move(rows, -1);
     else if (k === "down" || k === "j") this.move(rows, 1);
     else if (k === "pageup") this.move(rows, -10);
@@ -917,16 +1173,16 @@ export default class FileTree extends View {
   // relative to this panel's folder (Claude Code reads it as a file or folder mention); on another
   // machine the absolute path. No trailing "/" on a folder: such a path dropped nothing.
   dragged(el, rel, _dir) {
-    const path = this.on ? join(this.root, rel) : `@${rel}`;
+    const path = this.on ? join(this.root, rel) : this.isSub ? `@${join(this.root, rel)}` : `@${rel}`;
     return el.drag_paths([path], { on: this.on ?? null });
   }
 
-  flatRow(r, t, R, now) {
+  flatRow(r, t, R, now, key) {
     const { rel, e } = r, tone = tones(t), selected = rel === this.cursor;
     const fl = this.flashOf(rel, true, now), lit = fl ? tone[fl.tone] : null;
     const pulse = (el) => el.loop("opacity", { from: 0.35, to: 1, period: 900 });
     const h = r.recent, color = h.kind === "read" ? tone.purple : h.kind === "commit" ? tone.green : tone.orange;
-    return this.dragged(h_flex(), rel, Boolean(e?.dir)).id(`ft-${rel}`).h(ROW).flex_none().pl(8).pr(10).gap(7).items_center().rounded(R).cursor_pointer()
+    return this.dragged(h_flex(), rel, Boolean(e?.dir)).id(`ft-${key ?? rel}`).h(ROW).flex_none().pl(8).pr(10).gap(7).items_center().rounded(R).cursor_pointer()
       .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
       .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
       .child(this.pill(h.kind === "read" ? "R" : h.kind === "commit" ? "C" : "W", color, R))
@@ -936,8 +1192,10 @@ export default class FileTree extends View {
       .child(div().flex_none().w(26).text_size(11).text_color(t.dim).text_right().child(ago(h.at)));
   }
 
-  row(r, t, R, now) {
-    if (r.flat) return this.flatRow(r, t, R, now);
+  row(r, t, R, now, key) {
+    if (r.head) return this.rootRow(r, t, R);
+    if (r.owner && r.owner !== this) return r.flat ? r.owner.flatRow({ ...r, rel: r.local }, t, R, now, r.key) : r.owner.row({ ...r, rel: r.local, owner: null }, t, R, now, r.key);
+    if (r.flat) return this.flatRow(r, t, R, now, key);
     const { rel, e, depth, open } = r, g = this.git, tone = tones(t);
     const status = g.status.get(rel) ?? (this.underUntracked(rel) ? "?" : null);
     const ignored = !status && this.isIgnored(rel);
@@ -950,7 +1208,7 @@ export default class FileTree extends View {
       : (!e.dir && !loc && this.width > 250 ? stamp(e.mtime) : "");
     const selected = rel === this.cursor;
     const pulse = (el) => el.loop("opacity", { from: 0.35, to: 1, period: 900 });
-    return this.dragged(h_flex(), rel, e.dir).id(`ft-${rel}`).h(ROW).flex_none().pl(6 + depth * 14).pr(10).gap(6).items_center().rounded(R).cursor_pointer()
+    return this.dragged(h_flex(), rel, e.dir).id(`ft-${key ?? rel}`).h(ROW).flex_none().pl(6 + depth * 14).pr(10).gap(6).items_center().rounded(R).cursor_pointer()
       .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
       .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
       .child(e.dir ? svg(ICON(`chevron-${open ? "down" : "right"}`)).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
@@ -1010,7 +1268,10 @@ export default class FileTree extends View {
     const color = c ? (c.state === "failed" ? tone.red : tone[c.tone] ?? t.accent) : null;
     const hash = c?.state === "done" ? c.detail.split(" ")[0] : "";
     return h_flex().h(24).flex_none().px(10).gap(8).items_center().text_size(11).border_t(1).border_color(t.border)
-      .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(this.cursor ? this.cursor : ""))
+      .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child((() => {
+        const k = parseKey(this.cursor), R = k ? this.ownerOf(k.rid) : null;
+        return !this.cursor ? "" : !k ? this.cursor : R ? (k.head ? R.root : `${baseOf(R.root)}/${k.rel}`) : "";
+      })()))
       .when(Boolean(c), (el) => el.child(h_flex().flex_none().gap(4).items_center().text_color(color)
         .child(div().when(c.state === "running", (d) => d.font_semibold().loop("opacity", { from: 0.4, to: 1, period: 1000 })).child(c.state === "running" ? `${c.label}…` : c.state === "done" ? `✓ ${c.label}` : c.label))
         .when(Boolean(hash), (d) => d.child(div().text_color(t.dim).child(hash)))));
@@ -1022,6 +1283,18 @@ export default class FileTree extends View {
     const item = (id, label, act) => div().id(id).h(28).px(10).flex().items_center().rounded(R).cursor_pointer().text_size(12.5)
       .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { close(); act(cx); }).child(label);
     const items = [];
+    if (m.rootMenu) {
+      items.push(item("m-term", "Open terminal here", () => { const sp = activeSpace(); run("tab.new", { space: sp?.id, folder: m.abs, name: baseOf(m.abs) }); }));
+      items.push(item("m-reveal", window()?.platform === "macos" ? "Reveal in Finder" : "Show in folder", () => revealExternal(m.abs).catch(() => {})));
+      items.push(item("m-abs", "Copy path", (cx) => copy(cx, m.abs)));
+      if (!m.main) {
+        items.push(div().h(1).my(4).bg(t.border));
+        items.push(item("m-new-space", "Open as its own space", () => run("space.new", { folder: m.abs, machine: "" })));
+        items.push(div().id("m-remove").h(28).px(10).flex().items_center().rounded(R).cursor_pointer().text_size(12.5).text_color(t.ansi1)
+          .hover((s) => s.bg(t.hover)).on_click(() => { close(); if (m.space) removeSpaceFolder(m.space, m.abs, m.project); }).child("Remove folder from space"));
+      }
+      return v_flex().id("ft-menu").size_full().p(5).gap(0).bg(t.popover ?? t.surface).text_color(t.foreground).children(items);
+    }
     if (!m.dir) items.push(item("m-preview", "Preview", () => setShared(`${NAME}.preview`, { root: m.root, rel: m.rel, n: Date.now() })));
     if (!m.dir && m.local) items.push(item("m-open", "Open in default app", () => openExternal(m.abs).catch((e) => notify({ title: "Could not open the file", body: String(e?.message ?? e), level: "error" }))));
     if (m.local) items.push(item("m-reveal", window()?.platform === "macos" ? "Reveal in Finder" : "Show in folder", () => revealExternal(m.abs).catch(() => {})));
@@ -1034,8 +1307,14 @@ export default class FileTree extends View {
   render(cx) {
     if (this.menu) return this.renderMenu(cx);
     this.sync(cx);
+    this.syncRoots(cx);
     const req = shared(`${NAME}.preview`);
-    if (req && req.n !== this.seenPreview) { this.seenPreview = req.n; if (req.root === this.root) this.show(req.rel, cx, true); }
+    if (req && req.n !== this.seenPreview) {
+      this.seenPreview = req.n;
+      const S = this.subList().find((x) => x.root === req.root);
+      if (req.root === this.root) this.show(req.rel, cx, true);
+      else if (S) this.show(`${baseOf(S.root)}/${req.rel}`, cx, true, join(S.root, req.rel));
+    }
     // Another mod (session-bar's changed chip) asks for a view.
     const want = shared(`${NAME}.view`);
     if (want && want.n !== this.seenView) {
@@ -1057,9 +1336,9 @@ export default class FileTree extends View {
       .child(div().flex_1().min_w(0).truncate().font_medium().text_color(this.file ? t.foreground : t.muted).child(title))
       .when(Boolean(this.file), (el) => el
         .when(MARKDOWN.test(this.file ?? ""), (el) => el.child(btn("ft-md-open", svg(ICON("eye")).size(13), "Open rendered in a new tab (Space)", false, () => this.openMarkdown(this.file))))
-        .when(!this.on, (el) => el.child(btn("ft-ext", "↗", "Open in default app (o)", false, () => openExternal(join(this.root, this.file)).catch(() => {}))))
+        .when(!this.on, (el) => el.child(btn("ft-ext", "↗", "Open in default app (o)", false, () => openExternal(this.fileAbs ?? join(this.root, this.file)).catch(() => {}))))
         .child(btn("ft-copy", "⧉", "Copy path", false, (cx) => copy(cx, this.file)))
-        .child(btn("ft-send", "@", "Send to agent", false, (cx) => sendToAgent(cx, join(this.root, this.file)))))
+        .child(btn("ft-send", "@", "Send to agent", false, (cx) => sendToAgent(cx, this.fileAbs ?? join(this.root, this.file)))))
       .when(!this.file, (el) => el.child(h_flex().flex_none().gap(2).items_center().children(VIEWS.map(([id, label, icon], i) => {
         const on = this.view === id;
         return h_flex().id(`ft-tab-${id}`).h(22).px(7).gap(5).flex_none().items_center().rounded(R).cursor_pointer().text_size(11.5)
@@ -1086,6 +1365,7 @@ export default class FileTree extends View {
     const root = v_flex().id(NAME).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13)
       .when(inPanel, (el) => el.rounded(10).border_1().border_color(t.border))
       .track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
+      .on_drop((e, cx) => this.dropFolders(e.paths ?? [], cx))
       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 4) { this.width = size.width; cx.notify(); } })
       .child(header);
 
@@ -1100,7 +1380,7 @@ export default class FileTree extends View {
       : this.view === "recent" ? (rows.length ? null : q ? "No matches" : "Files Claude reads and writes here show up in this list")
       : this.searching && !rows.length ? "Searching…" : this.hits ? (rows.length ? null : "No matches") : this.loading && !rows.length ? "Loading files…" : !rows.length ? "Empty folder" : null);
     return root
-      .child(this.summary(t))
+      .when(!this.subList().length, (el) => el.child(this.summary(t)))
       .child(h_flex().flex_none().mx(6).mt(6).mb(4).gap(2).items_center()
         .child(h_flex().flex_1().min_w(0).h(26).px(8).gap(6).items_center().rounded(R).bg(t.canvas ?? t.background).border_1().border_color(this.typing ? t.accent : t.input ?? t.border).cursor_text()
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
@@ -1115,11 +1395,19 @@ export default class FileTree extends View {
         .on_mouse_down("left", (e) => { const x = e.position?.x, left = e.bounds?.x; this.downX = typeof x === "number" && typeof left === "number" ? x - left : (e.local_position?.x ?? null); this.downW = e.bounds?.width ?? null; })
         .child(v_virtual_list("ft-rows", rows.length, ROW, (i) => rows[i]?.rel ?? String(i), (range) => {
           const shown = rows.slice(range.start, range.end);
-          this.visible = shown.filter((r) => !r.flat && r.e?.dir).map((r) => r.rel);
+          this.visible = shown.filter((r) => !r.flat && !r.head && !r.owner && r.e?.dir).map((r) => r.rel);
+          for (const S of this.subList()) S.visible = shown.filter((r) => !r.flat && r.owner === S && r.e?.dir).map((r) => r.local);
           return shown.map((r) => this.row(r, t, R, now));
         }).track_scroll(this.scroll).size_full()
           .on_item_click((rel, cx) => this.press(rel, cx))
-          .on_item_secondary_click((rel, _e, cx) => { const r = this.rows().find((x) => x.rel === rel); if (!r) return; this.cursor = rel; this.openMenu(rel, r.e.dir); cx.notify(); }))
+          .on_item_secondary_click((rel, _e, cx) => {
+            const r = this.rows().find((x) => x.rel === rel); if (!r) return;
+            this.cursor = rel;
+            if (r.head) this.openRootMenu(r.owner);
+            else if (r.owner && r.owner !== this) r.owner.openMenu(r.local, r.e.dir);
+            else this.openMenu(rel, r.e.dir);
+            cx.notify();
+          }))
         .child(Scrollbar.vertical("ft-rows").viewport_from_layout().absolute().inset_0())
         .when(Boolean(note), (el) => el.child(div().absolute().top(4).left(0).right(0).px(10).text_size(12).text_color(t.dim).child(note))))
       .when(this.limited, (el) => el.child(div().px(10).py(3).text_size(11).text_color(t.dim).child(`Folders show their first ${PER_FOLDER} entries`)))
