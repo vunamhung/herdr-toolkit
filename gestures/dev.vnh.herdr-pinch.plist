@@ -8,6 +8,8 @@
   <dict>
     <key>HERDR_APP</key><string>HOME_DIR/.local/bin/herdr-app</string>
     <key>HERDR_PINCH_LOG</key><string>HOME_DIR/Library/Logs/herdr-pinch.log</string>
+    <key>HERDR_PINCH_TOGETHER</key><string>vnh-tabs.git-pull</string>
+    <key>HERDR_PINCH_APART</key><string>vnh-tabs.git-push</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

@@ -1,6 +1,8 @@
 // Trackpad pinch anywhere in Herdr (terminals included) runs git through the VNH mods:
-// spreading out (zoom in) -> `herdr-app do vnh-tabs.git-pull`, pinching in (zoom out) ->
-// `herdr-app do vnh-tabs.git-push`. Mods only see pinches over what they draw, and a terminal
+// pinching the fingers together -> `herdr-app do vnh-tabs.git-pull`, spreading them apart ->
+// `herdr-app do vnh-tabs.git-push` (HERDR_PINCH_TOGETHER / HERDR_PINCH_APART name the commands,
+// HERDR_PINCH_IN / HERDR_PINCH_OUT the thresholds, so the plist changes them without a rebuild,
+// which would ask for Accessibility again). Mods only see pinches over what they draw, and a terminal
 // isn't a mod, hence this small agent. It reacts only while Herdr is the frontmost app, once per
 // gesture, past a clear pinch (+0.35 / -0.3 of scale), at most every 3 s. Log: HERDR_PINCH_LOG.
 import AppKit
@@ -8,6 +10,11 @@ import AppKit
 let herdrBundle = "dev.herdr.app"
 let herdrApp = ProcessInfo.processInfo.environment["HERDR_APP"] ?? "/usr/local/bin/herdr-app"
 let logPath = ProcessInfo.processInfo.environment["HERDR_PINCH_LOG"]
+let env = ProcessInfo.processInfo.environment
+let together = env["HERDR_PINCH_TOGETHER"] ?? "vnh-tabs.git-pull"
+let apart = env["HERDR_PINCH_APART"] ?? "vnh-tabs.git-push"
+let inThreshold = CGFloat(Double(env["HERDR_PINCH_IN"] ?? "") ?? 0.3)    // fingers together: sum <= -this
+let outThreshold = CGFloat(Double(env["HERDR_PINCH_OUT"] ?? "") ?? 0.35) // fingers apart: sum >= this
 var sum: CGFloat = 0
 var last = Date.distantPast
 
@@ -31,7 +38,7 @@ func ended() {
   defer { sum = 0 }
   log(String(format: "gesture %.2f", sum))
   guard Date().timeIntervalSince(last) > 3 else { return }
-  if sum >= 0.35 { herdr("vnh-tabs.git-pull") } else if sum <= -0.3 { herdr("vnh-tabs.git-push") }
+  if sum <= -inThreshold { herdr(together) } else if sum >= outThreshold { herdr(apart) }
 }
 
 // Gestures of other apps reach a background agent only with Accessibility: ask for it (macOS
