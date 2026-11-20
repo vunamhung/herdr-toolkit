@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key><string>dev.vnh.herdr-pinch</string>
-  <key>ProgramArguments</key><array><string>HOME_DIR/.local/bin/herdr-pinch</string></array>
+  <key>ProgramArguments</key><array><string>HOME_DIR/Applications/HerdrPinch.app/Contents/MacOS/herdr-pinch</string></array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HERDR_APP</key><string>HOME_DIR/.local/bin/herdr-app</string>

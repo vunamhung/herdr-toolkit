@@ -64,8 +64,14 @@ fi
 
 if want --gestures; then
   echo "gestures: trackpad pinch in Herdr pulls / pushes"
-  mkdir -p "$HOME/.local/bin" "$HOME/Library/LaunchAgents"
-  swiftc -O -o "$HOME/.local/bin/herdr-pinch" "$ROOT/gestures/HerdrPinch.swift"
+  # A small app (HerdrPinch.app, signed ad hoc): macOS keeps Accessibility for it more reliably than
+  # for a bare linker-signed binary. Grant it once in System Settings > Privacy & Security >
+  # Accessibility; a rebuild asks again.
+  APP="$HOME/Applications/HerdrPinch.app"
+  mkdir -p "$APP/Contents/MacOS" "$HOME/Library/LaunchAgents"
+  swiftc -O -o "$APP/Contents/MacOS/herdr-pinch" "$ROOT/gestures/HerdrPinch.swift"
+  cp "$ROOT/gestures/Info.plist" "$APP/Contents/Info.plist"
+  codesign -f -s - --identifier dev.vnh.herdr-pinch "$APP"
   PL="$HOME/Library/LaunchAgents/dev.vnh.herdr-pinch.plist"
   [ -f "$PL" ] && { launchctl bootout "gui/$(id -u)" "$PL" 2>/dev/null; backup "$PL"; }
   sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.herdr-pinch.plist" > "$PL"
