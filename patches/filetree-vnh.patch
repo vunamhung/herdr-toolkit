@@ -224,7 +224,7 @@
 +      // VNH: an eye right after a Markdown file's name; a press on it (see eyeHit) opens the rendered tab.
 +      .when(!e.dir && MARKDOWN.test(rel), (el) => el.child(div().flex_none().size(16).flex().items_center().justify_center().rounded(4)
 +        .text_color(t.dim).opacity(0.55).hover((st) => st.opacity(1).text_color(t.foreground).bg(t.hover))
-+        .child(svg(ICON("eye")).size(13))).child(div().flex_1().min_w(16)))
++        .child(svg(ICON("eye")).size(13))).child(div().flex_1().min_w(32)))
        .when(Boolean(meta), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(meta)))
        .when(Boolean(loc?.[0]), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi2).child(`+${loc[0]}`)))
        .when(Boolean(loc?.[1]), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${loc[1]}`)))
