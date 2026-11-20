@@ -1,6 +1,6 @@
 --- a/mods/filetree/main.js
 +++ b/mods/filetree/main.js
-@@ -7,10 +7,12 @@
+@@ -7,10 +7,15 @@
  import { View, div, svg, image } from "gpui-kit";
  import { v_flex, h_flex, Editor, EditorState, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, TextView } from "gpui-base";
  import ICONS from "./icons.js"; // copied from the file-icons mod (mods cannot import across folders)
@@ -11,10 +11,13 @@
  const ICON = (name) => `mods/${NAME}/${name}.svg`;
 +// VNH: Markdown opens rendered in its own tab (vnh-markdown): the eye in a preview, or Space.
 +const MARKDOWN = /\.(md|markdown|mdx)$/i;
++// Width of a character of the 13 px UI font: PragmataPro is narrow (0.5 em, 6.5 px, checked on screen),
++// the other monospaced UI fonts Herdr ships about 0.6 em.
++const charWidth = () => (/pragmata/i.test(String(settings().ui_font ?? "")) ? 6.5 : 7.8);
  const ROW = 26;
  const PER_FOLDER = 2000;
  const FIND_LIMIT = 200;
-@@ -145,7 +147,11 @@
+@@ -145,7 +150,11 @@
    let pane = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
    if (pane && !pane.terminal) pane = panes().find((p) => p.tab === pane.tab && p.terminal && p.cwd) ?? null;
    const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
@@ -27,7 +30,7 @@
  }
  const windows = (on) => !on && window()?.platform === "windows";
  const psQuote = (s) => "'" + s.replaceAll("'", "''") + "'";
-@@ -284,6 +290,7 @@
+@@ -284,6 +293,7 @@
      let prefs = {};
      try { prefs = JSON.parse(localStorage.getItem("prefs") ?? "{}"); } catch {}
      this.showHidden = prefs.showHidden ?? true;
@@ -35,7 +38,7 @@
      this.showSize = prefs.showSize ?? null;
      this.follow = true; this.pinned = null;
      this.view = VIEWS.some(([v]) => v === prefs.view) ? prefs.view : "tree";
-@@ -308,12 +315,34 @@
+@@ -308,12 +318,34 @@
        cx.notify();
      });
      this.watchActivity(cx);
@@ -46,8 +49,8 @@
 +    // "filetree.focus": the Markdown tab hands the keyboard back here when it closes.
 +    cx.spawn(async (cx) => { for (;;) { if (String(await nextCommand()).replace(/^filetree\./, "") === "focus") this.handle?.focus(); cx.notify(); } });
      cx.timer.every(1000, (cx) => this.tick(cx));
-+  }
-+
+   }
+ 
 +  // VNH: on screen? Only while the layout's side panel shows this block; anywhere else always.
 +  shownNow() {
 +    const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((hit, c) => hit ?? find(c, id), null));
@@ -55,8 +58,8 @@
 +    const block = body?.children?.find((c) => c.content?.mod === NAME);
 +    if (!block) return true;
 +    return Boolean(panel && !panel.hidden && body.active === block.id);
-   }
- 
++  }
++
 +  // VNH: a rendered Markdown tab; Esc or Space there closes it and comes back to the tab it came from.
 +  openMarkdown(rel) {
 +    if (!rel || !this.root) return;
@@ -72,7 +75,7 @@
    }
  
    setView(view, cx) {
-@@ -425,15 +454,22 @@
+@@ -425,15 +457,22 @@
      const now = Date.now();
      this.recent = this.recent.filter((r) => now - r.at < 15000);
      this.recent.push({ at: now, paths });
@@ -98,7 +101,7 @@
    }
  
    toggle(path, cx) {
-@@ -479,7 +515,7 @@
+@@ -479,7 +518,7 @@
            this.index = index;
          }
          if (seq !== this.searchSeq) return;
@@ -107,7 +110,7 @@
          const named = matches.filter((rel) => baseOf(rel).toLowerCase().includes(q));
          this.hits = [...new Set([...named, ...matches])].slice(0, FIND_LIMIT);
          this.cursor = this.hits[0] ?? "";
-@@ -529,6 +565,7 @@
+@@ -529,6 +568,7 @@
        for (const e of this.entries.get(prefix) ?? []) {
          if (!this.showHidden && e.name.startsWith(".")) continue;
          const rel = prefix ? `${prefix}/${e.name}` : e.name, open = e.dir && this.folders.has(rel);
@@ -115,16 +118,34 @@
          out.push({ rel, e, depth, open });
          if (open && depth < 40) walk(rel, depth + 1);
        }
-@@ -758,6 +795,8 @@
+@@ -755,9 +795,26 @@
+ 
+   // A virtual list's rows can't hold handlers, so the list reports the row and
+   // a second press on the same row within 450 ms is the double-click.
++  // VNH: whether a press at x (in the list's box) fell on the eye after a Markdown row's name. The
++  // list gives no per-row geometry, so the eye's place is worked out as the row lays it out: list
++  // padding 4, row padding 6 + 14 a level (none for a flat row), chevron slot 12, gap 6, icon 16, gap 6,
++  // the name (the UI font is monospaced: charWidth() a character at 13 px), gap 6, then the 16 px eye.
++  onEye(r, x) {
++    if (r.flat) return false; // Recent rows draw no eye
++    // Press positions are window pixels; layout sizes are scaled by the app's zoom.
++    const zoom = Number(settings().zoom) > 0 ? Number(settings().zoom) : 1;
++    x = x / zoom;
++    const indent = r.flat ? 8 : 6 + (r.depth ?? 0) * 14;
++    const name = (r.e?.name ?? baseOf(r.rel)) + (r.e?.link ? " ↪" : "");
++    const start = 4 + indent + (r.flat ? 0 : 12 + 6) + 16 + 6 + [...name].length * charWidth() + 6;
++    return x >= start - 6 && x <= start + 16 + 8;
++  }
++
    press(rel, cx) {
      const r = this.rows().find((x) => x.rel === rel);
      if (!r) return;
-+    const eye = this.eyeHit; this.eyeHit = false;
-+    if (eye && !r.e?.dir && MARKDOWN.test(rel)) { this.cursor = rel; this.openMarkdown(rel); cx.notify(); return; }
++    const x = this.downX; this.downX = null;
++    if (x !== null && x !== undefined && !r.e?.dir && MARKDOWN.test(rel) && this.onEye(r, x)) { this.cursor = rel; this.openMarkdown(rel); cx.notify(); return; }
      const now = Date.now(), double = this.lastPress?.rel === rel && now - this.lastPress.at < 450;
      this.lastPress = double ? null : { rel, at: now };
      this.handle.focus();
-@@ -795,6 +834,7 @@
+@@ -795,6 +852,7 @@
      if (this.file) {
        if (k === "escape" || k === "left" || k === "h") this.closePreview();
        else if (k === "o" && !this.on) openExternal(join(this.root, this.file)).catch(() => {});
@@ -132,7 +153,7 @@
        else return;
        cx.stop_propagation(); cx.notify(); return;
      }
-@@ -807,6 +847,7 @@
+@@ -807,6 +865,7 @@
      else if (k === "end") this.move(rows, rows.length);
      else if (k === "/") { this.input.focus(); }
      else if (k === ".") { this.showHidden = !this.showHidden; this.savePrefs(); }
@@ -140,7 +161,7 @@
      else if (k === "escape") { if (this.query) this.clearSearch(cx); else this.cursor = ""; }
      else if (/^[1-9]$/.test(k) && VIEWS[Number(k) - 1]) this.setView(VIEWS[Number(k) - 1][0], cx);
      else if (!cur) return;
-@@ -816,7 +857,7 @@
+@@ -816,7 +875,7 @@
      else if ((k === "right" || k === "l") && cur.e.dir && !cur.open) this.toggle(cur.rel, cx);
      else if (k === "left" || k === "h") { if (cur.e.dir && cur.open && !this.hits) this.toggle(cur.rel, cx); else if (dirOf(cur.rel) || cur.depth) { this.cursor = dirOf(cur.rel); this.scrollTo = this.cursor; } }
      else if (k === "enter") { if (this.hits) this.jump(cx); else if (cur.e.dir) this.toggle(cur.rel, cx); else this.openFile(cur.rel, cx); }
@@ -149,7 +170,7 @@
      else if (k === "p" && !cur.e.dir) this.show(cur.rel, cx);
      else if (k === "y") copy(cx, shift ? join(this.root, cur.rel) : cur.rel);
      else if (k === "a") sendToAgent(cx, join(this.root, cur.rel));
-@@ -838,12 +879,20 @@
+@@ -838,12 +897,20 @@
    }
  
    // A row of Recent: a status pill, the name, then what happened to it.
@@ -171,7 +192,7 @@
        .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
        .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
        .child(this.pill(h.kind === "read" ? "R" : h.kind === "commit" ? "C" : "W", color, R))
-@@ -867,7 +916,7 @@
+@@ -867,13 +934,17 @@
        : (!e.dir && !loc && this.width > 250 ? stamp(e.mtime) : "");
      const selected = rel === this.cursor;
      const pulse = (el) => el.loop("opacity", { from: 0.35, to: 1, period: 900 });
@@ -180,20 +201,18 @@
        .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
        .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
        .child(e.dir ? svg(ICON(`chevron-${open ? "down" : "right"}`)).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
-@@ -879,7 +928,11 @@
-       .when(Boolean(loc?.[1]), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${loc[1]}`)))
-       .when(Boolean(counts), (el) => el.children(this.countChips(counts, t)))
-       .when(!counts && Boolean(status), (el) => el.child(div().flex_none().w(10).text_size(11).font_semibold().text_color(gc).child(status)))
--      .when(!counts && !status && ignored, (el) => el.child(div().flex_none().w(10).text_size(11).text_color(t.dim).child("⊘")));
-+      .when(!counts && !status && ignored, (el) => el.child(div().flex_none().w(10).text_size(11).text_color(t.dim).child("⊘")))
-+      // VNH: an eye on Markdown files; a press on it (see eyeHit) opens the rendered tab.
+       .child(image(fileIcon(rel, e.dir, open, settings().dark !== false)).size(16).flex_none().when(Boolean(fl?.bright), pulse))
+-      .child(div().flex_1().min_w(0).truncate().text_color(nameColor).when(selected, (el) => el.font_medium())
++      .child(div().when(!(!e.dir && MARKDOWN.test(rel)), (el) => el.flex_1()).min_w(0).truncate().text_color(nameColor).when(selected, (el) => el.font_medium())
+         .when(status === "D" && !e.dir, (el) => el.line_through()).when(Boolean(fl?.bright), pulse).child(e.name + (e.link ? " ↪" : "")))
++      // VNH: an eye right after a Markdown file's name; a press on it (see eyeHit) opens the rendered tab.
 +      .when(!e.dir && MARKDOWN.test(rel), (el) => el.child(div().flex_none().size(16).flex().items_center().justify_center().rounded(4)
 +        .text_color(t.dim).opacity(0.55).hover((st) => st.opacity(1).text_color(t.foreground).bg(t.hover))
-+        .child(svg(ICON("eye")).size(13))));
-   }
- 
-   countChips(c, t) {
-@@ -969,6 +1022,7 @@
++        .child(svg(ICON("eye")).size(13))).child(div().flex_1()))
+       .when(Boolean(meta), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(meta)))
+       .when(Boolean(loc?.[0]), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi2).child(`+${loc[0]}`)))
+       .when(Boolean(loc?.[1]), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${loc[1]}`)))
+@@ -969,6 +1040,7 @@
        .when(Boolean(this.file), (el) => el.child(image(fileIcon(this.file, false, false, settings().dark !== false)).size(14).flex_none()))
        .child(div().flex_1().min_w(0).truncate().font_medium().text_color(this.file ? t.foreground : t.muted).child(title))
        .when(Boolean(this.file), (el) => el
@@ -201,7 +220,7 @@
          .when(!this.on, (el) => el.child(btn("ft-ext", "↗", "Open in default app (o)", false, () => openExternal(join(this.root, this.file)).catch(() => {}))))
          .child(btn("ft-copy", "⧉", "Copy path", false, (cx) => copy(cx, this.file)))
          .child(btn("ft-send", "@", "Send to agent", false, (cx) => sendToAgent(cx, join(this.root, this.file)))))
-@@ -986,6 +1040,7 @@
+@@ -986,6 +1058,7 @@
        btn("ft-up", "↑", "Up a folder", false, () => { if (!this.root) return; this.follow = false; this.pinned = this.root.replace(/[\\/][^\\/]+[\\/]?$/, "") || "/"; this.pinnedOn = this.on; }),
        btn("ft-home", "⌂", this.follow ? "Following the focused pane" : "Back to the focused pane's folder", this.follow, () => { this.follow = true; this.pinned = null; }),
        btn("ft-hidden", this.showHidden ? "◉" : "○", this.showHidden ? "Hide dotfiles (.)" : "Show dotfiles (.)", this.showHidden, () => { this.showHidden = !this.showHidden; this.savePrefs(); }),
@@ -209,16 +228,13 @@
        btn("ft-size", "Σ", this.showSize ? "Show dates" : "Show sizes", Boolean(this.showSize), () => { this.showSize = !this.showSize; this.savePrefs(); }),
        btn("ft-collapse", "⊟", "Collapse all", false, (cx) => this.collapseAll(cx)),
      ] : [
-@@ -1017,6 +1072,12 @@
+@@ -1017,6 +1090,9 @@
            .when(Boolean(this.query), (el) => el.child(div().id("ft-clear").flex_none().text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => this.clearSearch(cx)).child("×"))))
          .children(tools))
        .child(div().flex_1().min_h(0).relative().px(4)
 +        // VNH: the virtual list reports only which row was clicked; this says whether it was on the
 +        // eye at the row's right end (its last ~30 px: 4 px padding, 10 px row padding, the 16 px eye).
-+        .on_mouse_down("left", (e) => {
-+          const x = e.local_position?.x, w = e.bounds?.width;
-+          this.eyeHit = typeof x === "number" && typeof w === "number" ? w - x <= 32 : false;
-+        })
++        .on_mouse_down("left", (e) => { this.downX = typeof e.local_position?.x === "number" ? e.local_position.x : null; })
          .child(v_virtual_list("ft-rows", rows.length, ROW, (i) => rows[i]?.rel ?? String(i), (range) => {
            const shown = rows.slice(range.start, range.end);
            this.visible = shown.filter((r) => !r.flat && r.e?.dir).map((r) => r.rel);
