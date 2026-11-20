@@ -71,7 +71,7 @@
                   "id": "agents",
                   "type": "block",
                   "content": {
-                    "mod": "chat-agents",
+                    "mod": "vnh-agents",
                     "props": {
                       "replaces": {
                         "mod": "agents"
