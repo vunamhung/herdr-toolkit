@@ -34,9 +34,14 @@ func ended() {
   if sum >= 0.35 { herdr("vnh-tabs.git-pull") } else if sum <= -0.3 { herdr("vnh-tabs.git-push") }
 }
 
-let app = NSApplication.shared
-app.setActivationPolicy(.prohibited)
-NSEvent.addGlobalMonitorForEvents(matching: [.magnify]) { e in
+// Gestures of other apps reach a background agent only with Accessibility: ask for it (macOS
+// shows its prompt once), then listen through a listen-only event tap, which never blocks or
+// changes an event.
+let trusted = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+log("accessibility trusted: \(trusted)")
+
+func onMagnify(_ e: NSEvent) {
+  guard e.type == .magnify else { return }
   guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == herdrBundle else { sum = 0; return }
   switch e.phase {
   case .began: sum = 0
@@ -46,5 +51,27 @@ NSEvent.addGlobalMonitorForEvents(matching: [.magnify]) { e in
   default: break
   }
 }
+
+// NSEvent types 29 (gesture) and 30 (magnify): CGEventMask has no names for them.
+let mask: CGEventMask = (1 << 29) | (1 << 30)
+let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: mask,
+  callback: { _, type, event, _ in
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput { return Unmanaged.passUnretained(event) }
+    if let e = NSEvent(cgEvent: event) { onMagnify(e) }
+    return Unmanaged.passUnretained(event)
+  }, userInfo: nil)
+if let tap = tap {
+  let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+  CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+  CGEvent.tapEnable(tap: tap, enable: true)
+  log("event tap on")
+} else {
+  log("event tap refused: grant Accessibility to \(CommandLine.arguments[0]) in System Settings > Privacy & Security, then restart the agent")
+}
+// The global monitor too, for systems that deliver gestures there.
+NSEvent.addGlobalMonitorForEvents(matching: [.magnify], handler: onMagnify)
+
+let app = NSApplication.shared
+app.setActivationPolicy(.prohibited)
 log("started; herdr-app at \(herdrApp)")
 app.run()
