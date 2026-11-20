@@ -537,7 +537,11 @@ export default class Spaces extends View {
           .gap(9)
           .items_center()
           .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
-          .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
+          // VNH: a space with an agent working breathes, like the working dot in the Agents list
+          // (same slow opacity loop). `working_since` is set on a tab while one of its agents works.
+          .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff")
+            .when(w.tabs.some(tb => tb.working_since != null), tile => tile.loop("opacity", { from: 0.35, to: 1, period: 1800 }))
+            .child([...w.name][0]?.toUpperCase() ?? "?")))
           .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).child(w.name))
           .child(g ? this.gitTail(g, tree, w.name, t).id(`git-${w.id}`).tooltip(this.gitTip(g)) : div().flex_1()),
       );
