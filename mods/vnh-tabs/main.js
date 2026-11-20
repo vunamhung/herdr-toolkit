@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, focused, checking } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, focused, checking, exec, notify } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -58,16 +58,8 @@ export default class Tabs extends View {
         else if (c === "insights") this.toggleInsights();
         else if (c === "insights-close") this.closeInsights();
         else if (c === "files" || c === "changes" || c === "graph") this.togglePanel(c);
-        // "vnh-tabs.git-push" (cmd-\): show the Git panel, then git-graph's push dialog. A hidden
-        // mod gets no commands, so the panel shows first.
-        else if (c === "git-push") {
-          const body = find(layout(), "panel-body");
-          if (body?.children?.some((x) => x.id === "graph")) {
-            this.leaveTimeline();
-            run("layout.select", { stack: "panel-body", child: "graph" }); run("layout.show", { id: "panel" });
-            setShared("vnh.git-graph.push", Date.now()); // git-graph opens its push dialog once it shows
-          }
-        }
+        // "vnh-tabs.git-push" (cmd-\): push the work folder's branch and its tags, no dialog.
+        else if (c === "git-push") this.gitPush();
         cx.notify();
       }
     });
@@ -75,6 +67,37 @@ export default class Tabs extends View {
 
   // "vnh-tabs.files" (cmd-e), "vnh-tabs.changes" (alt-a), "vnh-tabs.graph": what the panel's
   // button does: close it when it already shows that panel, otherwise show that panel.
+  // VNH: cmd-\ pushes the current branch of the repo you work in (the last terminal folder of the
+  // active space), then its tags: to its upstream, else to origin (or the first remote) with
+  // --set-upstream. Never forced; GIT_TERMINAL_PROMPT=0 so a missing login fails instead of hanging.
+  gitPush() {
+    if (this.pushing) return;
+    const space = spaces().find((s) => s.active);
+    const cwd = (shared("vnh.lastCwd") ?? {})[space?.id] ?? space?.folder;
+    if (!cwd) return;
+    this.pushing = true;
+    const script = [
+      'cd "$1" || exit 2',
+      'b=$(git symbolic-ref -q --short HEAD) || { echo "HEAD is detached: check out a branch first" >&2; exit 3; }',
+      'up=$(git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null)',
+      'if [ -n "$up" ]; then r=${up%%/*}; git push --quiet "$r" "HEAD:${up#*/}" || exit 4',
+      'else r=$(git remote | grep -x origin || git remote | head -n 1); [ -n "$r" ] || { echo "This repository has no remote" >&2; exit 5; }',
+      '  git push --quiet --set-upstream "$r" "$b" || exit 4; fi',
+      'git push --quiet "$r" --tags || exit 6',
+      'echo "$r $b"',
+    ].join("\n");
+    notify({ title: "Pushing…", body: cwd.split("/").pop(), level: "info", timeout: 2500 });
+    exec("env", ["GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=0", "sh", "-c", script, "push", cwd], { on: space?.machine ?? null, timeout: 120000 })
+      .then((r) => {
+        const out = (r.stdout ?? "").trim().split(/\s+/), err = (r.stderr ?? "").trim().split("\n").filter(Boolean).pop() ?? "";
+        if (r.code === 0) notify({ title: `Pushed ${out[1] ?? "branch"} and tags to ${out[0] ?? "remote"}`, level: "success", timeout: 4000 });
+        else if (r.code === 6) notify({ title: "Pushed the branch; tags were refused", body: err, level: "warning", timeout: 8000 });
+        else notify({ title: "Push failed", body: err || `git exited ${r.code}`, level: "error", timeout: 8000 });
+      })
+      .catch((e) => notify({ title: "Push failed", body: String(e?.message ?? e), level: "error", timeout: 8000 }))
+      .finally(() => { this.pushing = false; });
+  }
+
   // VNH: one right-side view at a time. Showing Files / Changes / Git while the Timeline shows
   // closes the Timeline for good (no panel to bring back: the person just picked one).
   leaveTimeline() {
