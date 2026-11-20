@@ -40,6 +40,20 @@ function rememberWorkFolder() {
   if (map[space.id] !== cwd) setShared("vnh.lastCwd", { ...map, [space.id]: cwd });
 }
 
+// VNH: a trackpad pinch over this bar runs git: spreading out (zoom in) pulls, pinching in (zoom
+// out) pushes the branch and its tags (vnh-tabs.git-pull / git-push, on the work folder's repo).
+// One action per gesture, only past a clear threshold, at most every 3 s.
+function pinchGit(state, e) {
+  if (e.touch_phase === "started") { state.sum = 0; return; }
+  if (e.touch_phase === "moved") { state.sum = (state.sum ?? 0) + (e.delta ?? 0); return; }
+  if (e.touch_phase !== "ended") { state.sum = 0; return; }
+  const sum = (state.sum ?? 0) + (e.delta ?? 0);
+  state.sum = 0;
+  if (Date.now() - (state.at ?? 0) < 3000) return;
+  if (sum >= 0.35) { state.at = Date.now(); run("vnh-tabs.git-pull"); }
+  else if (sum <= -0.3) { state.at = Date.now(); run("vnh-tabs.git-push"); }
+}
+
 export default class Tabs extends View {
   init(_props, cx) {
     this.pressed = null;
@@ -60,6 +74,7 @@ export default class Tabs extends View {
         else if (c === "files" || c === "changes" || c === "graph") this.togglePanel(c);
         // "vnh-tabs.git-push" (cmd-\): push the work folder's branch and its tags, no dialog.
         else if (c === "git-push") this.gitPush();
+        else if (c === "git-pull") this.gitPull();
         cx.notify();
       }
     });
@@ -96,6 +111,25 @@ export default class Tabs extends View {
       })
       .catch((e) => notify({ title: "Push failed", body: String(e?.message ?? e), level: "error", timeout: 8000 }))
       .finally(() => { this.pushing = false; });
+  }
+
+  // VNH: pull the work folder's branch, fast-forward only (a pinch out over the bars).
+  gitPull() {
+    if (this.pulling) return;
+    const space = spaces().find((s) => s.active);
+    const cwd = (shared("vnh.lastCwd") ?? {})[space?.id] ?? space?.folder;
+    if (!cwd) return;
+    this.pulling = true;
+    notify({ title: "Pulling…", body: cwd.split("/").pop(), level: "info", timeout: 2500 });
+    exec("env", ["GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=0", "git", "pull", "--ff-only"], { cwd, on: space?.machine ?? null, timeout: 120000 })
+      .then((r) => {
+        const out = `${r.stdout ?? ""}\n${r.stderr ?? ""}`.trim().split("\n").filter(Boolean);
+        if (r.code === 0) notify({ title: /up to date/i.test(out.join(" ")) ? "Already up to date" : "Pulled", body: out.pop() ?? "", level: "success", timeout: 4000 });
+        else notify({ title: "Pull failed", body: out.pop() ?? `git exited ${r.code}`, level: "error", timeout: 8000 });
+        setShared("vnh.git.changed", Date.now());
+      })
+      .catch((e) => notify({ title: "Pull failed", body: String(e?.message ?? e), level: "error", timeout: 8000 }))
+      .finally(() => { this.pulling = false; });
   }
 
   // VNH: one right-side view at a time. Showing Files / Changes / Git while the Timeline shows
@@ -343,6 +377,7 @@ export default class Tabs extends View {
         .child(svg("mods/vnh-prompts/timeline.svg").size(14)).child("Timeline");
     };
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+      .on_pinch((e) => pinchGit(this.pinch ??= {}, e))
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => this.wheel(e))
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
