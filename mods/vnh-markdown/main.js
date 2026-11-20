@@ -6,7 +6,7 @@
 // show up. Links: web URLs open in the browser; a relative .md link opens in another tab like this.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { theme, props, readTextFile, run, spaces, window, exec, panes, nextCommand, layout } from "herdr";
+import { theme, props, readTextFile, run, spaces, window, exec, panes, nextCommand, layout, shared, setShared } from "herdr";
 
 const MAX = 1_000_000; // readTextFile's limit
 const FONT = "PragmataPro";
@@ -27,17 +27,34 @@ export default class MarkdownView extends View {
     this.text = null;
     this.error = null;
     this.kb = cx.focus_handle();
-    // This copy's own tab: a new tab is the active one when it opens. Closing uses it, not "the
-    // focused Markdown pane", which could be another of these tabs.
-    const activeTab = () => spaces().find((s) => s.active)?.tabs.find((t) => t.active)?.id ?? null;
-    this.myTab = activeTab();
-    // Take the keyboard on open, but only while this tab shows and the window is in use: grabbing it
-    // later made a Space typed elsewhere (a prompt) close the tab at once.
-    cx.timer.after(150, () => {
-      this.myTab ??= activeTab();
-      if (window()?.active && activeTab() === this.myTab) this.kb.focus();
+    // This copy's own pane. A mod pane isn't told its id, so each copy claims an unclaimed
+    // vnh-markdown pane (the one in the active tab first) in shared "vnh.markdown.panes", retrying
+    // until its tab exists. Closing uses it, never "whichever Markdown pane is focused".
+    this.myPane = null; this.showing = false;
+    const claim = () => {
+      const all = panes().filter((p) => p.mod === "vnh-markdown"), live = new Set(all.map((p) => p.pane));
+      const taken = Object.fromEntries(Object.entries(shared("vnh.markdown.panes") ?? {}).filter(([pane]) => live.has(pane)));
+      const active = spaces().find((s) => s.active)?.tabs.find((t) => t.active)?.id;
+      const free = all.filter((p) => !taken[p.pane]);
+      const mine = free.find((p) => p.tab === active) ?? free[free.length - 1];
+      if (!mine) return false;
+      this.myPane = mine.pane;
+      setShared("vnh.markdown.panes", { ...taken, [mine.pane]: props()?.path ?? true });
+      return true;
+    };
+    let tries = 0;
+    const tryClaim = () => { if (!this.myPane && !claim() && ++tries < 20) cx.timer.after(100, tryClaim); };
+    tryClaim();
+    // Take the keyboard when this tab shows (on open, and each time it is selected again), never
+    // from elsewhere: grabbing it while you typed in a prompt made that Space close the tab.
+    cx.timer.every(250, () => {
+      const me = this.myPane && panes().find((p) => p.pane === this.myPane);
+      const active = spaces().find((s) => s.active)?.tabs.find((t) => t.active)?.id;
+      const showing = Boolean(me && window()?.active && active === me.tab);
+      if (showing && !this.showing) this.kb.focus();
+      this.showing = showing;
     });
-    cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); if (c === "focus") { this.kb.focus(); cx.notify(); } } });
+    cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); if (c === "focus") { this.kb.focus(); cx.notify(); } else if (c === "close" && this.showing) this.close(); } });
     this.load(cx);
     cx.timer.every(2000, (cx) => { if (window()?.active) this.load(cx); });
   }
@@ -64,7 +81,7 @@ export default class MarkdownView extends View {
     // ("tab.close failed: no tab …").
     if (this.closing) return;
     const mine = panes().filter((p) => p.mod === "vnh-markdown");
-    const me = (this.myTab && mine.find((p) => p.tab === this.myTab)) ?? mine.find((p) => p.pane === props()?.pane);
+    const me = mine.find((p) => p.pane === this.myPane);
     if (!me) return;
     this.closing = true;
     run("tab.close", { id: me.tab, confirmed: true });
