@@ -2,7 +2,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, InputState, Input, Popup } from "gpui-base";
-import { hc, run, theme, themes, fonts, updates, telemetry, settings, layouts, shared, appHome, readTextFile, writeTextFile, playSound, props, closeOverlay, notify, window, exec } from "herdr";
+import { hc, run, theme, themes, fonts, updates, telemetry, settings, layouts, shared, appHome, readTextFile, writeTextFile, playSound, props, closeOverlay, notify, window, exec, keys, commands } from "herdr";
 
 const I = (name) => `frame/settings/${name}.svg`;
 
@@ -71,6 +71,14 @@ export default class Settings extends View {
     this.modsSearch.on("change", (_e, cx) => cx.notify());
     this.modsSearch.on("focus", (_e, cx) => { this.modsSearchFocused = true; cx.notify(); });
     this.modsSearch.on("blur", (_e, cx) => { this.modsSearchFocused = false; cx.notify(); });
+    // Keyboard tab: a live shortcut editor over keys.json.
+    this.capturing = null; // { section, action, old } while waiting for a chord; `add` sets new ones
+    this.keysAdding = false; // the "add a shortcut" command picker is open
+    this.keysCollapsed = new Set(); // collapsed sections
+    this.keysSearch = InputState.new({ placeholder: "Search shortcuts" });
+    this.keysSearch.on("change", (_e, cx) => cx.notify());
+    this.keysSearch.on("focus", (_e, cx) => { this.keysSearchFocused = true; cx.notify(); });
+    this.keysSearch.on("blur", (_e, cx) => { this.keysSearchFocused = false; cx.notify(); });
     cx.spawn(async (cx) => {
       await this.load();
       if (this.section === "machines") await this.loadMachines();
@@ -579,6 +587,158 @@ export default class Settings extends View {
       .child(fontRow("ui_font", null, "Interface font", s.ui_font_family, DEFAULT_UI_FONT));
   }
 
+  // ——— Keyboard: a live shortcut editor over keys.json ———
+
+  kbdKey(t, text) {
+    return div().flex_none().px(5).h(20).min_w(20).flex().items_center().justify_center().rounded(5)
+      .border_1().border_color(t.border).bg(t.raised).text_size(11).font_medium().text_color(t.muted).child(text);
+  }
+
+  // A chord ("cmd-shift-b") as key caps. "cmd--" is cmd and the minus key.
+  kbdChord(t, chord) {
+    const SYM = { cmd: "⌘", ctrl: "⌃", control: "⌃", alt: "⌥", option: "⌥", shift: "⇧", fn: "fn", enter: "↩", escape: "esc", up: "↑", down: "↓", left: "←", right: "→", tab: "⇥", space: "␣", backspace: "⌫", delete: "⌦" };
+    const parts = chord.endsWith("--") ? [...chord.slice(0, -2).split("-"), "-"] : chord.split("-");
+    return h_flex().flex_none().gap(3).items_center().children(parts.map((p) => this.kbdKey(t, SYM[p.toLowerCase()] ?? (p.length === 1 ? p.toUpperCase() : p))));
+  }
+
+  // A human name for an action: a built-in's first clause, "Open <mod>", or "<mod> · <command>".
+  shortcutLabel(action) {
+    const i = action.indexOf(":");
+    const base = i < 0 ? action : action.slice(0, i);
+    const arg = i < 0 ? null : action.slice(i + 1);
+    if (base === "mod.open") return arg ? `Open ${arg}` : "Open a mod";
+    const c = this.cmdMap?.get(base);
+    if (c) { const s = (c.about || "").split(/[.(]/)[0].trim(); const label = s ? s[0].toUpperCase() + s.slice(1) : base; return arg ? `${label} · ${arg}` : label; }
+    const d = action.indexOf(".");
+    if (d > 0) return `${action.slice(0, d)} · ${action.slice(d + 1)}`;
+    return action;
+  }
+
+  sectionLabel(s) { return s === "global" ? "Global" : s === "terminal" ? "Terminal" : s.startsWith("layout:") ? `Layout · ${s.slice(7)}` : s; }
+
+  // Read keys.json, change it, write it back; the app reloads bindings live.
+  async writeKeys(mutate) {
+    const path = `${appHome()}/keys.json`;
+    try {
+      const text = await readTextFile(path);
+      const data = JSON.parse(text);
+      const warn = mutate(data);
+      await writeTextFile(path, JSON.stringify(data, null, 2) + "\n", text);
+      if (warn) notify({ title: "Shortcut reassigned", body: warn, level: "warning", timeout: 3500 });
+    } catch (e) {
+      notify({ title: "Couldn't save the shortcut", body: String(e?.message ?? e), level: "error", timeout: 4000 });
+    }
+  }
+
+  async applyChord(target, chord) {
+    await this.writeKeys((data) => {
+      const sec = (data[target.section] ??= {});
+      const taken = sec[chord];
+      if (target.old && target.old !== chord) delete sec[target.old];
+      sec[chord] = target.action;
+      if (taken && taken !== target.action) return `${this.kbdText(chord)} was ${this.shortcutLabel(taken)}`;
+    });
+  }
+
+  kbdText(chord) { return chord; }
+
+  clearBinding(section, chord, cx) {
+    cx.spawn(async (cx) => { await this.writeKeys((data) => { if (data[section]) delete data[section][chord]; }); cx.notify(); });
+  }
+
+  keysSearchBox(t) {
+    const has = Boolean(this.keysSearch?.value());
+    return h_flex().flex_1().min_w(0).h(32).px(10).gap(8).items_center().rounded(8).border_1()
+      .border_color(this.keysSearchFocused ? t.accent : t.input).bg(t.background).cursor_text()
+      .on_mouse_down("left", (_e, cx) => { this.keysSearch.focus(); cx.stop_propagation(); })
+      .child(Input.new(this.keysSearch).flex_1().min_w(0).h_full().text_size(13).text_color(t.foreground))
+      .when(has, (el) => el.child(div().id("keys-clear").flex_none().text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => { this.keysSearch.set_value(""); cx.notify(); }).child("✕")));
+  }
+
+  capturingThis(section, action, old, add) {
+    const c = this.capturing;
+    return Boolean(c) && Boolean(c.add) === Boolean(add) && c.action === action && (add ? true : c.section === section && c.old === old);
+  }
+
+  capturePill(t) {
+    return div().flex_none().px(8).h(22).flex().items_center().rounded(6).border_1().border_color(t.accent).bg(t.accent + "1f").text_size(12).text_color(t.accent).child("Press keys… · Esc");
+  }
+
+  shortcutRow(t, b) {
+    const capturing = this.capturingThis(b.section, b.action, b.keys, false);
+    const right = capturing ? this.capturePill(t)
+      : h_flex().flex_none().gap(8).items_center()
+          .child(this.kbdChord(t, b.keys))
+          .child(div().id(`kx-${b.section}-${b.keys}`).flex_none().w(16).text_size(12).text_color(t.dim).cursor_pointer()
+            .hover((s) => s.text_color(t.blocked)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+            .on_click((_e, cx) => this.clearBinding(b.section, b.keys, cx)).child("✕"));
+    return h_flex().id(`sc-${b.section}-${b.keys}`).w_full().gap(16).py(10).items_center().border_b(1).border_color(t.border).cursor_pointer()
+      .hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { this.capturing = { section: b.section, action: b.action, old: b.keys }; this.keysAdding = false; this.handle.focus(); cx.notify(); })
+      .child(v_flex().flex_1().min_w(0).gap(2)
+        .child(div().text_size(13.5).text_color(t.foreground).truncate().child(this.shortcutLabel(b.action)))
+        .child(div().text_size(11.5).text_color(t.dim).truncate().child(b.action)))
+      .child(right);
+  }
+
+  shortcutsGroup(t, section, binds) {
+    const collapsed = this.keysCollapsed.has(section);
+    const header = h_flex().id(`sg-${section}`).w_full().pt(12).pb(6).gap(8).items_center().cursor_pointer()
+      .on_click((_e, cx) => { if (collapsed) this.keysCollapsed.delete(section); else this.keysCollapsed.add(section); cx.notify(); })
+      .child(div().flex_none().w(12).text_size(10).text_color(t.dim).child(collapsed ? "▸" : "▾"))
+      .child(div().flex_none().text_size(12).font_semibold().text_color(t.dim).child(this.sectionLabel(section).toUpperCase()))
+      .child(div().flex_1())
+      .child(div().flex_none().text_size(11).text_color(t.dim).child(String(binds.length)));
+    const sec = v_flex().w_full().child(header);
+    if (!collapsed) sec.child(v_flex().w_full().children(binds.sort((a, b) => this.shortcutLabel(a.action).localeCompare(this.shortcutLabel(b.action))).map((b) => this.shortcutRow(t, b))));
+    return sec;
+  }
+
+  // One command in "add" mode, with the chord(s) it already has.
+  addRow(t, c, binds) {
+    const have = binds.filter((b) => b.action === c.name || b.action.startsWith(`${c.name}:`));
+    const capturing = this.capturingThis(null, c.name, null, true);
+    const right = capturing ? this.capturePill(t)
+      : have.length ? h_flex().flex_none().gap(6).items_center().children(have.slice(0, 3).map((b) => this.kbdChord(t, b.keys)))
+        : div().flex_none().px(10).h(24).flex().items_center().rounded(6).border_1().border_color(t.border).bg(t.raised).text_size(12).text_color(t.muted).child("Set shortcut");
+    return h_flex().id(`ad-${c.name}`).w_full().gap(16).py(10).items_center().border_b(1).border_color(t.border).cursor_pointer()
+      .hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { this.capturing = { section: c.name.startsWith("terminal.") ? "terminal" : "global", action: c.name, old: null, add: true }; this.handle.focus(); cx.notify(); })
+      .child(v_flex().flex_1().min_w(0).gap(2)
+        .child(div().text_size(13.5).text_color(t.foreground).truncate().child(this.shortcutLabel(c.name)))
+        .child(div().text_size(11.5).text_color(t.dim).truncate().child(c.about || c.name)))
+      .child(right);
+  }
+
+  shortcutsPanel(t) {
+    this.cmdMap = new Map(commands().map((c) => [c.name, c]));
+    const binds = keys();
+    const q = (this.keysSearch?.value() ?? "").trim().toLowerCase();
+    const addBtn = this.button(t, "keys-add", this.keysAdding ? "← Done" : "+ Add", (_e, cx) => { this.keysAdding = !this.keysAdding; this.keysSearch.set_value(""); this.capturing = null; cx.notify(); });
+
+    const panel = v_flex().w_full().gap(10)
+      .child(this.heading(t, `Shortcuts · ${binds.length}`))
+      .child(div().text_size(12.5).line_height("18px").text_color(t.dim).child(this.keysAdding
+        ? "Pick a command, then press the keys for it. Changes to keys.json apply live."
+        : "Click a shortcut to rebind it (press the new keys, Esc to cancel); ✕ removes it. Applies live."))
+      .child(h_flex().w_full().gap(8).items_center().child(this.keysSearchBox(t)).child(addBtn));
+
+    if (this.keysAdding) {
+      const list = commands().filter((c) => !q || c.name.toLowerCase().includes(q) || (c.about || "").toLowerCase().includes(q)).sort((a, b) => a.name.localeCompare(b.name));
+      panel.child(list.length ? v_flex().w_full().mt(2).children(list.map((c) => this.addRow(t, c, binds)))
+        : div().py(20).text_size(13).text_color(t.dim).child("No commands match."));
+    } else {
+      const match = (b) => !q || this.shortcutLabel(b.action).toLowerCase().includes(q) || b.action.toLowerCase().includes(q) || b.keys.toLowerCase().includes(q);
+      const bySection = {};
+      for (const b of binds) if (match(b)) (bySection[b.section] ??= []).push(b);
+      const order = ["global", "terminal"];
+      const secs = Object.keys(bySection).sort((a, b) => ((order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99)) || a.localeCompare(b));
+      panel.child(secs.length ? v_flex().w_full().mt(2).children(secs.map((s) => this.shortcutsGroup(t, s, bySection[s])))
+        : div().py(20).text_size(13).text_color(t.dim).child("No shortcuts match."));
+    }
+    return panel;
+  }
+
   keyboard(t) {
     const choices = [
       ["auto", "Automatic (Alt on US keyboards)"],
@@ -587,25 +747,17 @@ export default class Settings extends View {
       ["left", "Left Option is Alt"],
       ["right", "Right Option is Alt"],
     ];
-    return v_flex()
-      .w_full()
+    const option = v_flex().w_full().pt(22).mt(10).border_t(1).border_color(t.border)
       .child(this.heading(t, "Option key"))
       .child(div().pb(12).text_size(13).text_color(t.dim).child("Use Option for terminal shortcuts or to type accents and special characters."))
       .children(choices.map(([value, label]) => {
         const on = (this.person.option_as_alt ?? "auto") === value;
-        return h_flex()
-          .id(`st-option-${value}`)
-          .gap(10)
-          .px(12)
-          .py(10)
-          .rounded(7)
-          .items_center()
-          .cursor_pointer()
-          .hover((s) => s.bg(t.hover))
+        return h_flex().id(`st-option-${value}`).gap(10).px(12).py(10).rounded(7).items_center().cursor_pointer().hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => this.change((p) => { p.option_as_alt = value; }, cx))
           .child(div().text_color(on ? t.accent : t.muted).child(on ? "◉" : "○"))
           .child(div().text_size(14).text_color(t.foreground).child(label));
       }));
+    return v_flex().w_full().child(this.shortcutsPanel(t)).child(option);
   }
 
   // Machines -------------------------------------------------------------
@@ -1066,6 +1218,18 @@ export default class Settings extends View {
       .items_start()
       .on_key_down((e, cx) => {
         const k = e.key;
+        // Capturing a shortcut: swallow the next real chord and bind it.
+        if (this.capturing) {
+          const MODS = new Set(["cmd", "ctrl", "control", "alt", "option", "shift", "fn", "super", "meta"]);
+          if (k === "escape") { this.capturing = null; this.handle.focus(); cx.stop_propagation(); cx.notify(); return; }
+          if (MODS.has(k)) { cx.stop_propagation(); return; } // a modifier alone: wait for the key
+          const target = this.capturing, chord = e.keystroke;
+          this.capturing = null; this.keysAdding = false; this.handle.focus();
+          cx.stop_propagation();
+          cx.spawn(async (cx) => { await this.applyChord(target, chord); cx.notify(); });
+          cx.notify();
+          return;
+        }
         if (this.machineEdit) {
           if (k === "escape") this.machineEdit = null;
           else return;

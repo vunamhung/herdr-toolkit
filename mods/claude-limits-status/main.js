@@ -453,7 +453,7 @@ export default class ClaudeLimitsStatus extends View {
   // Send `/model <alias>` (and, for a tier-2 pick, `/effort <level>`) to that agent via `hc send`,
   // which pastes the line and presses Enter. The two commands go in one shell call with a short gap
   // so the first is submitted before the second arrives.
-  switchModel(cx, alias, effort) {
+  switchModel(cx, modelId, effortId) {
     this.menuOpen = false;
     cx.notify();
     const a = this.targetAgent();
@@ -461,12 +461,17 @@ export default class ClaudeLimitsStatus extends View {
       notify({ title: "No Claude Code agent focused", body: "Focus a Claude Code terminal, then pick a model.", level: "warning", timeout: 3500 });
       return;
     }
+    // A corner toast (like Herdr's own), so the feedback isn't the terminal reflowing under the cursor.
+    const m = this.catalog?.models?.find((x) => x.id === modelId);
+    const modelName = modelId === "default" ? "Default" : (m?.name ?? modelId);
+    const effName = effortId ? (m?.thinking?.effort_options?.find((e) => e.id === effortId)?.name ?? effortId) : null;
+    notify({ title: `Model → ${modelName}${effName ? ` · ${effName}` : ""}`, body: `Sent to ${a.program?.name ?? "Claude Code"} · ${a.address}`, level: "info", timeout: 2500 });
     const space = spaces().find((s) => s.id === a.space);
     const on = space?.machine ?? null;
-    const script = effort
+    const script = effortId
       ? 'hc send "$1" "/model $2"; sleep 0.35; hc send "$1" "/effort $3"'
       : 'hc send "$1" "/model $2"';
-    const args = effort ? ["-c", script, "_", a.address, alias, effort] : ["-c", script, "_", a.address, alias];
+    const args = effortId ? ["-c", script, "_", a.address, modelId, effortId] : ["-c", script, "_", a.address, modelId];
     exec("sh", args, { on, timeout: 15000 })
       .then((r) => { if (!r || r.code !== 0) notify({ title: "Couldn't switch model", body: (r?.stderr || "").trim().slice(0, 200) || "hc send failed", level: "error", timeout: 4000 }); })
       .catch((e) => notify({ title: "Couldn't switch model", body: String(e?.message ?? e), level: "error", timeout: 4000 }));
