@@ -406,13 +406,13 @@ export default class Files extends View {
     if (!this.file || !this.root) return;
     const space = spaces().find((s) => s.active)?.id;
     run("tab.new", { space, name: base(this.file), mod: "vnh-markdown",
-      props: { path: `${this.root}/${this.file}`, on: this.on ?? null, back: focused()?.tab ?? null } });
+      props: { path: `${this.root}/${this.file}`, on: this.on ?? null, back: spaces().find((s) => s.active)?.tabs.find((t) => t.active)?.id ?? focused()?.tab ?? null } });
   }
 
   openMarkdownPath(path) {
     const space = spaces().find((s) => s.active)?.id;
     run("tab.new", { space, name: base(path), mod: "vnh-markdown",
-      props: { path: `${this.root}/${path}`, on: this.on ?? null, back: focused()?.tab ?? null } });
+      props: { path: `${this.root}/${path}`, on: this.on ?? null, back: spaces().find((s) => s.active)?.tabs.find((t) => t.active)?.id ?? focused()?.tab ?? null } });
   }
 
   // ------------------------------------------------------------------ rows
