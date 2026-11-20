@@ -168,8 +168,9 @@ export default class Sessions extends View {
     const t = theme(), rows = this.rows(), h = home(), open = this.openPanes();
     if (this.at >= rows.length) this.at = Math.max(0, rows.length - 1);
     const tilde = (p) => (p && h && p.startsWith(h) ? "~" + p.slice(h.length) : p ?? "");
-    const listH = Math.min(460, Math.max(60, rows.length * 52 + 8));
-    return v_flex().id("vnh-sessions").track_focus(this.handle).w_full().bg(t.popover).text_size(13)
+    // Same frame as the cmd-enter command popup (vnh-command): a framed input, a hint row, the list.
+    const listH = Math.min(360, Math.max(40, rows.length * 51));
+    return v_flex().id("vnh-sessions").track_focus(this.handle).w_full().p(14).gap(10).bg(t.popover).text_size(13)
       .on_key_down((e, cx) => {
         const k = e.key;
         if (k === "escape") { cx.stop_propagation(); this.close(); return; }
@@ -181,11 +182,14 @@ export default class Sessions extends View {
         this.scroll.scroll_to_item(this.at);
         cx.stop_propagation(); cx.notify();
       })
-      .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(svg(ICON("search")).size(14).flex_none().text_color(t.dim))
+      .child(h_flex().h(40).flex_none().px(10).gap(8).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
+        .child(svg(ICON("search")).size(15).flex_none().text_color(t.muted))
         .child(Input.new(this.input).flex_1().h_full().text_size(13).text_color(t.foreground))
         .child(div().flex_none().text_size(11).text_color(t.dim).child(this.busy ? "Reading…" : `${rows.length} of ${this.order.length}`)))
-      .child(v_flex().id("vnh-sessions-rows").h(listH).flex_none().p(4).gap(2).overflow_y_scrollbar().track_scroll(this.scroll)
+      .child(h_flex().px(4).text_size(11).text_color(t.dim)
+        .child(div().flex_1().child(this.query.trim() ? "Matches" : "Conversations"))
+        .child(div().child("↑↓ choose · Enter resume · ⌘Enter copy id · Esc")))
+      .child(v_flex().id("vnh-sessions-rows").h(listH).flex_none().gap(1).overflow_y_scrollbar().track_scroll(this.scroll)
         .when(!rows.length, (el) => el.child(div().p(12).text_size(12).text_color(t.dim).child(this.busy ? "Reading conversations…" : "No conversation matches")))
         .children(rows.map((s, i) => {
           const on = i === this.at;
@@ -199,7 +203,7 @@ export default class Sessions extends View {
             .on_click((_e, cx) => { cx.stop_propagation(); action(cx); })
             .child(svg(ICON(icon)).size(13));
           return v_flex().id(`ses-${s.id}`).relative().h(50).flex_none().px(10).py(5).gap(3).justify_center().rounded(7).cursor_pointer()
-            .when(on, (el) => el.bg(t.accent + "33")).hover((st) => st.bg(t.hover))
+            .when(on, (el) => el.bg(t.selection ?? t.selected)).hover((st) => st.bg(t.hover))
             .on_hover((over, cx) => { const next = over ? s.f : this.hover === s.f ? null : this.hover; if (next !== this.hover) { this.hover = next; if (!over && this.confirm === s.f) this.confirm = null; cx.notify(); } })
             .on_click(() => this.open(s))
             // VNH: on hover a trash at the right edge; a press asks ✓ / ✗ right beside it.
@@ -221,8 +225,6 @@ export default class Sessions extends View {
               .when(Boolean(s.branch), (el) => el.child(h_flex().flex_none().gap(3).items_center()
                 .child(svg(ICON("branch")).size(10).flex_none()).child(div().max_w(140).truncate().child(s.branch))))
               .when(Boolean(s.title && s.prompt), (el) => el.child(div().flex_1().min_w(0).truncate().child(s.prompt))));
-        })))
-      .child(h_flex().h(26).flex_none().px(12).items_center().border_t(1).border_color(t.border).text_size(10.5).text_color(t.dim)
-        .child(div().flex_1().min_w(0).truncate().child("Enter resumes, or goes to its open tab · ⌘Enter copies the id · Esc")));
+        })));
   }
 }
