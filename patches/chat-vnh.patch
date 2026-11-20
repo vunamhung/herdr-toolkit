@@ -1,0 +1,57 @@
+--- a/mods/chat/main.js
++++ b/mods/chat/main.js
+@@ -338,6 +338,7 @@
+       if (this.redirectFocus(cx)) changed = true;
+     }
+     if (shown) this.markSeen(me, cx);
++    if (shown && !this.sub) this.vnhPublish(me); // VNH: the status bar shows this chat's model
+     if (this.sub && this.subKey() !== this.lastSubKey) { this.lastSubKey = this.subKey(); changed = true; } // the header bar
+     // The hand-off's terminal (in its dialog): finished, back to the chat (the
+     // host resumes the agent by itself).
+@@ -1692,6 +1693,23 @@
+         cx.notify();
+       }
+     });
++  }
++
++  // VNH: publishes { provider, model, effort, ctx } under this chat's tab id in shared "vnh.chat", only while the
++  // tab is shown and only when something changed, so the status bar can show the chat in front of you (a chat
++  // runs `claude -p`, which never calls the status line script).
++  vnhPublish(me) {
++    const s = this.store.state;
++    const entry = {
++      provider: s.provider ?? this.conn.provider ?? this.provider ?? null,
++      model: s.model?.name ?? s.model?.id ?? null,
++      effort: s.thinking ?? null,
++      ctx: s.usage?.percent != null ? Math.round(s.usage.percent) : null,
++    };
++    const key = `${me.tab}:${JSON.stringify(entry)}`;
++    if (key === this.vnhKey) return;
++    this.vnhKey = key;
++    setShared("vnh.chat", { ...(shared("vnh.chat") ?? {}), [me.tab]: { ...entry, at: Date.now() } });
+   }
+ 
+   command(c, cx) {
+@@ -1716,6 +1734,22 @@
+     else if (c === "clear") this.composer.clear();
+     else if (c.startsWith("wheel:")) this.wheel(Number(c.slice(6)), cx);
+     else if (c === "outside") this.outside(cx);
++    // VNH: the status bar's model menu. setmodel:<model id>|<model name>|<effort> switches this chat live (the agent's
++    // own control request, nothing typed into it), like the model and effort chips. The agent lists its models by
++    // an alias ("opus", "fable"…), so the name picks that alias (the chip then reads "Opus 5.5", not the raw id);
++    // an id the list doesn't know goes through as given. The effort part may be empty.
++    else if (c.startsWith("setmodel:")) {
++      const [id, name, effort] = c.slice(9).split("|");
++      cx.spawn(async (cx) => {
++        let modelId = id;
++        try {
++          const d = await this.req("models", {}, cx);
++          const hit = (d?.models ?? []).find((m) => name && String(m.name).toLowerCase() === name.toLowerCase());
++          if (hit) modelId = hit.id;
++        } catch { /* keep the id as given */ }
++        this.fire("set_model", { provider: "anthropic", modelId }, cx, effort ? () => this.fire("set_thinking", { level: effort }, cx) : undefined);
++      });
++    }
+     else if (c.startsWith("shortcut:")) this.shortcut(c.slice(9), cx);
+     else if (c.startsWith("type:")) { this.composer.set(this.composer.value + c.slice(5)); this.updateMenu(cx); } // E2E: when the window drops keys
+   }

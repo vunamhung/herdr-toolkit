@@ -408,8 +408,23 @@ export default class ClaudeLimitsStatus extends View {
       .when(Boolean(reset), (el) => el.child(div().child(untilReset(reset))));
   }
 
+  // The chat in front of you, if the shown tab is a chat: the patched chat mod publishes its model, effort
+  // and context under its tab id in shared "vnh.chat" while that tab is shown (patches/chat-vnh.patch).
+  // A chat runs `claude -p`, which never calls the status line script, so the files can't describe it.
+  liveChat() {
+    const tab = focused()?.tab;
+    return (tab ? (shared("vnh.chat") ?? {})[tab] : null) ?? null;
+  }
+
+  // The shown chat when it is a Claude one (the catalog is Claude's), else null: the menu then saves a default.
+  liveClaudeChat() {
+    const c = this.liveChat();
+    return c && /claude|anthropic/i.test(c.provider ?? "") ? c : null;
+  }
+
   claude(t) {
-    const l = this.limits;
+    const chat = this.liveChat();
+    const l = chat ? { ...(this.limits ?? {}), model: chat.model, effort: chat.effort, ctx: chat.ctx } : this.limits;
     if (!l) return null;
     const row = h_flex().gap(10).items_center()
       .child(div().child("|"))
@@ -427,7 +442,7 @@ export default class ClaudeLimitsStatus extends View {
     const trigger = h_flex().id("vnh-model").gap(5).items_center().cursor_pointer()
       .when(this.menuOpen, (el) => el.text_color(t.foreground))
       .hover((s) => s.text_color(t.foreground))
-      .tooltip("Default model for new sessions · hover a model for its effort")
+      .tooltip(this.liveClaudeChat() ? "Switch this chat's model · hover a model for its effort" : "Default model for new sessions · hover a model for its effort")
       // A Claude session that hasn't reported yet has no model: "…" instead of another session's.
       .child(div().child(l.model ?? "…"))
       .when(Boolean(l.effort), (el) => el.child(div().text_color(t.dim).child(l.effort)));
@@ -452,22 +467,23 @@ export default class ClaudeLimitsStatus extends View {
   modelMenuContent(t) {
     if (!this.catalog) return v_flex().w(190).p(4).rounded(8).border_1().border_color(t.border).bg(t.popover)
       .child(div().px(8).py(6).text_size(12).text_color(t.dim).child("Loading models…"));
+    const live = this.liveClaudeChat(); // a Claude chat is shown: the menu switches it, ticks follow it
     const saved = this.defaultModel(); // null: no `model` saved, the account default
     const modelRow = (m) => {
-      const on = m.default ? !saved : saved?.id === m.id;
+      const on = live ? (m.name || "").toLowerCase() === String(live.model ?? "").toLowerCase() : m.default ? !saved : saved?.id === m.id;
       const efforts = m.thinking?.effort_options ?? [];
       const modelId = m.default ? "default" : m.id;
       const row = h_flex().id(`vm-${m.id}`).h(28).px(8).gap(8).items_center().rounded(5).cursor_pointer()
         .text_size(12).text_color(on ? t.foreground : t.muted)
         .when(on, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => this.saveDefault(cx, modelId, null))
+        .on_click((_e, cx) => this.choose(cx, modelId, null))
         .child(div().flex_1().child(m.name))
         .when(on, (el) => el.child(div().flex_none().text_color(t.accent).child("✓")))
         .when(m.hint === "recommended", (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("default")))
         .when(efforts.length > 0, (el) => el.child(div().flex_none().text_color(t.dim).child("›")));
       if (!efforts.length) return row;
       // This model's saved effort: what new sessions use, else the level Claude Code reports for it.
-      const effortNow = this.defaults?.effort?.[m.id] ?? this.catalog.effortByModel[m.id] ?? null;
+      const effortNow = live ? (on ? live.effort : null) : (this.defaults?.effort?.[m.id] ?? this.catalog.effortByModel[m.id] ?? null);
       const sub = v_flex().w(150).p(4).gap(1).ml(6).rounded(8).border_1().border_color(t.border).bg(t.popover)
         .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Effort"))
         .children(efforts.map((e) => {
@@ -475,7 +491,7 @@ export default class ClaudeLimitsStatus extends View {
           return h_flex().id(`ve-${m.id}-${e.id}`).h(26).px(8).gap(6).items_center().rounded(5).cursor_pointer()
             .text_size(12).text_color(eon ? t.foreground : t.muted)
             .when(eon, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-            .on_click((_e, cx) => this.saveDefault(cx, modelId, e.id))
+            .on_click((_e, cx) => this.choose(cx, modelId, e.id))
             .child(div().flex_1().child(e.name))
             .when(Boolean(e.badge?.message), (el) => el.child(div().flex_none().text_size(10).text_color(e.badge.variant === "warning" ? t.ansi3 : t.dim).child(e.badge.message)));
         }));
@@ -483,8 +499,25 @@ export default class ClaudeLimitsStatus extends View {
         .trigger(row).content(sub);
     };
     return v_flex().w(200).p(4).gap(1).rounded(8).border_1().border_color(t.border).bg(t.popover)
-      .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Model · new sessions"))
+      .child(div().px(8).py(3).text_size(10).text_color(t.dim).child(live ? "Model · this chat" : "Model · new sessions"))
       .children(this.modelRows().map(modelRow));
+  }
+
+  // A pick: switches the shown Claude chat live (chat.setmodel, the chat's own control request: nothing is
+  // typed anywhere), else saves the default for new sessions.
+  choose(cx, modelId, effortId) {
+    if (!this.liveClaudeChat()) return this.saveDefault(cx, modelId, effortId);
+    this.menuOpen = false;
+    cx.notify();
+    const m = this.catalog?.models?.find((x) => x.id === modelId);
+    const modelName = modelId === "default" ? "Default" : (m?.name ?? modelId);
+    const effName = effortId ? (m?.thinking?.effort_options?.find((e) => e.id === effortId)?.name ?? effortId) : null;
+    try {
+      run(`chat.setmodel:${modelId}|${modelName}|${effortId ?? ""}`);
+      notify({ title: `This chat → ${modelName}${effName ? ` · ${effName}` : ""}`, body: "Switched live. New sessions keep their default.", level: "success", timeout: 2500 });
+    } catch (e) {
+      notify({ title: "Couldn't switch this chat", body: String(e?.message ?? e).slice(0, 200), level: "error", timeout: 4000 });
+    }
   }
 
   // Save the pick as the default for new sessions: edit `model` (and the model's `effortLevel`) in
