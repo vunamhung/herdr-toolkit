@@ -1,6 +1,6 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex, v_flex, Popover, HoverCard } from "gpui-base";
-import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, exec, checking, shared, focused, notify } from "herdr";
+import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, writeTextFile, exec, checking, shared, focused, notify } from "herdr";
 
 // The model picker's two tiers come from Claude Code's own model catalog, which it refreshes itself —
 // so the menu never invents a model or an effort level. ~/.claude/cache/model-catalog/<account>.json:
@@ -8,8 +8,14 @@ import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, ex
 //                              thinking: { effort_options: [{ id, name, badge? }] } }  the real effort
 //                              levels that model supports, named as Claude shows them ("Extra" = xhigh).
 //   catalog.state.thinking_by_model[]  { id, thinking: { effort } }  each model's persisted effort.
-// Tier 1 sends `/model <id>` (or `/model default`); tier 2 also sends `/effort <id>`.
+// Picking is silent: nothing is typed into any Claude Code terminal. Tier 1 sets the default model
+// for NEW sessions in ~/.claude/settings.json (`model`; "Default" removes it); tier 2 also saves that
+// model's effort (`modelSettings.<id>.effortLevel`). A running session keeps its own model (it holds
+// it in memory and ignores the file), so the result is a corner toast, not a change in the terminal.
+// Claude Code only persists these efforts as defaults; "max" is session-only, so it isn't saved.
 const CATALOG_DIR = "/.claude/cache/model-catalog";
+const SETTINGS_FILE = "/.claude/settings.json";
+const PERSISTED_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 
 const PRICE_MS = 120000;
 const PRICES = [{ id: "bitcoin", label: "BTC" }, { id: "ethereum", label: "ETH" }, { id: "tether-gold", label: "Gold" }];
@@ -176,6 +182,28 @@ export default class ClaudeLimitsStatus extends View {
     } catch {
       // half-written or missing: keep the last good catalog
     }
+    await this.loadDefaults();
+  }
+
+  // What new sessions will use: `model` and each model's `effortLevel` from ~/.claude/settings.json.
+  async loadDefaults() {
+    try {
+      const j = JSON.parse((await readTextFile(home() + SETTINGS_FILE)) || "{}");
+      const effort = {};
+      for (const [id, s] of Object.entries(j.modelSettings ?? {})) if (s?.effortLevel) effort[id] = s.effortLevel;
+      this.defaults = { model: typeof j.model === "string" ? j.model : null, effort };
+    } catch {
+      // unreadable for a moment: keep the last values
+    }
+  }
+
+  // The catalog model new sessions start on: `model` is an id or an alias ("opus", "fable") that means
+  // the newest model of that family, which the catalog lists first. null = the account default.
+  defaultModel() {
+    const want = (this.defaults?.model || "").toLowerCase();
+    if (!want) return null;
+    const models = this.catalog?.models ?? [];
+    return models.find((m) => m.id === want) ?? models.find((m) => (m.short_name || "").toLowerCase() === want) ?? null;
   }
 
   // BTC, ETH and gold (Tether Gold, one token per troy ounce) from CoinGecko's public price API:
@@ -379,7 +407,7 @@ export default class ClaudeLimitsStatus extends View {
     const trigger = h_flex().id("vnh-model").gap(5).items_center().cursor_pointer()
       .when(this.menuOpen, (el) => el.text_color(t.foreground))
       .hover((s) => s.text_color(t.foreground))
-      .tooltip("Change model · hover a model for its effort level")
+      .tooltip("Default model for new sessions · hover a model for its effort")
       .child(div().child(l.model))
       .when(Boolean(l.effort), (el) => el.child(div().text_color(t.dim).child(l.effort)));
     return Popover.new("vnh-model-menu").anchor("bottom_left").open(this.menuOpen)
@@ -388,15 +416,14 @@ export default class ClaudeLimitsStatus extends View {
       .when(this.menuOpen, (el) => el.content(this.modelMenuContent(t)));
   }
 
-  // Tier-1 rows: "Default" (recommended), then the catalog's quick-pick models, then the running
-  // model when it isn't one of them — each with its real version name, the running one ticked.
+  // Tier-1 rows: "Default" (recommended), then the catalog's quick-pick models, then the saved default
+  // model when it isn't one of them — each with its real version name, the saved default ticked.
   modelRows() {
     const models = this.catalog?.models ?? [];
-    const curName = (this.limits?.model || "").toLowerCase();
     const quick = models.filter((m) => m.quick_select || m.section === "main");
     const rows = [{ id: "default", name: "Default", hint: "recommended", default: true, thinking: null }];
     for (const m of quick) rows.push(m);
-    const cur = models.find((m) => (m.name || "").toLowerCase() === curName);
+    const cur = this.defaultModel();
     if (cur && !quick.some((m) => m.id === cur.id)) rows.push(cur);
     return rows;
   }
@@ -404,23 +431,22 @@ export default class ClaudeLimitsStatus extends View {
   modelMenuContent(t) {
     if (!this.catalog) return v_flex().w(190).p(4).rounded(8).border_1().border_color(t.border).bg(t.popover)
       .child(div().px(8).py(6).text_size(12).text_color(t.dim).child("Loading models…"));
-    const curName = (this.limits?.model || "").toLowerCase();
-    const curEffort = this.limits?.effort || null;
+    const saved = this.defaultModel(); // null: no `model` saved, the account default
     const modelRow = (m) => {
-      const on = !m.default && (m.name || "").toLowerCase() === curName;
+      const on = m.default ? !saved : saved?.id === m.id;
       const efforts = m.thinking?.effort_options ?? [];
       const modelId = m.default ? "default" : m.id;
       const row = h_flex().id(`vm-${m.id}`).h(28).px(8).gap(8).items_center().rounded(5).cursor_pointer()
         .text_size(12).text_color(on ? t.foreground : t.muted)
         .when(on, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => this.switchModel(cx, modelId, null))
+        .on_click((_e, cx) => this.saveDefault(cx, modelId, null))
         .child(div().flex_1().child(m.name))
         .when(on, (el) => el.child(div().flex_none().text_color(t.accent).child("✓")))
         .when(m.hint === "recommended", (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("default")))
         .when(efforts.length > 0, (el) => el.child(div().flex_none().text_color(t.dim).child("›")));
       if (!efforts.length) return row;
-      // This model's current effort: the running one for the active model, else its persisted level.
-      const effortNow = on ? curEffort : (this.catalog.effortByModel[m.id] ?? null);
+      // This model's saved effort: what new sessions use, else the level Claude Code reports for it.
+      const effortNow = this.defaults?.effort?.[m.id] ?? this.catalog.effortByModel[m.id] ?? null;
       const sub = v_flex().w(150).p(4).gap(1).ml(6).rounded(8).border_1().border_color(t.border).bg(t.popover)
         .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Effort"))
         .children(efforts.map((e) => {
@@ -428,7 +454,7 @@ export default class ClaudeLimitsStatus extends View {
           return h_flex().id(`ve-${m.id}-${e.id}`).h(26).px(8).gap(6).items_center().rounded(5).cursor_pointer()
             .text_size(12).text_color(eon ? t.foreground : t.muted)
             .when(eon, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-            .on_click((_e, cx) => this.switchModel(cx, modelId, e.id))
+            .on_click((_e, cx) => this.saveDefault(cx, modelId, e.id))
             .child(div().flex_1().child(e.name))
             .when(Boolean(e.badge?.message), (el) => el.child(div().flex_none().text_size(10).text_color(e.badge.variant === "warning" ? t.ansi3 : t.dim).child(e.badge.message)));
         }));
@@ -436,45 +462,45 @@ export default class ClaudeLimitsStatus extends View {
         .trigger(row).content(sub);
     };
     return v_flex().w(200).p(4).gap(1).rounded(8).border_1().border_color(t.border).bg(t.popover)
-      .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Model"))
+      .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Model · new sessions"))
       .children(this.modelRows().map(modelRow));
   }
 
-  // The Claude Code agent to retarget: the focused terminal when it is one, else the focused agent.
-  targetAgent() {
-    const list = agents();
-    const f = focused();
-    const isClaude = (a) => Boolean(a) && (a.app === "claude-code" || a.program?.key === "claude");
-    let a = f?.terminal ? list.find((x) => x.address === f.terminal) : null;
-    if (!isClaude(a)) a = list.find((x) => x.focused && isClaude(x)) ?? null;
-    return isClaude(a) ? a : null;
-  }
-
-  // Send `/model <alias>` (and, for a tier-2 pick, `/effort <level>`) to that agent via `hc send`,
-  // which pastes the line and presses Enter. The two commands go in one shell call with a short gap
-  // so the first is submitted before the second arrives.
-  switchModel(cx, modelId, effortId) {
+  // Save the pick as the default for new sessions: edit `model` (and the model's `effortLevel`) in
+  // ~/.claude/settings.json, keeping everything else, then show a corner toast. Nothing is sent to any
+  // terminal. The write fails (and is retried once) if Claude Code changed the file in between.
+  saveDefault(cx, modelId, effortId) {
     this.menuOpen = false;
     cx.notify();
-    const a = this.targetAgent();
-    if (!a) {
-      notify({ title: "No Claude Code agent focused", body: "Focus a Claude Code terminal, then pick a model.", level: "warning", timeout: 3500 });
-      return;
-    }
-    // A corner toast (like Herdr's own), so the feedback isn't the terminal reflowing under the cursor.
     const m = this.catalog?.models?.find((x) => x.id === modelId);
     const modelName = modelId === "default" ? "Default" : (m?.name ?? modelId);
     const effName = effortId ? (m?.thinking?.effort_options?.find((e) => e.id === effortId)?.name ?? effortId) : null;
-    notify({ title: `Model → ${modelName}${effName ? ` · ${effName}` : ""}`, body: `Sent to ${a.program?.name ?? "Claude Code"} · ${a.address}`, level: "info", timeout: 2500 });
-    const space = spaces().find((s) => s.id === a.space);
-    const on = space?.machine ?? null;
-    const script = effortId
-      ? 'hc send "$1" "/model $2"; sleep 0.35; hc send "$1" "/effort $3"'
-      : 'hc send "$1" "/model $2"';
-    const args = effortId ? ["-c", script, "_", a.address, modelId, effortId] : ["-c", script, "_", a.address, modelId];
-    exec("sh", args, { on, timeout: 15000 })
-      .then((r) => { if (!r || r.code !== 0) notify({ title: "Couldn't switch model", body: (r?.stderr || "").trim().slice(0, 200) || "hc send failed", level: "error", timeout: 4000 }); })
-      .catch((e) => notify({ title: "Couldn't switch model", body: String(e?.message ?? e), level: "error", timeout: 4000 }));
+    const keepsEffort = !effortId || PERSISTED_EFFORTS.has(effortId);
+    cx.spawn(async (cx) => {
+      try {
+        const path = home() + SETTINGS_FILE;
+        for (let attempt = 0; ; attempt++) {
+          const text = await readTextFile(path);
+          const data = text ? JSON.parse(text) : {};
+          if (modelId === "default") delete data.model; else data.model = modelId;
+          if (effortId && keepsEffort && modelId !== "default") {
+            data.modelSettings = { ...(data.modelSettings ?? {}), [modelId]: { ...(data.modelSettings?.[modelId] ?? {}), effortLevel: effortId } };
+          }
+          try { await writeTextFile(path, JSON.stringify(data, null, 2) + "\n", text); break; }
+          catch (e) { if (attempt >= 1) throw e; }
+        }
+        await this.loadDefaults();
+        cx.notify();
+        notify({
+          title: `New sessions → ${modelName}${effName ? ` · ${effName}` : ""}`,
+          body: keepsEffort ? "Saved as the default. Running sessions keep their model."
+            : "Model saved. Max isn't kept as a default (Claude Code only saves up to Extra): use /effort max inside a session.",
+          level: keepsEffort ? "success" : "warning", timeout: 3500,
+        });
+      } catch (e) {
+        notify({ title: "Couldn't save the default model", body: String(e?.message ?? e).slice(0, 200), level: "error", timeout: 4000 });
+      }
+    });
   }
 
   render() {
