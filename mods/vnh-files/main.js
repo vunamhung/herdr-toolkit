@@ -10,7 +10,7 @@
 // Space quick-look (Markdown) or preview, Esc back, / search.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, InputState, Input, v_virtual_list, Scrollbar, VirtualListScrollHandle } from "gpui-base";
-import { readTextFile, writeTextFile, watchFolder, theme, settings, window, run, checking, nextCommand, openOverlay, notify, spaces, focused, exec, appHome } from "herdr";
+import { readTextFile, writeTextFile, watchFolder, theme, settings, window, run, checking, nextCommand, openOverlay, notify, spaces, focused, exec, appHome, setShared, panes } from "herdr";
 import {
   location, locationKey, rememberWorkFolder, PER_FOLDER, TOTAL, EXPAND_FOLDERS, CHUNK, LANG, IMAGE, MARKDOWN,
   ext, base, parent, fmtSize, fmtCounts, ago, alpha, SORTS, sortEntries, markColor, parseStatus, parseHunks,
@@ -19,6 +19,21 @@ import {
 
 const ROW = 28, DIFF_ROW = 19, RECENT_MIN = 15, RECENT_MAX = 8, RECENT_VIEWED = 15;
 const key = locationKey;
+
+// VNH: the space's Markdown tab, reused for every preview: ask it to switch (shared
+// "vnh.markdown.open", read by that pane's copy) and show it; open one only when there is none.
+function openMarkdownTab(path, on) {
+  const space = spaces().find((s) => s.active);
+  if (!space || !path) return;
+  const ids = new Set(space.tabs.map((t) => t.id)), current = space.tabs.find((t) => t.active)?.id ?? null;
+  const md = panes().find((p) => p.mod === "vnh-markdown" && ids.has(p.tab));
+  if (md) {
+    setShared("vnh.markdown.open", { pane: md.pane, path, on: on ?? null, back: current !== md.tab ? current : null, n: Date.now() });
+    run("tab.select", { id: md.tab });
+  } else {
+    run("tab.new", { space: space.id, name: path.split("/").pop(), mod: "vnh-markdown", props: { path, on: on ?? null, back: current } });
+  }
+}
 
 export default class Files extends View {
   init(_props, cx) {
@@ -404,15 +419,11 @@ export default class Files extends View {
 
   openMarkdown() {
     if (!this.file || !this.root) return;
-    const space = spaces().find((s) => s.active)?.id;
-    run("tab.new", { space, name: base(this.file), mod: "vnh-markdown",
-      props: { path: `${this.root}/${this.file}`, on: this.on ?? null, back: spaces().find((s) => s.active)?.tabs.find((t) => t.active)?.id ?? focused()?.tab ?? null } });
+    openMarkdownTab(`${this.root}/${this.file}`, this.on);
   }
 
   openMarkdownPath(path) {
-    const space = spaces().find((s) => s.active)?.id;
-    run("tab.new", { space, name: base(path), mod: "vnh-markdown",
-      props: { path: `${this.root}/${path}`, on: this.on ?? null, back: spaces().find((s) => s.active)?.tabs.find((t) => t.active)?.id ?? focused()?.tab ?? null } });
+    openMarkdownTab(`${this.root}/${path}`, this.on);
   }
 
   // ------------------------------------------------------------------ rows

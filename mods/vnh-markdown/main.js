@@ -26,6 +26,10 @@ export default class MarkdownView extends View {
   init(_props, cx) {
     this.text = null;
     this.error = null;
+    // VNH: what this tab shows. One Markdown tab per space: opening another file asks this copy to
+    // switch (shared "vnh.markdown.open", naming its pane) instead of adding a tab.
+    this.doc = { path: props()?.path ?? null, on: props()?.on ?? null, back: props()?.back ?? null };
+    this.seenOpen = shared("vnh.markdown.open")?.n ?? 0;
     this.kb = cx.focus_handle();
     // This copy's own pane. A mod pane isn't told its id, so each copy claims an unclaimed
     // vnh-markdown pane (the one in the active tab first) in shared "vnh.markdown.panes", retrying
@@ -53,14 +57,31 @@ export default class MarkdownView extends View {
       const showing = Boolean(me && window()?.active && active === me.tab);
       if (showing && !this.showing) this.kb.focus();
       this.showing = showing;
+      const ask = shared("vnh.markdown.open");
+      if (ask && ask.n > this.seenOpen && this.myPane && ask.pane === this.myPane) {
+        this.seenOpen = ask.n;
+        this.switchTo(ask.path, ask.on ?? null, ask.back ?? null, cx);
+      }
     });
     cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); if (c === "focus") { this.kb.focus(); cx.notify(); } else if (c === "close" && this.showing) this.close(); } });
     this.load(cx);
     cx.timer.every(2000, (cx) => { if (window()?.active) this.load(cx); });
   }
 
+  // Shows another file in this tab, renamed after it; `back` (when given) is the tab Esc returns to.
+  switchTo(path, on, back, cx) {
+    if (!path) return;
+    this.doc = { path, on, back: back ?? this.doc.back };
+    this.text = null; this.error = null;
+    const me = this.myPane && panes().find((p) => p.pane === this.myPane);
+    if (me) { run("tab.rename", { id: me.tab, name: path.split("/").pop() }); run("tab.select", { id: me.tab }); }
+    this.kb.focus();
+    this.load(cx);
+    cx.notify();
+  }
+
   load(cx) {
-    const { path, on } = props() ?? {};
+    const { path, on } = this.doc;
     if (!path || this.loading) return;
     this.loading = true;
     cx.spawn(async (cx) => {
@@ -85,7 +106,7 @@ export default class MarkdownView extends View {
     if (!me) return;
     this.closing = true;
     run("tab.close", { id: me.tab, confirmed: true });
-    const back = props()?.back;
+    const back = this.doc.back;
     if (back) run("tab.select", { id: back });
     // The Files panel (vnh-files or filetree) takes the keyboard back.
     const has = (mod) => { const walk = (n) => n?.content?.mod === mod || (n?.children ?? []).some(walk); return walk(layout()); };
@@ -93,22 +114,21 @@ export default class MarkdownView extends View {
     else if (has("filetree")) run("filetree.focus");
   }
 
-  openLink(url) {
-    const { path, on } = props() ?? {};
+  openLink(url, cx) {
+    const { path, on } = this.doc;
     if (/^[a-z][a-z0-9+.-]*:/i.test(url)) { exec("open", [url]).catch(() => {}); return; } // http(s), mailto…
     const [file] = url.split("#");
     if (!file) return; // an in-page anchor
     const target = resolve(dirOf(path), decodeURIComponent(file));
     if (/\.(md|markdown|mdx)$/i.test(target)) {
-      const space = spaces().find((s) => s.active)?.id;
-      run("tab.new", { space, name: target.split("/").pop(), mod: "vnh-markdown", props: { path: target, on: on ?? null } });
+      this.switchTo(target, on ?? null, null, cx); // the same tab, as every preview
     } else {
       exec("open", [target]).catch(() => {});
     }
   }
 
   render() {
-    const t = theme(), { path } = props() ?? {};
+    const t = theme(), { path } = this.doc;
     const name = path ? path.split("/").pop() : "";
     return v_flex().id("md-view").track_focus(this.kb).size_full().min_h(0).bg(t.background).text_color(t.foreground)
       .on_mouse_down("left", () => this.kb.focus())
@@ -128,6 +148,6 @@ export default class MarkdownView extends View {
             : this.text === null
               ? div().text_color(t.dim).child("Loading…")
               : TextView.markdown(`md-${path}`, this.text.length > MAX ? this.text.slice(0, MAX) : this.text || " ")
-                .selectable(true).on_link_click((url) => this.openLink(url)))));
+                .selectable(true).on_link_click((url, cx) => this.openLink(url, cx)))));
   }
 }
