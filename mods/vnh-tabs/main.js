@@ -348,7 +348,11 @@ export default class Tabs extends View {
           else run("tab.select", { id: c.id });
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
-        .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
+        // VNH: while an agent in this tab works its icon breathes (the same slow opacity loop as the space tiles).
+        .when(Boolean(program?.icon), el => {
+          const icon = program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14);
+          return el.child(c.working_since != null ? icon.loop("opacity", { from: 0.35, to: 1, period: 1800 }) : icon);
+        })
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
         // VNH: no working spinner here; the Agents list in the sidebar is the one that shows it.
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))

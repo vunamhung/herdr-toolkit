@@ -12,7 +12,7 @@ Everything below is derived from other projects. Those files stay under their or
 | `mods/vnh-chrome/` | Herdr `workspace-chrome` 0.1.16 | Apache-2.0 | Branch button and popup, Cloudflare icon beside it |
 | `mods/vnh-files/` | Herdr `files` 0.1.16 | Apache-2.0 | Git colors, filters, drag to terminal, Markdown preview |
 | `mods/vnh-pane/` | Herdr `pane` 0.1.16 | Apache-2.0 | Readable titles for VNH mod panes |
-| `mods/vnh-spaces/` | Herdr `spaces` 0.1.16 | Apache-2.0 | Working tree status per space, dropped folders, a tile that breathes while an agent works |
+| `mods/vnh-spaces/` | Herdr `spaces` 0.1.16 | Apache-2.0 | Working tree status per space, dropped folders, a tile and a worktree icon that breathe while an agent works |
 | `mods/vnh-tabs/` | Herdr `tabs` 0.1.16 | Apache-2.0 | Timeline and Insights buttons, one right-hand view at a time |
 | `layouts/VNH.json` | Herdr layout `main` 0.1.16 | Apache-2.0 | The VNH layout |
 | `overlays/frame/settings/` | Herdr's Settings window (`frame/settings`) | Apache-2.0 | A Mods tab, a shortcut editor in Keyboard |
