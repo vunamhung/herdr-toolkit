@@ -10,6 +10,7 @@
 # Backs up agy's settings.json first; safe to run again.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TOOLKIT_ROOT="$ROOT"; . "$ROOT/lib/jq.sh"
 HERDR="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
@@ -18,7 +19,7 @@ cp "$ROOT/themes/orca.json" "$HERDR/themes/orca.json"
 echo "theme: $HERDR/themes/orca.json (pick it in Settings > Look)"
 
 AGY="$HOME/.gemini/antigravity-cli/settings.json"
-if [ -f "$AGY" ] && command -v jq >/dev/null 2>&1; then
+if [ -f "$AGY" ]; then
   cur=$(jq -r '.colorScheme // empty' "$AGY")
   if [ "$cur" = "terminal" ]; then
     echo "agy: colorScheme is already terminal"

@@ -12,6 +12,12 @@
 # Fields are joined with | (a tab would swallow empty fields: it is IFS whitespace).
 # The payload also holds the account's e-mail and plan: none of it is read or stored.
 input=$(cat)
+# jq: the copy the toolkit installs beside these scripts (status/bin), else the one on PATH. A status script
+# must never fail an agent for want of jq, so without any it quietly does nothing.
+JQ="${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/bin/jq"
+[ -x "$JQ" ] || JQ="$JQ.exe"
+[ -x "$JQ" ] || JQ=$(command -v jq 2>/dev/null) || exit 0
+jq() { "$JQ" "$@"; }
 line=$(printf '%s' "$input" | jq -r '
   def n: if . == null then "" else tostring end;
   def used: if . == null then "" else ((1 - .) * 100 | round | tostring) end;

@@ -13,6 +13,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+TOOLKIT_ROOT="$ROOT"; . "$ROOT/lib/jq.sh"   # jq(): the build this repo ships, else PATH
 HERDR="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
@@ -28,18 +29,30 @@ backup() {
   return 0
 }
 
-for mod in claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions vnh-agents vnh-filetree; do
+# Our own mods, then the third-party ones this repo carries (each with its LICENSE; the ones we changed say so in
+# their first lines), so one clone is the whole UI. herdr-chat (chat, new-chat, chat-menu, chat-agents and its
+# host) is installed from vendor/herdr-chat below.
+MODS="claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions vnh-agents vnh-filetree better-changes cloudflare-deploys insights filetree portal run walkthrough"
+for mod in $MODS; do
   echo "mod: $mod"
   backup "$HERDR/mods/$mod"
   mkdir -p "$HERDR/mods/$mod"
   cp -R "$ROOT/mods/$mod/." "$HERDR/mods/$mod/"
 done
 
-# Overlays: files that live inside third-party mods or Herdr's own app frame, re-applied here because
-# a mod or Herdr update overwrites them. walkthrough/: Vietnamese (default) + the dropdown anchored to
-# its select box. frame/settings/: the read-only "Mods" tab. Re-run install after such an update.
+# herdr-chat, from the release archive in vendor/ (checked against its SHA256SUMS): the host, the chat mods, the
+# hc templates. Needs node 20+. Its installer wants the Herdr home to exist (start Herdr once).
+if [ -f "$ROOT/vendor/herdr-chat/install.sh" ]; then
+  echo "herdr-chat: vendor/herdr-chat"
+  sh "$ROOT/vendor/herdr-chat/install.sh" --app --from "$ROOT/vendor/herdr-chat" --no-layout \
+    || echo "  note: herdr-chat did not install (needs node 20+ and a Herdr home); the chat mods and Agents list stay as they are"
+fi
+
+# Overlays: files of herdr-chat's mods (made by its installer) and of Herdr's own app frame, which this repo
+# cannot ship whole, re-applied here because an update overwrites them. chat/: publishes its model for the
+# status bar. chat-agents/: the breathing working dot. frame/settings/: the read-only "Mods" tab. Re-run install after such an update.
 if [ -d "$ROOT/overlays" ]; then
-  echo "overlays: walkthrough i18n + Settings Mods tab"
+  echo "overlays: chat, chat-agents, Settings Mods tab"
   ( cd "$ROOT/overlays" && find . -type f ) | sed 's#^\./##' | while IFS= read -r rel; do
     # An overlay changes a mod or a frame that is already there (mods/walkthrough, frame/settings): on a
     # machine without it, copying the few changed files would leave a half mod behind.
@@ -77,6 +90,12 @@ if want --layout; then
   backup "$HERDR/keys.json"
   KEYS="$HERDR/keys.json"; [ -s "$KEYS" ] || echo "{}" > "$KEYS"
   jq -s '.[0] * .[1]' "$KEYS" "$ROOT/keys/vnh.json" > "$KEYS.tmp" && mv "$KEYS.tmp" "$KEYS"
+  # The look settings (size, line height, contrast). The font family isn't set: the one in the screenshots is a
+  # commercial font, so Herdr's default stays unless you choose another in Settings > Look.
+  echo "settings: merge keys/settings-vnh.json into settings.json"
+  SET="$HERDR/settings.json"; [ -s "$SET" ] || echo "{}" > "$SET"
+  backup "$SET"
+  jq -s '.[0] * .[1]' "$SET" "$ROOT/keys/settings-vnh.json" > "$SET.tmp" && mv "$SET.tmp" "$SET"
   command -v herdr-app >/dev/null && herdr-app do layout.switch '{"name":"VNH"}' >/dev/null || true
 fi
 
@@ -117,6 +136,6 @@ if want --gestures; then
 fi
 
 if command -v herdr-app >/dev/null; then
-  for mod in claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions vnh-agents vnh-filetree; do herdr-app check "$HERDR/mods/$mod"; done
+  for mod in $MODS; do herdr-app check "$HERDR/mods/$mod"; done
 fi
 echo "done"

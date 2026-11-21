@@ -13,7 +13,12 @@
 # broken by its status bar.
 [ -n "${HC_TERMINAL_ID:-}" ] || exit 0
 case "$HC_TERMINAL_ID" in *[!A-Za-z0-9_-]*) exit 0 ;; esac
-command -v jq >/dev/null 2>&1 || exit 0
+# jq: the copy the toolkit installs beside these scripts (status/bin), else the one on PATH. A status script
+# must never fail an agent for want of jq, so without any it quietly does nothing.
+JQ="${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/bin/jq"
+[ -x "$JQ" ] || JQ="$JQ.exe"
+[ -x "$JQ" ] || JQ=$(command -v jq 2>/dev/null) || exit 0
+jq() { "$JQ" "$@"; }
 DIR="$HOME/.cache/herdr-status"
 mkdir -p "$DIR" 2>/dev/null || exit 0
 FILE="$DIR/$HC_TERMINAL_ID.json"

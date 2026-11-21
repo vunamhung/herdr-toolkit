@@ -7,12 +7,20 @@ set -eu
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 HERDR="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
-command -v jq >/dev/null 2>&1 || { echo "status: jq is required (brew install jq)"; exit 1; }
+TOOLKIT_ROOT="$(cd "$ROOT/.." && pwd)"; . "$TOOLKIT_ROOT/lib/jq.sh"   # jq(): the build this repo ships, else PATH
 
 echo "status: $HERDR/status"
 mkdir -p "$HERDR/status"
 cp "$ROOT/write.sh" "$ROOT/agy.sh" "$ROOT/codex.sh" "$HERDR/status/"
 chmod +x "$HERDR/status/"*.sh
+# The status scripts run inside agents, so they get their own jq next to them (only the build this repo ships:
+# a jq from PATH may be a dynamic build that doesn't survive being copied).
+case "$JQ" in
+  "$TOOLKIT_ROOT"/bin/*)
+    mkdir -p "$HERDR/status/bin"
+    case "$JQ" in *.exe) cp "$JQ" "$HERDR/status/bin/jq.exe" ;; *) cp "$JQ" "$HERDR/status/bin/jq"; chmod +x "$HERDR/status/bin/jq" ;; esac
+    echo "status: jq $("$JQ" --version) -> $HERDR/status/bin" ;;
+esac
 
 backup() { [ -e "$1" ] && cp "$1" "$1.bak-$STAMP" && echo "  backup: $1.bak-$STAMP"; return 0; }
 edit() { # edit <file> <jq filter> [jq args...]: rewrite the file through jq, atomically

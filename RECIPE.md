@@ -48,20 +48,19 @@ root (row)
 
 Mods in `mods/` (all `place: none`, the layout places them): `vnh-chrome`, `vnh-spaces`, `vnh-agents`, `vnh-weather`, `vnh-worktree-sync`, `vnh-tabs`, `vnh-pane`, `vnh-filetree` (`vnh-files` is its older twin), `vnh-prompts`, `claude-limits-status`; popups `vnh-git-menu`, `vnh-files-menu`, `vnh-command`, `vnh-sessions`, `vnh-markdown`. They are clones of Herdr's own (`cloned_from` 0.1.16) or of the mods below, with VNH changes. Shipped Herdr mods used as is: `agents`, `changes` (both replaced in their blocks).
 
-Mods to install first (not in this repo). Each is copied to `mods/<name>/`:
+Third-party mods, all inside this repo (modified copies, each with its upstream `LICENSE`; sources and changes in `THIRD-PARTY-NOTICES.md`), copied to `mods/<name>/` by `install.sh`:
 
 | mod | from |
 |---|---|
-| `better-changes` | github.com/munza/herdr-mods (`better-changes`; set its `mod.json` `place` to `"none"`) |
-| `filetree`, `file-icons` | github.com/cybertron288/herdr-mods (`filetree` keeps the Claude read / write bridge `vnh-filetree` relies on) |
+| `better-changes` | github.com/munza/herdr-mods (`place` is `"none"`) |
+| `filetree` | github.com/cybertron288/herdr-mods (keeps the Claude read / write bridge `vnh-filetree` relies on) |
 | `cloudflare-deploys` | github.com/SaifHarding/herdr-cloudflare |
-| `chat-agents`, `new-chat`, `chat`, `chat-menu` | github.com/ChmaraX/herdr-chat (its own installer) |
-| `gitview` | github.com/ChmaraX/herdr-gitview |
-| `insights` | the Herdr mods gallery (herdr.dev/mods) |
+| `insights` | github.com/posquit0/herdr-mods (`analytics`) |
 | `walkthrough` | github.com/dmazlum/herdr-walkthrough |
 | `portal`, `run` | github.com/CodeyPacker/herdr-mods |
+| `chat`, `new-chat`, `chat-menu`, `chat-agents`, the chat host and `hc` templates | github.com/ChmaraX/herdr-chat 0.5.0, `vendor/herdr-chat` (the release archive, unmodified, with its SHA256SUMS; its own installer runs from `install.sh`, needs node 20+) |
 
-`patches/` are applied to those (`patch -p1 -d ~/.config/herdr-app < patches/<file>`): `better-changes-vnh`, `filetree-vnh`, `insights-vnh`, `cloudflare-deploys-vnh` and `cloudflare-bar-vnh`, `chat-agents-vnh`, `chat-vnh` (the chat publishes its model for the status bar), `portal-macos14`. `overlays/` are whole files copied over third-party or app files by `install.sh`: the Settings frame (a read-only **Mods** tab, a shortcut editor in **Keyboard**) and `walkthrough` (Vietnamese by default, dropdowns anchored under their button).
+`overlays/` are whole files copied over files that other installers make, by `install.sh`: `chat/main.js` (the chat publishes its model for the status bar), `chat-agents/agents-base.js` (a breathing dot for working), and the Settings frame (a read-only **Mods** tab, a shortcut editor in **Keyboard**). `bin/` holds the official `jq` 1.8.1 for macOS (arm64, x86_64) and Windows; the installers and the status scripts use it, so the machine needs none (status scripts get a copy in `~/.config/herdr-app/status/bin`). The look settings (size 15, line height 1.4, contrast) merge from `keys/settings-vnh.json`; the font family isn't set.
 
 Status bar data, one file per terminal, `~/.cache/herdr-status/<terminal>.json` (`HC_TERMINAL_ID`): `{provider, model, effort, ctx, five, five_reset, seven, seven_reset}`, percent used and unix seconds. Written by `status/write.sh`, called from `claude/statusline.sh` (Claude Code's `statusLine`), `status/agy.sh` (agy's `statusLine`, which keeps agy's own line with `stack_with_default`) and `status/codex.sh` (a Codex lifecycle hook on SessionStart, UserPromptSubmit and Stop that reads the rollout file for effort, context and usage windows). `themes/orca.json` is a Herdr theme with the palette of Claude Code's `custom:orca`; `./install.sh --orca` installs it and sets agy's `colorScheme` to `terminal`.
 
@@ -79,10 +78,11 @@ What the mods reach, to tell the person before adding:
 - Built for macOS: `osascript`, `open`, the trackpad gestures and Karabiner rule are macOS only; the rest runs elsewhere.
 - Needs `jq` (the status scripts) and the mods above installed first, or Herdr shows empty blocks for them.
 - The mods are clones of Herdr 0.1.16. On another version run `herdr-app check <mod>` on each and rebuild one from this recipe if it fails.
-- A Herdr or mod update overwrites a patched or overlaid file: run `./install.sh` and the `patch` lines again.
+- A Herdr or herdr-chat update overwrites an overlaid file: run `./install.sh` again.
+- Windows is untested: most mods call `sh`, `osascript` or `open`, and herdr-chat's installer is macOS-only upstream. The author's exact UI is the macOS one.
 - Codex holds a new hook until you trust it: open Codex once, run `/hooks` and trust the Herdr status hook. **The Codex side has not been run against a real session** (it was built from the rollout format and tested on a synthetic one), so check the first real session's model, usage and context.
 - agy has no custom themes (its `colorScheme` is one of eight names); `terminal` makes it use the terminal's colors, so pick the **orca** theme in Settings → Look for it to match Claude Code.
-- Sizes are logical px. A chat's own model reaches the status bar only with `chat-vnh.patch` applied; without it the bar keeps showing the last terminal agent while a chat has the focus.
+- Sizes are logical px. A chat's own model reaches the status bar only through `overlays/mods/chat/main.js`; without it the bar keeps showing the last terminal agent while a chat has the focus.
 - `install.sh` backs up under `~/.config/herdr-app/.backups/<time>/` (a copy left in `mods/` would be listed as a mod) and overwrites same-named files; the `vnh-*` names are unique, `claude-limits-status` is the one that could clash.
 
 ## Done when

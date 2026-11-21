@@ -14,7 +14,12 @@
 # tokens don't count. Plain sh on purpose (hooks run through `sh`: no bash-only syntax). The rollout is read from its last 3 MB only. Never fails: exit 0 always.
 input=$(cat)
 [ -n "${HC_TERMINAL_ID:-}" ] || exit 0
-command -v jq >/dev/null 2>&1 || exit 0
+# jq: the copy the toolkit installs beside these scripts (status/bin), else the one on PATH. A status script
+# must never fail an agent for want of jq, so without any it quietly does nothing.
+JQ="${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/bin/jq"
+[ -x "$JQ" ] || JQ="$JQ.exe"
+[ -x "$JQ" ] || JQ=$(command -v jq 2>/dev/null) || exit 0
+jq() { "$JQ" "$@"; }
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 slug=$(printf '%s' "$input" | jq -r '.model // empty' 2>/dev/null)
 rollout=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)

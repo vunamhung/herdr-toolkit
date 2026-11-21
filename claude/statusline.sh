@@ -3,6 +3,12 @@
 # L1 (where you are): model (effort) | dir  branch git-state  diff  stash  PR/CI | output style | clock
 # L2 (how it's going): 5h limit | 7d limit | time | cost | lines | ctx | cache | out tok
 input=$(cat)
+# jq: the copy the toolkit installs beside these scripts (status/bin), else the one on PATH. A status script
+# must never fail an agent for want of jq, so without any it quietly does nothing.
+JQ="${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/bin/jq"
+[ -x "$JQ" ] || JQ="$JQ.exe"
+[ -x "$JQ" ] || JQ=$(command -v jq 2>/dev/null) || exit 0
+jq() { "$JQ" "$@"; }
 
 # Keep Orca's usage tracking working (it reads the same payload, prints nothing)
 ORCA_SL="$HOME/.orca/agent-hooks/claude-statusline.sh"
