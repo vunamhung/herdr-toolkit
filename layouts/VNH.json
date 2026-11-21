@@ -187,7 +187,18 @@
                           "gap": 8,
                           "lone": true
                         }
-                      }
+                      },
+                      "floating": [
+                        {
+                          "id": "rail",
+                          "content": {
+                            "mod": "vnh-timeline"
+                          },
+                          "edge": "right",
+                          "align": "center",
+                          "peek": 20
+                        }
+                      ]
                     },
                     {
                       "id": "panel",
