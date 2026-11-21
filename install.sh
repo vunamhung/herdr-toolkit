@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install the herdr-toolkit customizations. Existing files are backed up as <file>.bak-<timestamp>.
+# Install the herdr-toolkit customizations. Existing files are backed up first: under the Herdr home to
+# .backups/<timestamp>/<path>, elsewhere (~/.claude/statusline.sh, karabiner…) as <file>.bak-<timestamp>.
 #
 #   ./install.sh            mods + Claude Code status line script
 #   ./install.sh --layout   also install layouts/VNH.json and switch Herdr to it
@@ -15,7 +16,17 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 HERDR="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
-backup() { [ -e "$1" ] && cp -R "$1" "$1.bak-$STAMP" && echo "  backup: $1.bak-$STAMP"; return 0; }
+# Backups of anything under the Herdr home go to $HERDR/.backups/<time>/<same path>, not beside the original:
+# a copy of a mod folder left in mods/ would be listed (and could be loaded) as another mod.
+backup() {
+  [ -e "$1" ] || return 0
+  case "$1" in
+    "$HERDR"/*) dest="$HERDR/.backups/$STAMP/${1#"$HERDR"/}" ;;
+    *) dest="$1.bak-$STAMP" ;;
+  esac
+  mkdir -p "$(dirname "$dest")" && cp -R "$1" "$dest" && echo "  backup: $dest"
+  return 0
+}
 
 for mod in claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions vnh-agents vnh-filetree; do
   echo "mod: $mod"

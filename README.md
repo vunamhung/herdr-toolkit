@@ -2,6 +2,26 @@
 
 Personal customizations for the [Herdr](https://herdr.dev) desktop app.
 
+## Set it up on a machine
+
+This repo is laid out like a Herdr home (`layouts/VNH.json`, the `mods/` it uses) with a `RECIPE.md`, the way Herdr's gallery expects, so an agent can build the whole UI from it.
+
+**With an agent** (Herdr's own way), in Herdr or any agent that can read your files:
+
+```
+Read ~/.config/herdr-app/AGENTS.md, then add this layout: https://github.com/vunamhung/herdr-toolkit/tree/main
+```
+
+The agent reads `RECIPE.md` and the files, tells you what the mods reach (network, programs, files outside their folder) and what `install.sh` changes in `~/.claude`, `~/.codex` and `~/.gemini`, then installs. The repo is private, so the agent needs access to it (`gh auth login`, or an SSH key).
+
+**By hand:**
+
+1. Install the mods this layout also uses (the table in `RECIPE.md`: `better-changes`, `filetree` + `file-icons`, `cloudflare-deploys`, herdr-chat, `gitview`, `insights`, `walkthrough`, `portal`, `run`) and apply `patches/` to them.
+2. `git clone` this repo and run `./install.sh --layout` (add `--orca`, `--karabiner`, `--gestures` as you like). It backs up what it changes and can be run again.
+3. Codex only: run `/hooks` in Codex once and trust the Herdr status hook.
+
+Not done yet: a `preview.png`, and the `herdr-layout` topic on a **public** repo, which is what lists a layout at herdr.dev/layouts.
+
 ## What's here
 
 | Path | Installs to | What it does |

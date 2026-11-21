@@ -25,7 +25,12 @@ edit() { # edit <file> <jq filter> [jq args...]: rewrite the file through jq, at
 AGY="$HOME/.gemini/antigravity-cli/settings.json"
 if [ -f "$AGY" ]; then
   cur=$(jq -r '.statusLine.command // empty' "$AGY")
+  want="sh $HERDR/status/agy.sh"
   case "$cur" in
+    "$want") jq -e '.statusLine.stack_with_default == true' "$AGY" >/dev/null 2>&1 && { echo "agy: statusLine already installed"; cur="__done__"; } ;;
+  esac
+  case "$cur" in
+    __done__) ;;
     ""|*status/agy.sh*)
       echo "agy: $AGY statusLine"
       backup "$AGY"
@@ -41,6 +46,10 @@ fi
 CODEX="$HOME/.codex"
 if [ -d "$CODEX" ]; then
   [ -s "$CODEX/hooks.json" ] || echo '{"hooks": {}}' > "$CODEX/hooks.json"
+  n=$(jq '[.hooks.SessionStart, .hooks.UserPromptSubmit, .hooks.Stop | .[]? | .hooks[]? | select((.command // "") | contains("status/codex.sh"))] | length' "$CODEX/hooks.json" 2>/dev/null || echo 0)
+  if [ "${n:-0}" -ge 3 ]; then
+    echo "codex: hooks already installed"
+  else
   echo "codex: $CODEX/hooks.json (SessionStart, UserPromptSubmit, Stop)"
   backup "$CODEX/hooks.json"
   edit "$CODEX/hooks.json" '
@@ -51,6 +60,7 @@ if [ -d "$CODEX" ]; then
             else $g + [{hooks: [{type: "command", command: ("sh \"" + $cmd + "\""), timeout: 10}]}] end))' \
     --arg cmd "$HERDR/status/codex.sh"
   echo "  Codex holds a new hook until you trust it: open Codex, run /hooks and trust the Herdr status hook (once)."
+  fi
 else
   echo "codex: skipped ($CODEX not found)"
 fi
