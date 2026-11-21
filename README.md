@@ -12,7 +12,7 @@ This repo is laid out like a Herdr home (`layouts/VNH.json`, the `mods/` it uses
 Read ~/.config/herdr-app/AGENTS.md, then add this layout: https://github.com/vunamhung/herdr-toolkit/tree/main
 ```
 
-The agent reads `RECIPE.md` and the files, tells you what the mods reach (network, programs, files outside their folder) and what `install.sh` changes in `~/.claude`, `~/.codex` and `~/.gemini`, then installs. The repo is private, so the agent needs access to it (`gh auth login`, or an SSH key).
+The agent reads `RECIPE.md` and the files, tells you what the mods reach (network, programs, files outside their folder) and what `install.sh` changes in `~/.claude`, `~/.codex` and `~/.gemini`, then installs.
 
 **By hand:**
 
@@ -20,7 +20,7 @@ The agent reads `RECIPE.md` and the files, tells you what the mods reach (networ
 2. `git clone` this repo and run `./install.sh --layout` (add `--orca`, `--karabiner`, `--gestures` as you like). It backs up what it changes and can be run again.
 3. Codex only: run `/hooks` in Codex once and trust the Herdr status hook.
 
-`preview.png` is a screenshot of the real window, with its space names, task titles and paths. Not done yet: the `herdr-layout` topic on a **public** repo, which is what lists a layout at herdr.dev/layouts (redact the preview before making the repo public).
+`preview.png` is a screenshot of the author's real window, so the space names, task titles and paths in it are the author's own.
 
 ## What's here
 
