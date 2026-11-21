@@ -20,7 +20,7 @@ The agent reads `RECIPE.md` and the files, tells you what the mods reach (networ
 2. `git clone` this repo and run `./install.sh --layout` (add `--orca`, `--karabiner`, `--gestures` as you like). It backs up what it changes and can be run again.
 3. Codex only: run `/hooks` in Codex once and trust the Herdr status hook.
 
-Not done yet: a `preview.png`, and the `herdr-layout` topic on a **public** repo, which is what lists a layout at herdr.dev/layouts.
+`preview.png` is a screenshot of the real window, with its space names, task titles and paths. Not done yet: the `herdr-layout` topic on a **public** repo, which is what lists a layout at herdr.dev/layouts (redact the preview before making the repo public).
 
 ## What's here
 
