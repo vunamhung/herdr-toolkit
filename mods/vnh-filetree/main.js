@@ -1242,13 +1242,13 @@ export default class FileTree extends View {
   // Branch, totals, a bar of modified / new / deleted, and its legend.
   summary(t) {
     const g = this.git, b = g.branch, tone = tones(t);
-    if (!g.top) return h_flex().h(28).flex_none().px(10).gap(6).items_center().text_size(11.5).text_color(t.dim).border_b(1).border_color(t.border)
+    if (!g.top) return h_flex().h(28).flex_none().px(10).gap(6).items_center().text_size(11.5).text_color(t.dim)
       .child(div().truncate().child(this.root ? "± no git repo · git status starts after git init" : ""));
     const lit = this.branchFlash ? tone[this.branchFlash.tone] : null, totals = g.diff.get("") ?? [0, 0];
     const c = g.counts.get("") ?? [0, 0, 0], total = c[0] + c[1] + c[2];
     const parts = [[c[1], tone.yellow, "modified"], [c[0], tone.green, "new"], [c[2], tone.red, "deleted"]].filter(([n]) => n > 0);
     const room = Math.max(40, this.width - 20 - 2 * (parts.length - 1));
-    return v_flex().flex_none().px(10).pt(9).pb(8).gap(6).border_b(1).border_color(t.border)
+    return v_flex().flex_none().px(10).pt(9).pb(8).gap(6)
       .child(h_flex().gap(6).items_center().text_size(12)
         .child(svg(ICON("git-branch")).size(12).flex_none().text_color(lit ?? t.foreground))
         .child(div().min_w(0).truncate().font_medium().text_color(lit ?? t.foreground).when(Boolean(lit), (el) => el.loop("opacity", { from: 0.4, to: 1, period: 900 })).child(b?.head ?? "…"))
