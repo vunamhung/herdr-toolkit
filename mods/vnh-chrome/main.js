@@ -124,7 +124,9 @@ export default class WorkspaceChrome extends View {
           .when(Boolean(updates().app.ready), el => el.child(collapsed ? ready.absolute().top(5).right(6) : ready)))
         .child(row("machine", "plus", "Add machine", true, () => run("mod.open", { name: "machine-add" })));
     }
-    return h_flex().size_full().bg(t.chrome).pl(collapsed ? 6 : 14).pr(10).gap(4).items_center().text_size(13.5)
+    // VNH: the line under the brand row. The Cloudflare icon beside it draws its own bottom border, so without
+    // this one the separator existed under the icon only.
+    return h_flex().size_full().bg(t.chrome).border_b(1).border_color(t.border).pl(collapsed ? 6 : 14).pr(10).gap(4).items_center().text_size(13.5)
       .when(window()?.platform === "macos" && !window()?.fullscreen && !collapsed, el => el.pl(76))
       // VNH: the branch button replaces the logo, search (⌘P) and the sidebar toggle (⌘B).
       .when(!collapsed, el => el.child(this.branchBar(t)))
