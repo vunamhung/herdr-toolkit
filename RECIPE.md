@@ -79,6 +79,8 @@ What the mods reach, to tell the person before adding:
 - Built for macOS: `osascript`, `open`, the trackpad gestures and Karabiner rule are macOS only; the rest runs elsewhere.
 - Needs `jq` (the status scripts) and the mods above installed first, or Herdr shows empty blocks for them.
 - The mods are clones of Herdr 0.1.16. On another version run `herdr-app check <mod>` on each and rebuild one from this recipe if it fails.
+- herdr-chat's installer also adds a short sub-agents note to the agents' instruction files it finds (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, Pi's), writes `hc` templates to `~/.config/herdr-core/templates`, and puts its host in `~/.local/share/herdr-chat`. `install.sh` backs up the Herdr home only; for those files run it with care (herdr-chat's `--uninstall` undoes them).
+- `install.sh` removes files an older copy of a mod had that the repo's copy doesn't (never `config.json` or `runtime.json`).
 - A Herdr or herdr-chat update overwrites an overlaid file: run `./install.sh` again.
 - Windows is untested: most mods call `sh`, `osascript` or `open`, and herdr-chat's installer is macOS-only upstream. The author's exact UI is the macOS one.
 - Codex holds a new hook until you trust it: open Codex once, run `/hooks` and trust the Herdr status hook. **The Codex side has not been run against a real session** (it was built from the rollout format and tested on a synthetic one), so check the first real session's model, usage and context.

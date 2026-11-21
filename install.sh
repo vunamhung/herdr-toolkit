@@ -37,6 +37,10 @@ for mod in $MODS; do
   echo "mod: $mod"
   backup "$HERDR/mods/$mod"
   mkdir -p "$HERDR/mods/$mod"
+  # Files an older version of this mod had and this one doesn't would stay behind: drop them, but keep what the
+  # mod or you wrote there (config.json, runtime.json) and Herdr's generated typings.
+  ( cd "$HERDR/mods/$mod" && find . -type f ! -name config.json ! -name runtime.json ! -name gpui-kit.d.ts ! -name jsconfig.json ! -name '*.error' ) |
+    while IFS= read -r f; do [ -e "$ROOT/mods/$mod/$f" ] || { rm -f "$HERDR/mods/$mod/$f"; echo "  removed stale $f"; }; done
   cp -R "$ROOT/mods/$mod/." "$HERDR/mods/$mod/"
 done
 
