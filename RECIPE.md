@@ -53,6 +53,7 @@ Third-party mods, all inside this repo (modified copies, each with its upstream 
 | mod | from |
 |---|---|
 | `better-changes` | github.com/munza/herdr-mods (`place` is `"none"`) |
+| `file-icons` | Herdr's `files` mod with the Material Icon Theme icons (the SVGs `filetree` and `vnh-filetree` draw) |
 | `filetree` | github.com/cybertron288/herdr-mods (keeps the Claude read / write bridge `vnh-filetree` relies on) |
 | `cloudflare-deploys` | github.com/SaifHarding/herdr-cloudflare |
 | `insights` | github.com/posquit0/herdr-mods (`analytics`) |

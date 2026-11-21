@@ -359,7 +359,7 @@ export default class ClaudeLimitsStatus extends View {
 
   // The chat in front of you, if the shown tab is a chat: the patched chat mod publishes its provider,
   // model, effort and context under its tab id in shared "vnh.chat" while that tab is shown
-  // (patches/chat-vnh.patch), since a chat runs the agent headless and no hook or status line runs.
+  // (overlays/mods/chat/main.js), since a chat runs the agent headless and no hook or status line runs.
   liveChat() {
     const tab = focused()?.tab;
     return (tab ? (shared("vnh.chat") ?? {})[tab] : null) ?? null;
