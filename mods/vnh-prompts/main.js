@@ -1,3 +1,4 @@
+// Derived from `over9k-prompts` of herunan/herdr-over9k (MIT, herdr-over9k, the Over9k authors, https://github.com/herunan/herdr-over9k); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 // The Timeline: your prompts in the agent you're in, the right panel's "Timeline"
 // (a child of the panel-body stack, id "prompts"; the tab bar has its button,
 // over9k-options turns both off). Newest first, on a line with a dot each: the

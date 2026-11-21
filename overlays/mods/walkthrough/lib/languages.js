@@ -1,3 +1,4 @@
+// Derived from dmazlum/herdr-walkthrough's `walkthrough` mod (MIT, herdr-walkthrough, Devrim Mazlum, https://github.com/dmazlum/herdr-walkthrough); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 // The languages a walkthrough can be written in. Only its prose changes: hunk
 // aliases, the weight and kind values, and every identifier stay as they are.
 

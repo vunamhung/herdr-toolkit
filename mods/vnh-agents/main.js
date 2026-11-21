@@ -1,3 +1,4 @@
+// Derived from herdr-chat's `chat-agents` (MIT, herdr-chat, Adam Chmara, https://github.com/ChmaraX/herdr-chat); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 // chat-agents: Herdr's agents list with one change. A sub-agent that is a chat
 // host (bin/herdr-chat-subagent labels its terminal herdr-chat.chat) opens as the chat,
 // in a dialog where and as large as the peek opens (0.8 × 0.8, dimmed, a click

@@ -1,3 +1,4 @@
+# Derived from ChmaraX/herdr-chat `chat-agents` (MIT); a change to that mod, under its license. See THIRD-PARTY-NOTICES.md.
 --- a/mods/chat-agents/agents-base.js
 +++ b/mods/chat-agents/agents-base.js
 @@ -209,7 +209,8 @@

@@ -1,3 +1,4 @@
+# Derived from CodeyPacker/herdr-mods `portal` (MIT); a change to that mod, under its license. See THIRD-PARTY-NOTICES.md.
 --- a/mods/portal/scan.js
 +++ b/mods/portal/scan.js
 @@ -48,6 +48,9 @@

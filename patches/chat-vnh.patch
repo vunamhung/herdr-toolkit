@@ -1,3 +1,4 @@
+# Derived from ChmaraX/herdr-chat `chat` (MIT); a change to that mod, under its license. See THIRD-PARTY-NOTICES.md.
 --- a/mods/chat/main.js
 +++ b/mods/chat/main.js
 @@ -338,6 +338,7 @@

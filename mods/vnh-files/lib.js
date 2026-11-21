@@ -1,3 +1,4 @@
+// Derived from Herdr's `files` 0.1.16 (Apache-2.0, Herdr, https://github.com/ogulcancelik/herdr); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 // Pure helpers for the Files panel: where to look, listing folders in batches, git decorations,
 // formatting and search. No view state here.
 import { spaces, panes, focused, exec, shared, setShared, window } from "herdr";

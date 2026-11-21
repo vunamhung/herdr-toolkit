@@ -1,3 +1,4 @@
+// Derived from Herdr's `workspace-status` 0.1.16 (Apache-2.0, Herdr, https://github.com/ogulcancelik/herdr); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, agents, panes, theme, window, keys, home, readTextFile, exec, checking, shared, focused } from "herdr";

@@ -1,3 +1,4 @@
+// Derived from `filetree` of cybertron288/herdr-mods (itself a port of data-goblin/claude-code-filetree, MIT, Kurt Buhler) (MIT, herdr-mods (filetree), cybertron288, https://github.com/cybertron288/herdr-mods); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 // filetree: an IDE-style file tree for any Herdr layout. A port of claude-code-filetree
 // (MIT, Kurt Buhler): git status with line and file counts, a branch row, search across
 // unopened folders, date or size column, keyboard navigation, previews, and Claude's reads,

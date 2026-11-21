@@ -1,3 +1,4 @@
+# Derived from cybertron288/herdr-mods `filetree` (MIT); a change to that mod, under its license. See THIRD-PARTY-NOTICES.md.
 --- a/mods/filetree/main.js
 +++ b/mods/filetree/main.js
 @@ -7,10 +7,30 @@

@@ -1,3 +1,4 @@
+// Derived from Herdr's `pane` 0.1.16 (Apache-2.0, Herdr, https://github.com/ogulcancelik/herdr); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 // A pane's header, for layouts that frame their panes:
 //   { "tab": "active", "pane": { "header": { "content": { "mod": "vnh-pane" } } } }
 // Shows the program's icon (the app's program table), the agent's name or

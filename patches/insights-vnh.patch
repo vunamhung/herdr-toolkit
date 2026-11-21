@@ -1,3 +1,4 @@
+# Derived from posquit0/herdr-mods `analytics` (installed as `insights`) (Apache-2.0 with the Commons Clause); a change to that mod, under its license. See THIRD-PARTY-NOTICES.md.
 --- a/mods/insights/main.js
 +++ b/mods/insights/main.js
 @@ -1,7 +1,7 @@

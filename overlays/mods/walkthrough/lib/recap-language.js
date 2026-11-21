@@ -1,3 +1,4 @@
+// Derived from dmazlum/herdr-walkthrough's `walkthrough` mod (MIT, herdr-walkthrough, Devrim Mazlum, https://github.com/dmazlum/herdr-walkthrough); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 // The Recap page's and its Markdown's own words, in every language a report
 // can be written in, so a report reads in one language throughout. Component
 // status reuses the contracts' Added/Modified, so the two never disagree.

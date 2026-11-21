@@ -1,3 +1,4 @@
+// Derived from dmazlum/herdr-walkthrough's `walkthrough` mod (MIT, herdr-walkthrough, Devrim Mazlum, https://github.com/dmazlum/herdr-walkthrough); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 import { LANGUAGES, fromLocale } from "./languages.js";
 
 const keys = ['before', 'after', 'absent', 'removed', 'impact', 'rollout', 'noRollout', 'showSource', 'hideSource', 'stale', 'contracts'];

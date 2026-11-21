@@ -1,3 +1,4 @@
+// Derived from dmazlum/herdr-walkthrough's `walkthrough` mod (MIT, herdr-walkthrough, Devrim Mazlum, https://github.com/dmazlum/herdr-walkthrough); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 import { contractStrings } from "./lib/contract-language.js";
 import { contractChangeEvidence, contractChangeTargets } from "./lib/contract-evidence.js";
 import { contractPage } from "./contracts-view.js";

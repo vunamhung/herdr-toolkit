@@ -1,3 +1,4 @@
+// Derived from herdr-chat's `chat-agents` (MIT, herdr-chat, Adam Chmara, https://github.com/ChmaraX/herdr-chat); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 // Herdr's shipped mods/agents/main.js, copied by herdr-chat's install.sh. Don't edit: the next install replaces it.
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 

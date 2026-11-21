@@ -1,3 +1,4 @@
+// Derived from Herdr's `files` 0.1.16 (Apache-2.0, Herdr, https://github.com/ogulcancelik/herdr); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 // VNH Files panel: a lazy file browser for the focused terminal's folder.
 //
 // Tree (virtual list): git colors as in VS Code, ignored files dimmed or hidden, sizes, sort,

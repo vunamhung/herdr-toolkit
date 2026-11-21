@@ -1,3 +1,4 @@
+# Derived from SaifHarding/herdr-cloudflare `cloudflare-deploys` (MIT); a change to that mod, under its license. See THIRD-PARTY-NOTICES.md.
 --- a/mods/cloudflare-deploys/main.js
 +++ b/mods/cloudflare-deploys/main.js
 @@ -409,7 +409,8 @@

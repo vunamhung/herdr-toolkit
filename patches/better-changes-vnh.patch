@@ -1,3 +1,4 @@
+# Derived from munza/herdr-mods `better-changes` (Apache-2.0); a change to that mod, under its license. See THIRD-PARTY-NOTICES.md.
 --- a/mods/better-changes/main.js
 +++ b/mods/better-changes/main.js
 @@ -55,13 +55,27 @@
