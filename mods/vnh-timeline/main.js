@@ -35,7 +35,7 @@ export default class Rail extends View {
     this.term = null; this.total = 0; this.offset = 0; this.len = 0; this.items = []; this.scrolledAt = 0;
     this.built = { term: null, total: -1 }; this.busy = false; this.hist = { at: 0, list: [] };
     if (checking()) return;
-    cx.timer.every(350, (cx) => this.tick(cx));
+    cx.timer.every(150, (cx) => this.tick(cx));
   }
 
   tick(cx) {
@@ -49,7 +49,9 @@ export default class Rail extends View {
     Object.assign(this, { offset: s.offset, len: s.len });
     if (s.total !== this.total) { this.total = s.total; changed = true; }
     if ((this.built.term !== term || this.built.total !== s.total) && !this.busy) this.build(term, s.total, cx);
-    if (Date.now() - this.scrolledAt < 1500 || this.lit) { this.lit = Date.now() - this.scrolledAt < 1500; changed = true; }
+    // shown while it scrolls (and a moment after) or while the pointer is on it; else nothing is drawn
+    const show = Date.now() - this.scrolledAt < 2500 || Boolean(placement()?.hovered);
+    if (show !== this.lit) { this.lit = show; changed = true; }
     if (changed) cx.notify();
   }
 
@@ -115,9 +117,9 @@ export default class Rail extends View {
 
   render() {
     const t = theme(), pl = placement(), open = Boolean(pl?.hovered);
-    const live = open || Date.now() - this.scrolledAt < 1500;
+    const live = true;
     const all = this.items;
-    if (!all.length) return div(); // nothing to show: a floating block that renders nothing isn't drawn at all
+    if (!all.length || !(open || Date.now() - this.scrolledAt < 2500)) return div(); // nothing to show: a floating block that renders nothing isn't drawn at all
     // the window of prompts around where you are: the last SHOWN, or those around the viewport
     let cur = -1; for (let i = 0; i < all.length; i++) if (all[i].row <= this.offset + 1) cur = i;
     const first = Math.max(0, Math.min(all.length - SHOWN, cur - Math.floor(SHOWN / 2)));
