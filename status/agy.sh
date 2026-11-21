@@ -34,5 +34,12 @@ line=$(printf '%s' "$input" | jq -r '
 IFS='|' read -r model effort ctx five five_reset seven seven_reset <<EOF
 $line
 EOF
-sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" agy "$model" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" 2>/dev/null
+# agy sets no terminal title (Herdr would show its command line), so the conversation's first prompt, from agy's
+# own history file, goes with the other fields as the title the tab and the agents list show.
+title=""
+cid=$(printf '%s' "$input" | jq -r '.conversation_id // empty' 2>/dev/null)
+if [ -n "$cid" ]; then
+  title=$(grep -m 1 -F "\"conversationId\":\"$cid\"" "$HOME/.gemini/antigravity-cli/history.jsonl" 2>/dev/null | jq -r '.display // empty' 2>/dev/null | head -n 1 | cut -c1-80)
+fi
+sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" agy "$model" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" "$title" 2>/dev/null
 exit 0

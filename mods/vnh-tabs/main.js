@@ -1,7 +1,7 @@
 // Derived from Herdr's `tabs` 0.1.16 (Apache-2.0, Herdr, https://github.com/ogulcancelik/herdr); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, focused, checking, exec, notify } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, focused, checking, exec, notify, readTextFile, home } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -21,10 +21,12 @@ function label(tab, lead) {
   const prog = lead?.program?.name;
   const base = tab.named ? tab.name : prog ?? "Terminal";
   if (!lead?.program?.agent) return base;
-  const live = clean(lead.title);
+  // agy sets no terminal title (its command line shows instead): the one status/agy.sh found, from the conversation.
+  const given = (shared("vnh.titles") ?? {})[lead.terminal];
+  const live = given ? clean(given) : clean(lead.title);
   // clean() would strip a path's leading ~ or /: test the title with only its status glyph gone.
   const path = /^[~/]|^[A-Za-z]:\\/.test((lead.title ?? "").replace(/^[^\p{L}\p{N}~/]+/u, ""));
-  const telling = live && live !== lead.terminal && live !== prog && !path && !live.includes("@") && live.toLowerCase() !== lead.program.key;
+  const telling = live && live !== lead.terminal && live !== prog && (given || !path) && !live.includes("@") && live.toLowerCase() !== lead.program.key;
   return (tab.name === prog || !tab.named) && telling ? live : base;
 }
 
@@ -42,9 +44,20 @@ function rememberWorkFolder() {
 }
 
 export default class Tabs extends View {
+  // The title each agent terminal's status file carries (agy), published in shared "vnh.titles" for the agents list too.
+  async readTitles() {
+    const out = {};
+    for (const p of panes()) {
+      if (!p.terminal || !p.program?.agent) continue;
+      try { const j = JSON.parse((await readTextFile(`${home()}/.cache/herdr-status/${p.terminal}.json`)) ?? "null"); if (j?.title) out[p.terminal] = j.title; } catch {}
+    }
+    if (JSON.stringify(out) !== JSON.stringify(shared("vnh.titles") ?? {})) setShared("vnh.titles", out);
+  }
+
   init(_props, cx) {
     this.pressed = null;
     this.scroll = ScrollHandle.new();
+    if (!checking()) cx.timer.every(2000, () => this.readTitles());
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };

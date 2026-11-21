@@ -2,7 +2,7 @@
 # Writes what the Herdr status bar shows for the agent running in THIS terminal:
 #   ~/.cache/herdr-status/<terminal>.json  (HC_TERMINAL_ID is set for everything in a Herdr terminal)
 #
-#   write.sh <provider> <model> <effort> <ctx> <five> <five_reset> <seven> <seven_reset>
+#   write.sh <provider> <model> <effort> <ctx> <five> <five_reset> <seven> <seven_reset> [title]
 #
 # provider: claude | codex | agy.  model: the name as the agent shows it.  effort: "" when none.
 # ctx / five / seven: percent USED (0-100).  *_reset: unix seconds.  Any argument may be "".
@@ -25,13 +25,14 @@ FILE="$DIR/$HC_TERMINAL_ID.json"
 prev=$(cat "$FILE" 2>/dev/null); [ -n "$prev" ] || prev='{}'
 tmp=$(mktemp "$DIR/.write.XXXXXX") || exit 0
 jq -n --argjson prev "$prev" --arg provider "$1" --arg model "$2" --arg effort "$3" --arg ctx "$4" \
-  --arg five "$5" --arg five_reset "$6" --arg seven "$7" --arg seven_reset "$8" '
+  --arg five "$5" --arg five_reset "$6" --arg seven "$7" --arg seven_reset "$8" --arg title "${9:-}" '
   def num: if . == "" then null else tonumber? end;
   def keep($k; $new): if $new != null then $new elif $prev.provider == $provider then $prev[$k] else null end;
   {
     provider: $provider,
     model: (if $model == "" then null else $model end),
     effort: (if $effort == "" then null else $effort end),
+    title: (if $title != "" then $title elif $prev.provider == $provider then $prev.title else null end),
     ctx: ($ctx | num),
     five: keep("five"; ($five | num)),
     five_reset: keep("five_reset"; ($five_reset | num)),
