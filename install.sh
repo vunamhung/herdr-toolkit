@@ -4,9 +4,11 @@
 #   ./install.sh            mods + Claude Code status line script
 #   ./install.sh --layout   also install layouts/VNH.json and switch Herdr to it
 #   ./install.sh --karabiner  also add the Cmd+` -> Herdr rule to Karabiner-Elements
+#   ./install.sh --orca     also install the Herdr theme "orca" (Claude Code's custom:orca palette) and set agy's
+#                            colorScheme to terminal, so Claude, agy and Codex share one palette
 #   ./install.sh --gestures  also build gestures/HerdrPinch.swift and run it as a LaunchAgent
 #                            (trackpad pinch anywhere in Herdr: zoom in pulls, zoom out pushes)
-# Options can be combined: ./install.sh --layout --karabiner --gestures
+# Options can be combined: ./install.sh --layout --karabiner --gestures --orca
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -59,6 +61,10 @@ if want --layout; then
   KEYS="$HERDR/keys.json"; [ -s "$KEYS" ] || echo "{}" > "$KEYS"
   jq -s '.[0] * .[1]' "$KEYS" "$ROOT/keys/vnh.json" > "$KEYS.tmp" && mv "$KEYS.tmp" "$KEYS"
   command -v herdr-app >/dev/null && herdr-app do layout.switch '{"name":"VNH"}' >/dev/null || true
+fi
+
+if want --orca; then
+  sh "$ROOT/themes/install.sh"
 fi
 
 if want --karabiner; then
