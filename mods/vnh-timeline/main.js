@@ -35,7 +35,7 @@ export default class Rail extends View {
     this.term = null; this.total = 0; this.offset = 0; this.len = 0; this.items = []; this.scrolledAt = 0;
     this.built = { term: null, total: -1 }; this.busy = false; this.hist = { at: 0, list: [] };
     if (checking()) return;
-    cx.timer.every(150, (cx) => this.tick(cx));
+    cx.timer.every(400, (cx) => this.tick(cx));
   }
 
   tick(cx) {
