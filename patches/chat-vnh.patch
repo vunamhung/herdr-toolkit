@@ -32,26 +32,3 @@
    }
  
    command(c, cx) {
-@@ -1716,6 +1734,22 @@
-     else if (c === "clear") this.composer.clear();
-     else if (c.startsWith("wheel:")) this.wheel(Number(c.slice(6)), cx);
-     else if (c === "outside") this.outside(cx);
-+    // VNH: the status bar's model menu. setmodel:<model id>|<model name>|<effort> switches this chat live (the agent's
-+    // own control request, nothing typed into it), like the model and effort chips. The agent lists its models by
-+    // an alias ("opus", "fable"…), so the name picks that alias (the chip then reads "Opus 5.5", not the raw id);
-+    // an id the list doesn't know goes through as given. The effort part may be empty.
-+    else if (c.startsWith("setmodel:")) {
-+      const [id, name, effort] = c.slice(9).split("|");
-+      cx.spawn(async (cx) => {
-+        let modelId = id;
-+        try {
-+          const d = await this.req("models", {}, cx);
-+          const hit = (d?.models ?? []).find((m) => name && String(m.name).toLowerCase() === name.toLowerCase());
-+          if (hit) modelId = hit.id;
-+        } catch { /* keep the id as given */ }
-+        this.fire("set_model", { provider: "anthropic", modelId }, cx, effort ? () => this.fire("set_thinking", { level: effort }, cx) : undefined);
-+      });
-+    }
-     else if (c.startsWith("shortcut:")) this.shortcut(c.slice(9), cx);
-     else if (c.startsWith("type:")) { this.composer.set(this.composer.value + c.slice(5)); this.updateMenu(cx); } // E2E: when the window drops keys
-   }

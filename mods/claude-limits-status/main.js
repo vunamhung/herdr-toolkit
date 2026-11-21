@@ -1,29 +1,21 @@
 import { View, div, svg } from "gpui-kit";
-import { h_flex, v_flex, Popover, HoverCard } from "gpui-base";
-import { spaces, agents, panes, theme, run, window, keys, home, readTextFile, writeTextFile, exec, checking, shared, focused, notify } from "herdr";
+import { h_flex } from "gpui-base";
+import { spaces, agents, panes, theme, window, keys, home, readTextFile, exec, checking, shared, focused } from "herdr";
 
-// The model picker's two tiers come from Claude Code's own model catalog, which it refreshes itself —
-// so the menu never invents a model or an effort level. ~/.claude/cache/model-catalog/<account>.json:
-//   catalog.config.models[]  { id, name ("Opus 5.5"), section ("main" = the quick picker), quick_select,
-//                              thinking: { effort_options: [{ id, name, badge? }] } }  the real effort
-//                              levels that model supports, named as Claude shows them ("Extra" = xhigh).
-//   catalog.state.thinking_by_model[]  { id, thinking: { effort } }  each model's persisted effort.
-// Picking is silent: nothing is typed into any Claude Code terminal. Tier 1 sets the default model
-// for NEW sessions in ~/.claude/settings.json (`model`; "Default" removes it); tier 2 also saves that
-// model's effort (`modelSettings.<id>.effortLevel`). A running session keeps its own model (it holds
-// it in memory and ignores the file), so the result is a corner toast, not a change in the terminal.
-// Claude Code only persists these efforts as defaults; "max" is session-only, so it isn't saved.
-const CATALOG_DIR = "/.claude/cache/model-catalog";
-const SETTINGS_FILE = "/.claude/settings.json";
-const PERSISTED_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
+// What the bar shows for the agent in front of you — Claude Code, Codex or Antigravity (agy) — comes from
+// one small file per terminal: ~/.cache/herdr-status/<terminal>.json, written by that agent's own hook
+// (status/write.sh and its callers; see README):
+//   { provider: "claude" | "codex" | "agy", model, effort, ctx, five, five_reset, seven, seven_reset, updated }
+// ctx / five / seven are percent used, *_reset unix seconds. A chat (herdr-chat) runs the agent headless, so
+// the patched chat mod publishes the same fields in shared "vnh.chat" under its tab id instead.
+const STATUS_DIR = "/.cache/herdr-status";
 
 const PRICE_MS = 120000;
 const PRICES = [{ id: "bitcoin", label: "BTC" }, { id: "ethereum", label: "ETH" }, { id: "tether-gold", label: "Gold" }];
 const PRICE_URL = `https://api.coingecko.com/api/v3/simple/price?ids=${PRICES.map((c) => c.id).join(",")}&vs_currencies=usd&include_24hr_change=true`;
 
-// Written by ~/.claude/statusline.sh on every Claude Code status refresh:
-// { model, effort, five, five_reset, seven, seven_reset, ctx, updated } (resets/updated: unix seconds;
-// ctx: context window used %, of the session that refreshed last).
+// Claude's own 5h / 7d, whichever Claude session refreshed last (~/.claude/statusline.sh): what a Claude
+// chat falls back on, since a chat never calls the status line script.
 const LIMITS_FILE = "/.cache/claude-statusline/limits.json";
 
 // "3h47m" / "2d13h" / "12m" until a unix-seconds reset time.
@@ -140,9 +132,8 @@ function workFolder(space, f) {
 // Clone of Herdr's workspace-status with Claude Code's model and usage limits next to the agents count.
 export default class ClaudeLimitsStatus extends View {
   init(_props, cx) {
-    this.limits = null;
-    this.menuOpen = false; // the model picker's dropup
-    this.catalog = null; // Claude Code's model catalog (models + per-model effort), loaded below
+    this.raw = null; // { file, term, claude }: the focused terminal's status file and Claude's 5h / 7d
+    this.lastShown = null; // the last agent shown, kept while a shell or a mod pane has the focus
     this.git = null; // { key, info }
     this.gitAt = 0;
     this.gitBusy = false;
@@ -159,51 +150,6 @@ export default class ClaudeLimitsStatus extends View {
     // Prices: at once, then every 2 min while the window is active (none while it's in the background).
     this.refreshPrices(cx);
     cx.timer.every(PRICE_MS, (cx) => this.refreshPrices(cx));
-    // Model catalog: once now, then every 30 s (Claude Code rewrites it rarely).
-    cx.spawn(async (cx) => { await this.loadCatalog(); cx.notify(); });
-    cx.timer.every(30000, (cx) => cx.spawn(async (cx) => { await this.loadCatalog(); cx.notify(); }));
-  }
-
-  // Read Claude Code's own model catalog (newest file in the per-account folder). Keeps the last good
-  // one on any failure so the menu never empties.
-  async loadCatalog() {
-    try {
-      const dir = home() + CATALOG_DIR;
-      const r = await exec("sh", ["-c", 'ls -t "$1"/*.json 2>/dev/null | head -1', "_", dir]).catch(() => null);
-      const file = (r?.stdout ?? "").trim();
-      if (!file) return;
-      const cat = JSON.parse(await readTextFile(file))?.catalog;
-      if (!cat?.config?.models) return;
-      const next = {
-        models: cat.config.models,
-        effortByModel: Object.fromEntries((cat.state?.thinking_by_model ?? []).map((m) => [m.id, m.thinking?.effort ?? null])),
-      };
-      if (JSON.stringify(next) !== JSON.stringify(this.catalog)) this.catalog = next;
-    } catch {
-      // half-written or missing: keep the last good catalog
-    }
-    await this.loadDefaults();
-  }
-
-  // What new sessions will use: `model` and each model's `effortLevel` from ~/.claude/settings.json.
-  async loadDefaults() {
-    try {
-      const j = JSON.parse((await readTextFile(home() + SETTINGS_FILE)) || "{}");
-      const effort = {};
-      for (const [id, s] of Object.entries(j.modelSettings ?? {})) if (s?.effortLevel) effort[id] = s.effortLevel;
-      this.defaults = { model: typeof j.model === "string" ? j.model : null, effort };
-    } catch {
-      // unreadable for a moment: keep the last values
-    }
-  }
-
-  // The catalog model new sessions start on: `model` is an id or an alias ("opus", "fable") that means
-  // the newest model of that family, which the catalog lists first. null = the account default.
-  defaultModel() {
-    const want = (this.defaults?.model || "").toLowerCase();
-    if (!want) return null;
-    const models = this.catalog?.models ?? [];
-    return models.find((m) => m.id === want) ?? models.find((m) => (m.short_name || "").toLowerCase() === want) ?? null;
   }
 
   // BTC, ETH and gold (Tether Gold, one token per troy ounce) from CoinGecko's public price API:
@@ -352,33 +298,35 @@ export default class ClaudeLimitsStatus extends View {
     return parts.length ? h_flex().gap(6).items_center().children(parts) : null;
   }
 
-  // The terminal under the keyboard changed: re-read at once. A mod pane (the Files panel…) has no
+  // The terminal under the keyboard changed: re-read at once. A mod pane (the Files panel, a chat…) has no
   // terminal, so the last one stays.
   followFocus(cx) {
     const t = focused()?.terminal ?? null;
     if (t && t !== this.focusTerm) { this.focusTerm = t; this.refresh(cx); }
   }
 
-  // The bar shows the Claude session you're looking at: model, effort and context from that terminal's
-  // limits-<terminal>.json, and the account-wide 5h / 7d from limits.json (the last session to refresh).
-  // A shell or another non-Claude terminal keeps showing the last Claude one; a Claude session that
-  // hasn't written its file yet shows no model rather than another session's.
+  // Which agent a terminal runs, by what Herdr knows of it: "claude" | "codex" | "agy", or null for a shell,
+  // an agent this bar doesn't know, or no agent at all.
+  providerOf(terminal) {
+    const a = terminal ? agents().find((x) => x.address === terminal) : null;
+    if (!a) return null;
+    const id = `${a.app ?? ""} ${a.program?.key ?? ""} ${a.program?.name ?? ""}`.toLowerCase();
+    return /claude/.test(id) ? "claude" : /codex/.test(id) ? "codex" : /agy|antigravity/.test(id) ? "agy" : "other";
+  }
+
+  // The file of the focused terminal, plus Claude's own limits for a Claude chat. Nothing here guesses: a
+  // terminal whose agent hasn't written its file yet, or whose file is from another agent that ran in the
+  // same terminal before, shows no model ("…") rather than somebody else's.
   refresh(cx) {
     cx.spawn(async (cx) => {
       try {
-        const read = async (name) => { const text = await readTextFile(`${home()}/.cache/claude-statusline/${name}`); return text ? JSON.parse(text) : null; };
-        const shared = await read("limits.json");
+        const read = async (path) => { const text = await readTextFile(path); return text ? JSON.parse(text) : null; };
         const term = this.focusTerm && /^[\w-]+$/.test(this.focusTerm) ? this.focusTerm : null;
-        const mine = term ? await read(`limits-${term}.json`).catch(() => null) : null;
-        if (mine) this.lastSession = mine;
-        const isClaude = Boolean(term) && agents().some((a) => a.address === term && (a.app === "claude-code" || a.program?.key === "claude"));
-        const next = !shared ? null
-          : mine ? { ...shared, ...mine }
-          : isClaude ? { ...shared, model: null, effort: null, ctx: null }
-          : this.lastSession ? { ...shared, ...this.lastSession }
-          : shared;
-        if (JSON.stringify(next) !== JSON.stringify(this.limits)) {
-          this.limits = next;
+        const file = term ? await read(`${home()}${STATUS_DIR}/${term}.json`).catch(() => null) : null;
+        const claude = await read(home() + LIMITS_FILE).catch(() => null);
+        const next = { file, term, claude };
+        if (JSON.stringify(next) !== JSON.stringify(this.raw)) {
+          this.raw = next;
           cx.notify();
         }
       } catch {
@@ -408,153 +356,56 @@ export default class ClaudeLimitsStatus extends View {
       .when(Boolean(reset), (el) => el.child(div().child(untilReset(reset))));
   }
 
-  // The chat in front of you, if the shown tab is a chat: the patched chat mod publishes its model, effort
-  // and context under its tab id in shared "vnh.chat" while that tab is shown (patches/chat-vnh.patch).
-  // A chat runs `claude -p`, which never calls the status line script, so the files can't describe it.
+  // The chat in front of you, if the shown tab is a chat: the patched chat mod publishes its provider,
+  // model, effort and context under its tab id in shared "vnh.chat" while that tab is shown
+  // (patches/chat-vnh.patch), since a chat runs the agent headless and no hook or status line runs.
   liveChat() {
     const tab = focused()?.tab;
     return (tab ? (shared("vnh.chat") ?? {})[tab] : null) ?? null;
   }
 
-  // The shown chat when it is a Claude one (the catalog is Claude's), else null: the menu then saves a default.
-  liveClaudeChat() {
-    const c = this.liveChat();
-    return c && /claude|anthropic/i.test(c.provider ?? "") ? c : null;
+  // What to show now: { model, effort, ctx, five, five_reset, seven, seven_reset } or null for nothing.
+  //  - a chat in front: its own model / effort / context; Claude chats take Claude's 5h / 7d from the last
+  //    Claude session, other chats show none;
+  //  - a terminal running an agent: the file that agent wrote for it, if it is the same agent;
+  //  - a shell or a pane that isn't a terminal: the last agent shown, so the bar doesn't blink away.
+  current() {
+    const raw = this.raw ?? {};
+    const chat = this.liveChat();
+    if (chat) {
+      const limits = /claude|anthropic/i.test(chat.provider ?? "") ? raw.claude ?? {} : {};
+      return { model: chat.model, effort: chat.effort, ctx: chat.ctx, five: limits.five, five_reset: limits.five_reset, seven: limits.seven, seven_reset: limits.seven_reset };
+    }
+    const running = this.providerOf(raw.term);
+    if (running) {
+      const f = raw.file;
+      const same = f && (running === "other" || f.provider === running);
+      const shown = same ? f : { model: null };
+      this.lastShown = shown;
+      return shown;
+    }
+    return this.lastShown ?? null;
   }
 
-  claude(t) {
-    const chat = this.liveChat();
-    const l = chat ? { ...(this.limits ?? {}), model: chat.model, effort: chat.effort, ctx: chat.ctx } : this.limits;
+  // "Opus 4.8 high": the model as its agent names it, the effort after it, dimmer. A name that already
+  // carries it ("Gemini 3.8 Flash (High)") isn't repeated.
+  modelLabel(t, l) {
+    const effort = l.effort && !String(l.model ?? "").toLowerCase().includes(String(l.effort).toLowerCase()) ? l.effort : null;
+    return h_flex().gap(5).items_center()
+      .child(div().child(l.model ?? "…"))
+      .when(Boolean(effort), (el) => el.child(div().text_color(t.dim).child(effort)));
+  }
+
+  agentSegment(t) {
+    const l = this.current();
     if (!l) return null;
     const row = h_flex().gap(10).items_center()
       .child(div().child("|"))
-      .child(this.modelMenu(t, l));
-    if (typeof l.five === "number") row.child(this.limit(t, l.five, "5h", l.five_reset));
-    if (typeof l.seven === "number") row.child(this.limit(t, l.seven, "7d", l.seven_reset));
-    if (typeof l.ctx === "number") row.child(this.limit(t, l.ctx, "ctx", null));
+      .child(this.modelLabel(t, l));
+    if (typeof l.five === "number") row.child(this.limit(t, Math.round(l.five), "5h", l.five_reset));
+    if (typeof l.seven === "number") row.child(this.limit(t, Math.round(l.seven), "7d", l.seven_reset));
+    if (typeof l.ctx === "number") row.child(this.limit(t, Math.round(l.ctx), "ctx", null));
     return row;
-  }
-
-  // The model name as a dropup menu anchored to itself: click opens tier 1 (models); hovering a
-  // model opens tier 2 (effort). The effort sits beside the model, no parentheses, dimmer than the
-  // model. The content is built only while open, so the bar pays nothing for it on timer re-renders.
-  modelMenu(t, l) {
-    const trigger = h_flex().id("vnh-model").gap(5).items_center().cursor_pointer()
-      .when(this.menuOpen, (el) => el.text_color(t.foreground))
-      .hover((s) => s.text_color(t.foreground))
-      .tooltip(this.liveClaudeChat() ? "Switch this chat's model · hover a model for its effort" : "Default model for new sessions · hover a model for its effort")
-      // A Claude session that hasn't reported yet has no model: "…" instead of another session's.
-      .child(div().child(l.model ?? "…"))
-      .when(Boolean(l.effort), (el) => el.child(div().text_color(t.dim).child(l.effort)));
-    return Popover.new("vnh-model-menu").anchor("bottom_left").open(this.menuOpen)
-      .on_open_change((open, cx) => { this.menuOpen = open; cx.notify(); })
-      .trigger(trigger)
-      .when(this.menuOpen, (el) => el.content(this.modelMenuContent(t)));
-  }
-
-  // Tier-1 rows: "Default" (recommended), then the catalog's quick-pick models, then the saved default
-  // model when it isn't one of them — each with its real version name, the saved default ticked.
-  modelRows() {
-    const models = this.catalog?.models ?? [];
-    const quick = models.filter((m) => m.quick_select || m.section === "main");
-    const rows = [{ id: "default", name: "Default", hint: "recommended", default: true, thinking: null }];
-    for (const m of quick) rows.push(m);
-    const cur = this.defaultModel();
-    if (cur && !quick.some((m) => m.id === cur.id)) rows.push(cur);
-    return rows;
-  }
-
-  modelMenuContent(t) {
-    if (!this.catalog) return v_flex().w(190).p(4).rounded(8).border_1().border_color(t.border).bg(t.popover)
-      .child(div().px(8).py(6).text_size(12).text_color(t.dim).child("Loading models…"));
-    const live = this.liveClaudeChat(); // a Claude chat is shown: the menu switches it, ticks follow it
-    const saved = this.defaultModel(); // null: no `model` saved, the account default
-    const modelRow = (m) => {
-      const on = live ? (m.name || "").toLowerCase() === String(live.model ?? "").toLowerCase() : m.default ? !saved : saved?.id === m.id;
-      const efforts = m.thinking?.effort_options ?? [];
-      const modelId = m.default ? "default" : m.id;
-      const row = h_flex().id(`vm-${m.id}`).h(28).px(8).gap(8).items_center().rounded(5).cursor_pointer()
-        .text_size(12).text_color(on ? t.foreground : t.muted)
-        .when(on, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => this.choose(cx, modelId, null))
-        .child(div().flex_1().child(m.name))
-        .when(on, (el) => el.child(div().flex_none().text_color(t.accent).child("✓")))
-        .when(m.hint === "recommended", (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("default")))
-        .when(efforts.length > 0, (el) => el.child(div().flex_none().text_color(t.dim).child("›")));
-      if (!efforts.length) return row;
-      // This model's saved effort: what new sessions use, else the level Claude Code reports for it.
-      const effortNow = live ? (on ? live.effort : null) : (this.defaults?.effort?.[m.id] ?? this.catalog.effortByModel[m.id] ?? null);
-      const sub = v_flex().w(150).p(4).gap(1).ml(6).rounded(8).border_1().border_color(t.border).bg(t.popover)
-        .child(div().px(8).py(3).text_size(10).text_color(t.dim).child("Effort"))
-        .children(efforts.map((e) => {
-          const eon = effortNow === e.id;
-          return h_flex().id(`ve-${m.id}-${e.id}`).h(26).px(8).gap(6).items_center().rounded(5).cursor_pointer()
-            .text_size(12).text_color(eon ? t.foreground : t.muted)
-            .when(eon, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover))
-            .on_click((_e, cx) => this.choose(cx, modelId, e.id))
-            .child(div().flex_1().child(e.name))
-            .when(Boolean(e.badge?.message), (el) => el.child(div().flex_none().text_size(10).text_color(e.badge.variant === "warning" ? t.ansi3 : t.dim).child(e.badge.message)));
-        }));
-      return HoverCard.new(`vm-hc-${m.id}`).anchor("right_center").open_delay(120).close_delay(250)
-        .trigger(row).content(sub);
-    };
-    return v_flex().w(200).p(4).gap(1).rounded(8).border_1().border_color(t.border).bg(t.popover)
-      .child(div().px(8).py(3).text_size(10).text_color(t.dim).child(live ? "Model · this chat" : "Model · new sessions"))
-      .children(this.modelRows().map(modelRow));
-  }
-
-  // A pick: switches the shown Claude chat live (chat.setmodel, the chat's own control request: nothing is
-  // typed anywhere), else saves the default for new sessions.
-  choose(cx, modelId, effortId) {
-    if (!this.liveClaudeChat()) return this.saveDefault(cx, modelId, effortId);
-    this.menuOpen = false;
-    cx.notify();
-    const m = this.catalog?.models?.find((x) => x.id === modelId);
-    const modelName = modelId === "default" ? "Default" : (m?.name ?? modelId);
-    const effName = effortId ? (m?.thinking?.effort_options?.find((e) => e.id === effortId)?.name ?? effortId) : null;
-    try {
-      run(`chat.setmodel:${modelId}|${modelName}|${effortId ?? ""}`);
-      notify({ title: `This chat → ${modelName}${effName ? ` · ${effName}` : ""}`, body: "Switched live. New sessions keep their default.", level: "success", timeout: 2500 });
-    } catch (e) {
-      notify({ title: "Couldn't switch this chat", body: String(e?.message ?? e).slice(0, 200), level: "error", timeout: 4000 });
-    }
-  }
-
-  // Save the pick as the default for new sessions: edit `model` (and the model's `effortLevel`) in
-  // ~/.claude/settings.json, keeping everything else, then show a corner toast. Nothing is sent to any
-  // terminal. The write fails (and is retried once) if Claude Code changed the file in between.
-  saveDefault(cx, modelId, effortId) {
-    this.menuOpen = false;
-    cx.notify();
-    const m = this.catalog?.models?.find((x) => x.id === modelId);
-    const modelName = modelId === "default" ? "Default" : (m?.name ?? modelId);
-    const effName = effortId ? (m?.thinking?.effort_options?.find((e) => e.id === effortId)?.name ?? effortId) : null;
-    const keepsEffort = !effortId || PERSISTED_EFFORTS.has(effortId);
-    cx.spawn(async (cx) => {
-      try {
-        const path = home() + SETTINGS_FILE;
-        for (let attempt = 0; ; attempt++) {
-          const text = await readTextFile(path);
-          const data = text ? JSON.parse(text) : {};
-          if (modelId === "default") delete data.model; else data.model = modelId;
-          if (effortId && keepsEffort && modelId !== "default") {
-            data.modelSettings = { ...(data.modelSettings ?? {}), [modelId]: { ...(data.modelSettings?.[modelId] ?? {}), effortLevel: effortId } };
-          }
-          try { await writeTextFile(path, JSON.stringify(data, null, 2) + "\n", text); break; }
-          catch (e) { if (attempt >= 1) throw e; }
-        }
-        await this.loadDefaults();
-        cx.notify();
-        notify({
-          title: `New sessions → ${modelName}${effName ? ` · ${effName}` : ""}`,
-          body: keepsEffort ? "Saved as the default. Running sessions keep their model."
-            : "Model saved. Max isn't kept as a default (Claude Code only saves up to Extra): use /effort max inside a session.",
-          level: keepsEffort ? "success" : "warning", timeout: 3500,
-        });
-      } catch (e) {
-        notify({ title: "Couldn't save the default model", body: String(e?.message ?? e).slice(0, 200), level: "error", timeout: 4000 });
-      }
-    });
   }
 
   render() {
@@ -563,7 +414,7 @@ export default class ClaudeLimitsStatus extends View {
     const list = agents();
     const needs = list.filter(a => a.status === "blocked").length;
     const label = (icon, text) => h_flex().gap(6).items_center().child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
-    const claude = this.claude(t);
+    const claude = this.agentSegment(t);
     const gitStats = this.gitStats(t);
     const head = this.git?.info?.head;
     const branch = space?.branch ?? (head && head !== "(detached)" ? head : null);

@@ -40,6 +40,8 @@ mkdir -p "$HOME/.claude"
 backup "$HOME/.claude/statusline.sh"
 cp "$ROOT/claude/statusline.sh" "$HOME/.claude/statusline.sh"
 chmod +x "$HOME/.claude/statusline.sh"
+# The status bar's other agents: the shared writer, plus the hook that calls it in agy and in Codex.
+sh "$ROOT/status/install.sh" || echo "  note: status/install.sh failed, the status bar will only show Claude Code"
 if ! jq -e '.statusLine.command == "~/.claude/statusline.sh"' "$HOME/.claude/settings.json" >/dev/null 2>&1; then
   echo "  note: set statusLine in ~/.claude/settings.json to:"
   echo '    "statusLine": { "type": "command", "command": "~/.claude/statusline.sh", "padding": 0 }'

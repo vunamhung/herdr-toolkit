@@ -1,0 +1,32 @@
+#!/bin/sh
+# Antigravity CLI (agy) status line command (installed as status/agy.sh): publishes model, effort, context and quota for the Herdr
+# status bar and prints nothing (agy's own status line stays, see stack_with_default in install.sh).
+#
+# agy runs this command with a JSON payload on stdin. What is used:
+#   model.display_name   "Gemini 3.8 Flash (High)"      (already carries the effort for Gemini models)
+#   model.effort         "high"
+#   context_window.used_percentage
+#   quota["gemini-5h" | "gemini-weekly" | "3p-5h" | "3p-weekly"]  { remaining_fraction, reset_time }
+# Gemini models draw on the gemini-* buckets, the third-party ones (Claude, GPT-OSS) on 3p-*.
+# Plain sh on purpose: agy runs the command through `sh`, which has no process substitution.
+# Fields are joined with | (a tab would swallow empty fields: it is IFS whitespace).
+# The payload also holds the account's e-mail and plan: none of it is read or stored.
+input=$(cat)
+line=$(printf '%s' "$input" | jq -r '
+  def n: if . == null then "" else tostring end;
+  def used: if . == null then "" else ((1 - .) * 100 | round | tostring) end;
+  def epoch: if . == null then "" else (sub("\\.[0-9]+";"") | sub("Z$";"") | strptime("%Y-%m-%dT%H:%M:%S") | mktime | tostring) end;
+  (.model.display_name // .model.id // "") as $name
+  | (if ($name | ascii_downcase | startswith("gemini")) then "gemini" else "3p" end) as $g
+  | (.quota[$g + "-5h"]) as $q5 | (.quota[$g + "-weekly"]) as $q7
+  | [ $name,
+      (.model.effort | n),
+      (.context_window.used_percentage | if . == null then "" else round | tostring end),
+      ($q5.remaining_fraction | used), ($q5.reset_time | epoch),
+      ($q7.remaining_fraction | used), ($q7.reset_time | epoch)
+    ] | join("|")' 2>/dev/null)
+IFS='|' read -r model effort ctx five five_reset seven seven_reset <<EOF
+$line
+EOF
+sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" agy "$model" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" 2>/dev/null
+exit 0
