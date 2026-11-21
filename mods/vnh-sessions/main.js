@@ -7,11 +7,13 @@
 // Reading is cheap on repeat: the file list with mtimes comes first (one stat each), then only the
 // files that changed since the last look are read (grep, never whole files into the mod), and the
 // result is cached in shared "vnh.sessions.cache".
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, ScrollHandle } from "gpui-base";
 import { theme, props, closeOverlay, exec, run, spaces, shared, setShared, notify, home, panes } from "herdr";
 
 const AGENTS = { claude: "Claude", agy: "Antigravity", codex: "Codex" };
+// Herdr's own icon for each agent (in its home folder, coloured: drawn as images).
+const AGENT_ICON = { claude: "icons/claude.svg", agy: "icons/antigravity.svg", codex: "icons/codex.svg" };
 const RESUME = { claude: 'exec claude --resume "$1"', agy: 'exec agy --conversation "$1"', codex: 'exec codex resume "$1"' };
 
 // Antigravity and Codex sessions, one JSON object per line: { agent, id, m (unix s), n (prompts), title, prompt, cwd }.
@@ -307,7 +309,7 @@ export default class Sessions extends View {
                 .child(small(`del-no-${s.id}`, "x", t.muted, "Keep it", (cx) => { this.confirm = null; cx.notify(); })))
               .when(!asking, (r) => r.child(small(`del-${s.id}`, "trash", t.ansi1, "Delete this conversation", (cx) => { this.confirm = s.f; cx.notify(); })))))
             .child(h_flex().gap(8).items_center()
-              .child(svg(ICON("chat")).size(13).flex_none().text_color(on ? t.accent : t.muted))
+              .child(image(AGENT_ICON[agent]).size(14).flex_none().opacity(on ? 1 : 0.85))
               .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).when(on, (el) => el.font_medium()).child(title))
               // Open in a Herdr tab now: which one (Enter goes there).
               .when(Boolean(live) && !shown, (el) => el.child(h_flex().flex_none().gap(4).items_center().text_size(10.5).text_color(t.ansi2)
@@ -315,7 +317,6 @@ export default class Sessions extends View {
               // Hidden on hover, where the trash (and its ✓ / ✗) take the spot.
               .when(!shown, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${s.n} prompt${s.n === 1 ? "" : "s"} · ${ago(s.m)}`))))
             .child(h_flex().pl(21).gap(8).items_center().text_size(11).text_color(t.dim)
-              .child(div().flex_none().text_color(t.muted).child(AGENTS[agent]))
               .child(div().flex_none().max_w(240).truncate().child(tilde(s.cwd) || "?"))
               .when(Boolean(s.branch), (el) => el.child(h_flex().flex_none().gap(3).items_center()
                 .child(svg(ICON("branch")).size(10).flex_none()).child(div().max_w(140).truncate().child(s.branch))))
