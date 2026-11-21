@@ -388,12 +388,16 @@ export default class ClaudeLimitsStatus extends View {
     return this.lastShown ?? null;
   }
 
-  // "Opus 4.8 high": the model as its agent names it, the effort after it, dimmer. A name that already
-  // carries it ("Gemini 3.8 Flash (High)") isn't repeated.
+  // "Opus 4.8 high": the model as its agent names it, the effort after it, dimmer, no brackets — the same for
+  // every agent. A name that carries its effort in brackets ("Gemini 3.8 Flash (High)") is split: the name,
+  // then that effort dimmed, so Antigravity reads like Claude Code and Codex.
   modelLabel(t, l) {
-    const effort = l.effort && !String(l.model ?? "").toLowerCase().includes(String(l.effort).toLowerCase()) ? l.effort : null;
+    let name = String(l.model ?? "").trim(), effort = l.effort ? String(l.effort) : "";
+    const m = /^(.*\S)\s*\(([^()]+)\)\s*$/.exec(name);
+    if (m && (!effort || m[2].toLowerCase() === effort.toLowerCase())) { name = m[1]; effort = effort || m[2]; }
+    if (effort && name.toLowerCase().endsWith(effort.toLowerCase())) effort = "";
     return h_flex().gap(5).items_center()
-      .child(div().child(l.model ?? "…"))
+      .child(div().child(name || "…"))
       .when(Boolean(effort), (el) => el.child(div().text_color(t.dim).child(effort)));
   }
 
