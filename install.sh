@@ -3,7 +3,7 @@
 # .backups/<timestamp>/<path>, elsewhere (~/.claude/statusline.sh, karabiner…) as <file>.bak-<timestamp>.
 #
 #   ./install.sh            mods + Claude Code status line script
-#   ./install.sh --layout   also install layouts/VNH.json and switch Herdr to it
+#   ./install.sh --layout   also install layouts/VNH.json (and its picture) and switch Herdr to it
 #   ./install.sh --karabiner  also add the Cmd+` -> Herdr rule to Karabiner-Elements
 #   ./install.sh --orca     also install the Herdr theme "orca" (Claude Code's custom:orca palette) and set agy's
 #                            colorScheme to terminal, so Claude, agy and Codex share one palette
@@ -71,6 +71,8 @@ if want --layout; then
   echo "layout: VNH"
   backup "$HERDR/layouts/VNH.json"
   cp "$ROOT/layouts/VNH.json" "$HERDR/layouts/VNH.json"
+  # The picture Settings > Look shows for this layout (the layout names it in "preview").
+  cp "$ROOT/layouts/VNH.png" "$HERDR/layouts/VNH.png"
   echo "keys: merge keys/vnh.json into keys.json"
   backup "$HERDR/keys.json"
   KEYS="$HERDR/keys.json"; [ -s "$KEYS" ] || echo "{}" > "$KEYS"

@@ -30,7 +30,7 @@ Left to right:
 
 ## Built from
 
-Layout `layouts/VNH.json` (cloned from Herdr's `main` 0.1.16), nodes and what they hold:
+Layout `layouts/VNH.json` (cloned from Herdr's `main` 0.1.16; its `"preview"` is `layouts/VNH.png`, the picture Settings → Look shows for it; its themes are Herdr's own `graphite` and `paper`, so no theme file is needed), nodes and what they hold:
 
 ```
 root (row)
