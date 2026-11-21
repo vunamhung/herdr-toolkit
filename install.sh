@@ -41,6 +41,10 @@ done
 if [ -d "$ROOT/overlays" ]; then
   echo "overlays: walkthrough i18n + Settings Mods tab"
   ( cd "$ROOT/overlays" && find . -type f ) | sed 's#^\./##' | while IFS= read -r rel; do
+    # An overlay changes a mod or a frame that is already there (mods/walkthrough, frame/settings): on a
+    # machine without it, copying the few changed files would leave a half mod behind.
+    top=$(echo "$rel" | cut -d/ -f1-2)
+    if [ ! -d "$HERDR/$top" ]; then echo "  skipped $rel ($HERDR/$top isn't installed: install it, then run this again)"; continue; fi
     echo "  $rel"
     backup "$HERDR/$rel"
     mkdir -p "$(dirname "$HERDR/$rel")"
