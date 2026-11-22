@@ -235,6 +235,10 @@ export default class Spaces extends View {
     const [on, cwd] = JSON.parse(key);
     this.checked[key] = Date.now();
     this.unsure.delete(key);
+    (this.gone ??= new Set()).delete(key);
+    // VNH: a folder that doesn't exist any more (a worktree an agent removed) is not "git couldn't answer": its old branch and
+    // counts must not stay on the row; the row says so instead.
+    const MISSING = /no such file or directory|not a directory|cannot change to|ENOENT/i;
     try {
       // Ref-only reads avoid scanning the worktree or waking its index watch.
       // Two reads: a folder name may itself contain a newline.
@@ -242,6 +246,7 @@ export default class Spaces extends View {
         exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel"], { cwd, on }),
         exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on }),
       );
+      if (r.code !== 0 && MISSING.test(r.stderr ?? "")) { this.git[key] = null; this.gone.add(key); return; }
       if (r.code !== 0 || common.code !== 0) {
         // Only git's own "no" is remembered as no repo; anything else is asked again.
         if (!/not a git repository/i.test(r.code !== 0 ? r.stderr : common.stderr)) {
@@ -288,7 +293,8 @@ export default class Spaces extends View {
       const info = { name, branch: branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : "(detached)", ahead, behind, repo: JSON.stringify([on, repo]), linked: repo !== `${top}/.git`, tree: tree_ };
       this.git[key] = info;
       if (!on) this.watch(repo, cx);
-    } catch {
+    } catch (e) {
+      if (MISSING.test(String(e?.message ?? e))) { this.git[key] = null; this.gone.add(key); return; }
       // Couldn't ask (the machine is away): keep what it showed, look again later.
       this.git[key] ??= null;
       this.unsure.add(key);
@@ -332,7 +338,7 @@ export default class Spaces extends View {
     const sp = spaces(), ps = panes();
     const ready = (w) => this.shown.has(w.id) || where(w, ps) in this.git || Date.now() - (this.born[w.id] ??= Date.now()) > 1500;
     for (const w of sp) if (!this.shown.has(w.id) && ready(w)) this.shown.add(w.id);
-    const list = sp.map((w, i) => ({ w, i, g: this.git[where(w, ps)] ?? null }));
+    const list = sp.map((w, i) => ({ w, i, g: this.git[where(w, ps)] ?? null, gone: Boolean(this.gone?.has(where(w, ps))) }));
     const mains = new Set(list.filter((r) => r.g && !r.g.linked).map((r) => r.g.repo));
     const nested = (r) => r.g?.linked && mains.has(r.g.repo);
     const out = [];
@@ -491,7 +497,7 @@ export default class Spaces extends View {
     return `${g.name} \u00b7 ${g.branch ?? "detached"} \u00b7 ${sync}\n${parts.length ? parts.join(", ") : "clean"}${lines}`;
   }
 
-  row({ w, i, g, tree }, t) {
+  row({ w, i, g, tree, gone }, t) {
     const on = w.active;
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     const colors = shared("space.colors") ?? {};
@@ -556,7 +562,7 @@ export default class Spaces extends View {
             .when(w.tabs.some(tb => tb.working_since != null), tile => tile.loop("opacity", { from: 0.35, to: 1, period: 1800 }))
             .child([...w.name][0]?.toUpperCase() ?? "?")))
           .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).child(w.name))
-          .child(g ? this.gitTail(g, tree, w.name, t).id(`git-${w.id}`).tooltip(this.gitTip(g)) : div().flex_1()),
+          .child(g ? this.gitTail(g, tree, w.name, t).id(`git-${w.id}`).tooltip(this.gitTip(g)) : gone ? div().flex_1().text_right().text_size(11).text_color(t.dim).child("folder deleted") : div().flex_1()),
       );
   }
 
