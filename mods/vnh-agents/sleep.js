@@ -4,6 +4,9 @@
 // waking it types the agent's resume command into that same terminal (no new tab), or opens a tab where the
 // terminal is gone. After AUTO_MS without a change (and not the terminal in front of you) an idle agent goes to
 // sleep by itself.
+// The tab keeps its place: where the agent's terminal was, a cover pane (mods/vnh-cover) shows the agent's last screen,
+// dimmed, and a click on it wakes the agent. The terminal (a shell at a prompt) is parked out of sight meanwhile and
+// comes back into the same slot at wake, with its history.
 // The idea (put idle agents to sleep, wake the same conversation) is from fakie-dev/herdr-suspender (MIT); this is a
 // much smaller design: no cover panel, no tab of its own, nothing started while everything is awake.
 import { hc, exec, run, spaces, terminals, panes, shared, setShared, readTextFile, home, notify } from "herdr";
@@ -153,6 +156,7 @@ export const setAuto = (on) => setShared(AUTO, Boolean(on));
 export const sleepers = () => shared(KEY) ?? [];
 const save = (list) => setShared(KEY, list);
 export const forget = (id) => save(sleepers().filter((r) => r.id !== id));
+const patch = (id, fields) => save(sleepers().map((r) => (r.id === id ? { ...r, ...fields } : r)));
 
 /** What the agent in a terminal wrote for the status bar: { provider, session, title, ... }, or null. */
 export async function statusOf(terminal) {
@@ -164,6 +168,65 @@ const agentLeft = (address) => {
   return !t || t.state !== "live" || !t.program?.agent;
 };
 const sleep = (ms) => exec("sleep", [String(ms / 1000)]).catch(() => null);
+const paneOf = (terminal) => panes().find((p) => p.terminal === terminal)?.pane ?? null;
+const paneExists = (pane) => Boolean(pane) && panes().some((p) => p.pane === pane);
+async function until(fn, ms = 3000, step = 200) {
+  for (let t = 0; t < ms; t += step) { const v = fn(); if (v) return v; await sleep(step); }
+  return fn() || null;
+}
+/** The terminal's screen as text for the cover: no trailing blank lines, long lines cut. */
+async function screenOf(address) {
+  const r = await hc(["read", address]).catch(() => null);
+  const lines = String(r?.stdout ?? "").split("\n").map((l) => l.replace(/\s+$/, "").slice(0, 220));
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines.slice(-100).join("\n");
+}
+// An unnamed space is called after where its first terminal is: with that terminal parked it would take its folder's
+// name, so such a space is pinned to the name it shows, and given back when its last sleeper wakes.
+function pinSpace(spaceId) {
+  const sp = spaces().find((x) => x.id === spaceId);
+  if (!sp || sp.named || !sp.name) return null;
+  run("space.rename", { id: sp.id, name: sp.name });
+  return sp.name;
+}
+function unpinSpace(rec) {
+  if (!rec.pin) return;
+  const others = sleepers().filter((r) => r.id !== rec.id && r.space === rec.space && r.pin);
+  const sp = spaces().find((x) => x.id === rec.space);
+  if (others.length === 0 && sp && sp.name === rec.pin) run("space.rename", { id: sp.id, name: "" });
+}
+/** Puts the cover where the terminal's pane is and parks the terminal. false: left as it was (the terminal stays at its shell). */
+async function coverUp(rec) {
+  const P = paneOf(rec.terminal);
+  if (!P) return false;
+  const before = new Set(panes().map((p) => p.pane));
+  run("pane.split", { pane: P, direction: "right", mod: "vnh-cover", props: { id: rec.id } });
+  const C = await until(() => panes().find((p) => !before.has(p.pane) && p.mod === "vnh-cover")?.pane ?? null);
+  if (!C) return false;
+  const pin = pinSpace(rec.space);
+  run("pane.swap", { pane: C, target: P });
+  run("terminal.park", { terminal: rec.terminal });
+  patch(rec.id, { cover: C, tab: panes().find((p) => p.pane === C)?.tab ?? rec.tab, pin });
+  return true;
+}
+/** Takes the cover away: the parked terminal comes back into its slot (Herdr adopts a terminal that carries its tab's labels). -> its pane, or null. */
+async function uncover(rec) {
+  if (!rec.cover || !paneExists(rec.cover)) return null;
+  const tab = panes().find((p) => p.pane === rec.cover)?.tab ?? rec.tab;
+  await hc(["label", rec.terminal, `herdr.space=${rec.space}`, `herdr.tab=${tab}`]).catch(() => null);
+  const np = await until(() => paneOf(rec.terminal));
+  if (!np) return null;
+  run("pane.swap", { pane: np, target: rec.cover });
+  run("pane.close", { pane: rec.cover });
+  return np;
+}
+/** Drops a sleeper without waking it (the x in the list): the cover goes, the terminal comes back at its shell. */
+export async function dismiss(rec) {
+  const np = await uncover(rec);
+  if (!np && rec.cover && paneExists(rec.cover)) run("pane.close", { pane: rec.cover });
+  forget(rec.id);
+  unpinSpace(rec);
+}
 
 /** Puts the agent of terminal `a.address` to sleep. -> { ok, why? }. Nothing is killed: the agent is asked to exit and,
  *  if it doesn't within 10 s, left running (the record is dropped again). */
@@ -183,9 +246,13 @@ export async function sleepAgent(a, label, dry = false) {
   const rec = { id, agent: provider, session, bin: argv[0], flags: flagsOf(provider, argv), terminal: a.address, pane: a.pane ?? pane?.pane ?? null, tab: a.tab ?? null,
     space: a.space ?? null, spaceName: a.space_name ?? space?.name ?? "", cwd: pane?.cwd ?? null, title: label || st?.title || a.title || "", at: Date.now() };
   if (dry) return { ok: true, rec }; // a dry run: what it would do, nothing changed
+  rec.screen = await screenOf(a.address);
   save([rec, ...sleepers().filter((r) => r.id !== id)]);
   await hc(["send", a.address, "/exit"]).catch(() => null);
-  for (let i = 0; i < 20; i++) { if (agentLeft(a.address)) return { ok: true }; await sleep(500); }
+  for (let i = 0; i < 20; i++) {
+    if (agentLeft(a.address)) { await sleep(400); await coverUp(rec).catch(() => false); return { ok: true }; }
+    await sleep(500);
+  }
   forget(id);
   return { ok: false, why: "it didn't exit (it may be asking something)" };
 }
@@ -194,6 +261,22 @@ export async function sleepAgent(a, label, dry = false) {
 export async function wake(rec) {
   const t = terminals().find((x) => x.address === rec.terminal);
   const command = RESUME[rec.agent](rec.bin || rec.agent, rec.session, rec.flags ?? []).map((x, i) => (i === 0 ? x : shq(x))).join(" ");
+  // Under a cover: the terminal comes back into the slot first, then it resumes.
+  if (rec.cover) {
+    const np = await uncover(rec);
+    if (np) {
+      forget(rec.id); unpinSpace(rec);
+      wokeAt.set(rec.terminal, Date.now());
+      woke.push({ terminal: rec.terminal, space: rec.space, at: Date.now() });
+      await hc(["send", rec.terminal, command]).catch(() => null);
+      run("pane.focus", { pane: np });
+      return;
+    }
+    // The cover or the terminal is gone: nothing to put back; a terminal still parked is let go, and a tab opens.
+    if (t && t.state === "live") run("terminal.kill", { terminal: rec.terminal });
+    if (paneExists(rec.cover)) run("pane.close", { pane: rec.cover });
+    unpinSpace(rec);
+  }
   forget(rec.id);
   wokeAt.set(rec.terminal, Date.now());
   woke.push({ terminal: t && t.state === "live" && !t.program?.agent && t.program?.shell && rec.pane ? rec.terminal : null, space: rec.space, at: Date.now() });

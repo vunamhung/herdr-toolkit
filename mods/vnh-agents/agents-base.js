@@ -5,7 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
-import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, prune, isWoken, wokeAt } from "./sleep.js";
+import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, dismiss, prune, isWoken, wokeAt } from "./sleep.js";
 
 // VNH: the spaces sidebar's colors for theme color names (same table as the shipped spaces mod).
 const VNH_MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -542,7 +542,7 @@ export default class Agents extends View {
             .when(Boolean(r.title), (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).opacity(0.7).child(`\u00b7 ${r.title}`))))
           .when(hot, (el) => el.child(div().id(`zx-${r.id}`).flex_none().p(2).rounded(4).text_color(t.dim).cursor_pointer().tooltip("Forget it")
             .hover((s) => s.bg(t.hover).text_color(t.foreground))
-            .on_click((_e, cx) => { cx.stop_propagation(); forget(r.id); this.hovered = null; cx.notify(); })
+            .on_click((_e, cx) => { cx.stop_propagation(); dismiss(r); this.hovered = null; cx.notify(); })
             .child(svg("mods/pane/close.svg").size(12))))
           .when(!hot, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - r.at))));
       })];
