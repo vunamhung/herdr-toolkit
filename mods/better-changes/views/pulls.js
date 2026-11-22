@@ -311,7 +311,7 @@ export const pullsMethods = {
     // A long description scrolls in a box of its own, so the checks and files stay in view.
     if (body)
       about.child(
-        v_flex().id("pr-body").flex_none().max_h(170).overflow_y_scrollbar().mt(2).pr(4)
+        v_flex().id("pr-body").flex_none().max_h(150).overflow_y_scrollbar().mt(2).pr(4)
           .child(div().text_size(TEXT.small).text_color(t.muted).whitespace_normal().child(body)),
       );
     if (pr.additions || pr.deletions)
@@ -326,11 +326,12 @@ export const pullsMethods = {
     if (open && !pr.isDraft) bar.child(TextButton({ id: "pr-merge", icon: "check", label: "Merge…", onClick: () => this.openPrMenu(this.selectedPr, { ask: "merge-squash" }) }));
     if (open) about.child(bar);
 
-    const scroll = v_flex().id("pr-scroll").flex_1().min_h(0).overflow_y_scrollbar().child(about)
+    // The description has a scroll of its own, so it sits above the list that scrolls (a scroll inside a scroll doesn't turn).
+    const scroll = v_flex().id("pr-scroll").flex_1().min_h(0).overflow_y_scrollbar()
       .child(this.renderPrStatus(pr, checks, rd))
       .child(this.renderPrChecks(checks))
       .child(this.renderPrFiles(pr));
-    return v_flex().id("pr-detail").flex_1().min_h(0).child(top).child(scroll);
+    return v_flex().id("pr-detail").flex_1().min_h(0).child(top).child(about).child(scroll);
   },
 
   statusRow(id, icon, color, text, detail, onClick) {
