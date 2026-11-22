@@ -667,7 +667,7 @@ export const sidebarMethods = {
   openMenu(scope, kind, name, dir, files) {
     const statuses = {};
     for (const f of files) statuses[f.path] = this.statusIn(f, scope);
-    const n = files.length, working = scope !== "committed";
+    const n = files.length, working = !["committed", "commit", "pr"].includes(scope);
     openOverlay({
       mod: "vnh-changes-menu", kind: "popup", width: 250, height: working ? 500 : 250,
       props: { root: this.root, on: this.on ?? null, kind, name, dir, scope, paths: files.map((f) => f.path), statuses },

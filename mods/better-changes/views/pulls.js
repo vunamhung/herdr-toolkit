@@ -6,7 +6,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { theme, openOverlay } from "herdr";
 import { timeAgo } from "./../git/model.js";
 import { TEXT, codeFont, Icon, FileIcon, PanelHeader, IconButton, TextButton, GroupHeader, Row, DiffStat, Message } from "./ui.js";
-import { TRUNKS, summarize, readiness, reviewLabel, loginOf, authorOf, atOf, forgeOf, listPulls, whoami, pullDetail, isMine, isAskedOf, createUrl } from "../git/pulls.js";
+import { readPrCode, TRUNKS, summarize, readiness, reviewLabel, loginOf, authorOf, atOf, forgeOf, listPulls, whoami, pullDetail, isMine, isAskedOf, createUrl } from "../git/pulls.js";
 
 const FRESH_MS = 60000; // a list this young is not read again when the tab is shown
 const CAP_CHECKS = 60, CAP_FILES = 150;
@@ -128,15 +128,32 @@ export const pullsMethods = {
     this.prDetailLoading = true;
     const token = ++this.prToken;
     const { root, on, context } = this, forge = this.forge();
+    this.loadPrCode(pr, cx);
     cx.notify();
     cx.spawn(async (cx) => {
       try {
         const d = await pullDetail(forge, pr, root, on);
         if (token === this.prToken && this.isCurrent(context)) this.prDetail = d;
       } catch (e) {
-        if (token === this.prToken) this.prDetailError = e.message;
+        if (token === this.prToken) this.prDetailError = `${forge?.kind === "azure" ? "az" : "gh"}: ${e.message}`; // which CLI said it
       } finally {
         if (token === this.prToken) this.prDetailLoading = false;
+        cx.notify();
+      }
+    });
+  },
+
+  // The PR's code: its head and base are fetched, and the files it changes listed (a click opens a file's diff in the centre).
+  loadPrCode(pr, cx) {
+    const forge = this.forge(), token = this.prToken, { context } = this;
+    this.prCode = { number: pr.number, loading: true, files: [], base: null, head: null, error: null };
+    cx.spawn(async (cx) => {
+      try {
+        const r = await readPrCode((args) => this.git(args), forge, pr);
+        if (token === this.prToken && this.isCurrent(context)) this.prCode = { number: pr.number, loading: false, error: null, ...r };
+      } catch (e) {
+        if (token === this.prToken) this.prCode = { number: pr.number, loading: false, files: [], base: null, head: null, error: e.message };
+      } finally {
         cx.notify();
       }
     });
@@ -145,6 +162,7 @@ export const pullsMethods = {
   closePr(cx) {
     this.selectedPr = null;
     this.prDetail = null;
+    this.prCode = null;
     this.prToken++;
     cx.notify();
   },
@@ -362,11 +380,19 @@ export const pullsMethods = {
 
   renderPrFiles(pr) {
     const t = theme();
-    const files = pr.files ?? [];
-    if (!files.length) return div();
+    const code = this.prCode?.number === pr.number ? this.prCode : null;
     const box = v_flex().id("pr-files").flex_none().p(6);
-    box.child(GroupHeader({ id: "pr-files-h", label: "Files changed", count: pr.changedFiles ?? files.length, divided: true }));
-    for (const f of files.slice(0, CAP_FILES)) {
+    if (code?.files.length) {
+      box.child(GroupHeader({ id: "pr-files-h", label: "Files changed", count: code.files.length, divided: true }));
+      this.addRows(box, "pr", code.files.slice(0, CAP_FILES));
+      if (code.files.length > CAP_FILES) box.child(Message(`…and ${code.files.length - CAP_FILES} more: see them on the web page`));
+      return box;
+    }
+    if (code?.loading) return box.child(GroupHeader({ id: "pr-files-h", label: "Files changed", divided: true })).child(Message("Fetching the code…"));
+    // The code could not be fetched (a fork, a deleted branch, no access): what the host lists, opening its web page.
+    box.child(GroupHeader({ id: "pr-files-h", label: "Files changed", count: (pr.changedFiles ?? (pr.files ?? []).length) || undefined, divided: true }));
+    if (code?.error) box.child(div().px(8).py(4).text_size(TEXT.caption).text_color(t.ansi1).whitespace_normal().child(code.error));
+    for (const f of (pr.files ?? []).slice(0, CAP_FILES)) {
       const parts = f.path.split("/"), name = parts.pop();
       box.child(
         Row({ id: `pr-f-${f.path}`, onClick: (cx) => cx.open_url(`${pr.url}/files`) })
@@ -377,7 +403,6 @@ export const pullsMethods = {
           .child(DiffStat({ add: f.additions, del: f.deletions })),
       );
     }
-    if (files.length > CAP_FILES) box.child(Message(`…and ${files.length - CAP_FILES} more on GitHub`));
     return box;
   },
 };

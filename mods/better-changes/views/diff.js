@@ -65,6 +65,11 @@ export const diffMethods = {
       selected.commit = { base: this.committed.base, name: this.committed.name };
       selected.file = file;
     }
+    // VNH: a file of a pull request: what its head changes since it left the base.
+    if (scope === "pr") {
+      selected.commit = { base: this.prCode.base, head: this.prCode.head, short: `#${this.prCode.number}` };
+      selected.file = file;
+    }
     const entries = shared("better-changes.diff-tabs") ?? {};
     const old = entries[space.id];
     const tab = this.diffTab(space.id);
@@ -128,7 +133,7 @@ export const diffMethods = {
   },
 
   diffFile() {
-    if (["commit", "committed", "patch"].includes(this.scope)) return this.commitFile;
+    if (["commit", "committed", "patch", "pr"].includes(this.scope)) return this.commitFile;
     const file = this.files.find((f) => f.path === this.path);
     if (!file) return null;
     // Git's counts for a conflict are of the markers, so they would mislead.
@@ -169,6 +174,7 @@ export const diffMethods = {
     if (this.scope === "commit")
       return ["show", "--diff-merges=first-parent", "--format=", this.commitRef.hash];
     if (this.scope === "committed") return ["diff", this.commitRef.base, "HEAD"];
+    if (this.scope === "pr") return ["diff", this.commitRef.base, this.commitRef.head];
     return ["diff", ...(this.scope === "staged" ? ["--cached"] : [])];
   },
 
@@ -311,6 +317,7 @@ export const diffMethods = {
       committed: "Committed",
       commit: this.commitRef?.short,
       patch: this.commitRef?.short,
+      pr: this.commitRef?.short,
     };
     const scope = file?.conflict ? this.conflictLabel() : scopes[this.scope];
     const picture = this.path && fileIcon(this.fileIcons, `${this.root}/${this.path}`, { light: isLight(theme().background) });

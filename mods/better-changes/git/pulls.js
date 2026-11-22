@@ -1,6 +1,7 @@
 // VNH: pull requests, read through the GitHub CLI (`gh`, logged in once with `gh auth login`): no token is stored here.
 // Nothing in this file touches the view; it runs gh and turns its JSON into what the PRs tab draws.
 import { exec } from "herdr";
+import { commitFiles } from "./model.js";
 
 // gh is not always on the PATH a mod's process gets (Homebrew, ~/.local/bin).
 const GH = `export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -219,3 +220,23 @@ export const isMine = (pr, me) => Boolean(me) && (pr.authorKey ? pr.authorKey ==
 export const isAskedOf = (pr, me) => Boolean(me) && (pr.reviewRequests ?? []).some((r) => (r.key ? r.key === String(me).toLowerCase() : loginOf(r) === me));
 export const createUrl = (f, branch) =>
   f.kind === "github" ? `${f.web}/pull/new/${encodeURIComponent(branch).replace(/%2F/g, "/")}` : `${f.web}/pullrequestcreate?sourceRef=${encodeURIComponent(branch)}`;
+
+/** The code of a pull request: fetches its head and its base, and lists what the head changes since it left the base. */
+export async function readPrCode(git, f, pr) {
+  const fetchSha = async (ref, what) => {
+    const r = await git(["fetch", "origin", ref]);
+    if (r.code !== 0) throw new Error(`Can't fetch ${what}: ${String(r.stderr || r.stdout).trim().split("\n")[0].slice(0, 160)}`);
+    const s = await git(["rev-parse", "FETCH_HEAD"]);
+    return s.stdout.trim();
+  };
+  // GitHub keeps every pull request's head under pull/<n>/head (a fork's too); Azure DevOps has only its source branch.
+  const head = await fetchSha(f.kind === "github" ? `pull/${pr.number}/head` : pr.headRefName, f.kind === "github" ? `the PR #${pr.number}` : `the branch ${pr.headRefName} (merged and deleted?)`);
+  const tip = await fetchSha(pr.baseRefName, `the branch ${pr.baseRefName}`);
+  const mb = await git(["merge-base", tip, head]);
+  const base = mb.code === 0 ? mb.stdout.trim() : tip;
+  const flags = ["--no-renames", "--no-ext-diff", "--no-textconv", "-z"];
+  const numstat = await git(["diff", ...flags, "--numstat", base, head]);
+  const names = await git(["diff", ...flags, "--name-status", base, head]);
+  if (numstat.code !== 0 || names.code !== 0) throw new Error(numstat.stderr || names.stderr || "Can't read the changes");
+  return { base, head, files: commitFiles(numstat.stdout, names.stdout) };
+}
