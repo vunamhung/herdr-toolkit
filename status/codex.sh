@@ -21,6 +21,22 @@ JQ="${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/bin/jq"
 [ -x "$JQ" ] || JQ=$(command -v jq 2>/dev/null) || exit 0
 jq() { "$JQ" "$@"; }
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+# SubagentStart / SubagentStop: only the terminal's list of running subagents changes (in its status file, which the Agents
+# list reads); the other fields are left as they are. The list is cleared again by the next prompt, the session start and Stop.
+ev=$(printf '%s' "$input" | jq -r '.hook_event_name // empty' 2>/dev/null)
+case "$ev" in
+  SubagentStart|SubagentStop)
+    case "$HC_TERMINAL_ID" in *[!A-Za-z0-9_-]*) exit 0 ;; esac
+    FILE="$HOME/.cache/herdr-status/$HC_TERMINAL_ID.json"
+    [ -f "$FILE" ] || exit 0
+    tmp=$(mktemp "$HOME/.cache/herdr-status/.sub.XXXXXX") || exit 0
+    jq --argjson ev "$input" '
+      ($ev.agent_id // "") as $id | ($ev.agent_type // "agent") as $ty
+      | .subagents = (((.subagents // []) | map(select(.id != $id)))
+          + (if $ev.hook_event_name == "SubagentStart" then [{id: $id, name: $ty, label: "", status: "running"}] else [] end))' \
+      "$FILE" > "$tmp" 2>/dev/null && mv -f "$tmp" "$FILE" || rm -f "$tmp"
+    exit 0 ;;
+esac
 slug=$(printf '%s' "$input" | jq -r '.model // empty' 2>/dev/null)
 rollout=$(printf '%s' "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 
@@ -64,5 +80,5 @@ if [ -z "$effort" ]; then
   [ -n "$effort" ] || effort="$default_effort"
 fi
 sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
-sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" codex "$name" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" "" "$sid" 2>/dev/null
+sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" codex "$name" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" "" "$sid" "[]" 2>/dev/null
 exit 0

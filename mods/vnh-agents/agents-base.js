@@ -115,7 +115,9 @@ export default class Agents extends View {
     const next = new Map(), now = Date.now() / 1000;
     for (const a of agents()) {
       const st = await statusOf(a.address);
-      if (st?.provider !== "agy" || !Array.isArray(st.subagents) || now - (st.updated ?? 0) > 120) continue;
+      // agy refreshes its list with every status line (an old file is a stale list); Codex's hooks only fire at a subagent's start
+      // and stop, so its list counts while the agent works.
+      if (!Array.isArray(st?.subagents) || !(st.provider === "agy" ? now - (st.updated ?? 0) <= 120 : st.provider === "codex" && a.status === "working")) continue;
       const live = st.subagents.filter((s) => /^(running|working|in[_ -]?progress|pending|started)$/i.test(s.status ?? ""));
       if (live.length) next.set(a.address, live);
     }

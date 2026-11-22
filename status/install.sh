@@ -54,15 +54,15 @@ fi
 CODEX="$HOME/.codex"
 if [ -d "$CODEX" ]; then
   [ -s "$CODEX/hooks.json" ] || echo '{"hooks": {}}' > "$CODEX/hooks.json"
-  n=$(jq '[.hooks.SessionStart, .hooks.UserPromptSubmit, .hooks.Stop | .[]? | .hooks[]? | select((.command // "") | contains("status/codex.sh"))] | length' "$CODEX/hooks.json" 2>/dev/null || echo 0)
-  if [ "${n:-0}" -ge 3 ]; then
+  n=$(jq '[.hooks.SessionStart, .hooks.UserPromptSubmit, .hooks.Stop, .hooks.SubagentStart, .hooks.SubagentStop | .[]? | .hooks[]? | select((.command // "") | contains("status/codex.sh"))] | length' "$CODEX/hooks.json" 2>/dev/null || echo 0)
+  if [ "${n:-0}" -ge 5 ]; then
     echo "codex: hooks already installed"
   else
-  echo "codex: $CODEX/hooks.json (SessionStart, UserPromptSubmit, Stop)"
+  echo "codex: $CODEX/hooks.json (SessionStart, UserPromptSubmit, Stop, SubagentStart, SubagentStop)"
   backup "$CODEX/hooks.json"
   edit "$CODEX/hooks.json" '
     .hooks //= {}
-    | reduce ("SessionStart", "UserPromptSubmit", "Stop") as $e (.;
+    | reduce ("SessionStart", "UserPromptSubmit", "Stop", "SubagentStart", "SubagentStop") as $e (.;
         .hooks[$e] = ((.hooks[$e] // []) as $g
           | if any($g[]?; any(.hooks[]?; (.command // "") | contains("status/codex.sh"))) then $g
             else $g + [{hooks: [{type: "command", command: ("sh \"" + $cmd + "\""), timeout: 10}]}] end))' \
