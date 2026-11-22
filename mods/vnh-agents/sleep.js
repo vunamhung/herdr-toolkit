@@ -163,14 +163,21 @@ export async function statusOf(terminal) {
   try { return JSON.parse((await readTextFile(`${home()}/.cache/herdr-status/${terminal}.json`)) ?? "null"); } catch { return null; }
 }
 
-const agentLeft = (address) => {
-  const t = terminals().find((x) => x.address === address);
-  return !t || t.state !== "live" || !t.program?.agent;
-};
+// Has the agent ended in this terminal (its foreground is the shell again, or the terminal is gone)? Asked of the core
+// directly, so it holds for a terminal that is parked behind a cover too.
+const SHELLS = /^-?(zsh|bash|fish|sh|dash|nu|elvish|xonsh)$/;
+async function agentLeft(address) {
+  const got = await hc(["get", address, "--json"]).catch(() => null);
+  try {
+    const j = JSON.parse(got?.stdout ?? "null");
+    if (!j || j.state !== "live") return true;
+    return SHELLS.test(j.foreground?.name ?? "");
+  } catch { return false; }
+}
 const sleep = (ms) => exec("sleep", [String(ms / 1000)]).catch(() => null);
 const paneOf = (terminal) => panes().find((p) => p.terminal === terminal)?.pane ?? null;
 const paneExists = (pane) => Boolean(pane) && panes().some((p) => p.pane === pane);
-async function until(fn, ms = 3000, step = 200) {
+async function until(fn, ms = 3000, step = 60) {
   for (let t = 0; t < ms; t += step) { const v = fn(); if (v) return v; await sleep(step); }
   return fn() || null;
 }
@@ -248,12 +255,16 @@ export async function sleepAgent(a, label, dry = false) {
   if (dry) return { ok: true, rec }; // a dry run: what it would do, nothing changed
   rec.screen = await screenOf(a.address);
   save([rec, ...sleepers().filter((r) => r.id !== id)]);
+  // The cover goes up at once; the agent exits behind it (the terminal is only hidden, `hc send` still reaches it).
+  const covered = await coverUp(rec).catch(() => false);
   await hc(["send", a.address, "/exit"]).catch(() => null);
-  for (let i = 0; i < 20; i++) {
-    if (agentLeft(a.address)) { await sleep(400); await coverUp(rec).catch(() => false); return { ok: true }; }
-    await sleep(500);
+  for (let i = 0; i < 40; i++) {
+    if (await agentLeft(a.address)) return { ok: true };
+    await sleep(250);
   }
-  forget(id);
+  // It didn't exit: the cover comes off, the terminal is as it was.
+  const fresh = sleepers().find((r) => r.id === id) ?? rec;
+  if (covered) await dismiss(fresh); else { forget(id); unpinSpace(fresh); }
   return { ok: false, why: "it didn't exit (it may be asking something)" };
 }
 
