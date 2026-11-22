@@ -18,6 +18,7 @@ import { gitMethods } from "./git/repository.js";
 import { sidebarMethods } from "./views/sidebar.js";
 import { diffMethods } from "./views/diff.js";
 import { paneHeaderMethods } from "./views/pane-header.js";
+import { pullsMethods } from "./views/pulls.js";
 
 const CONTEXT_POLL_MS = 300;
 const STATUS_POLL_MS = 10000;
@@ -55,7 +56,7 @@ class BetterChanges extends View {
     });
     followFileIcons(this, cx);
 
-    { const saved = localStorage.getItem("tab"); this.tab = saved === "commit" || saved === "stash" ? saved : "changes"; }
+    { const saved = localStorage.getItem("tab"); this.tab = saved === "commit" || saved === "stash" || saved === "pr" ? saved : "changes"; }
     // VNH: "columns" is a flat list with name, folder and changes in aligned columns.
     this.view = ["flat", "columns"].includes(localStorage.getItem("view")) ? localStorage.getItem("view") : "tree";
     // VNH: "fluid" (one list) or "split" (Unstaged above, Staged below, each scrolling).
@@ -84,6 +85,8 @@ class BetterChanges extends View {
     this.splitOffset = 0;
     this.diffToken = 0;
     this.resetCommits();
+    this.resetPulls();
+    this.prFilter = localStorage.getItem("vnh-pr-filter") ?? "all";
     if (this.mode === "sidebar") this.initCommitBox(cx);
 
     cx.timer.every(CONTEXT_POLL_MS, (cx) => this.follow(cx));
@@ -170,7 +173,7 @@ class BetterChanges extends View {
   command(command, cx) {
     if (command === "refresh") this.refreshAll(cx);
     if (command === "generate") this.generateMessage(cx); // VNH: ⌥S (keys.json), the ✨ button
-    if (command === "changes" || command === "commit") this.setTab(command, cx);
+    if (command === "changes" || command === "commit" || command === "pr") this.setTab(command, cx);
     if (command === "flat" || command === "tree" || command === "columns") this.setView(command, cx);
     if (command === "inline" || command === "split") this.setDiffLayout(command, cx);
     if (command.startsWith("undo:")) this.undoRollback(command.slice(5), cx); // the notice of a Rollback (vnh-changes-menu)
@@ -217,6 +220,11 @@ class BetterChanges extends View {
       cx.notify();
     }
     if (this.contextKey() !== this.context) this.refresh(cx);
+    if (this.mode === "sidebar") {
+      const seen = shared("better-changes.prs");
+      if (seen && seen !== this.prSeen) { this.prSeen = seen; this.prsAt = 0; if (this.tab === "pr") this.loadPulls(cx, true); }
+      else if (this.tab === "pr" && this.root) this.loadPulls(cx);
+    }
     if (this.mode === "diff") {
       this.syncSelection(cx);
       if (this.root && this.path && this.shownFull !== this.fullFile()) this.loadDiff(cx);
@@ -237,6 +245,6 @@ class BetterChanges extends View {
   }
 }
 
-Object.assign(BetterChanges.prototype, gitMethods, sidebarMethods, diffMethods, paneHeaderMethods);
+Object.assign(BetterChanges.prototype, gitMethods, sidebarMethods, diffMethods, paneHeaderMethods, pullsMethods);
 
 export default BetterChanges;

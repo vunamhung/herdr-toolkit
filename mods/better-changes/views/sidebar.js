@@ -80,6 +80,7 @@ export const sidebarMethods = {
     this.tab = tab;
     localStorage.setItem("tab", tab);
     if (tab === "commit") this.loadCommits(cx);
+    if (tab === "pr") this.loadPulls(cx);
     cx.notify();
   },
 
@@ -121,9 +122,11 @@ export const sidebarMethods = {
           ? this.selectedCommit
             ? this.renderCommit()
             : this.renderHistory()
-          : this.tab === "stash"
-            ? this.renderStashes()
-            : this.renderChanges(),
+          : this.tab === "pr"
+            ? this.renderPulls()
+            : this.tab === "stash"
+              ? this.renderStashes()
+              : this.renderChanges(),
       );
   },
 
@@ -156,6 +159,16 @@ export const sidebarMethods = {
               onClick: (cx) => this.setTab("commit", cx),
             }),
           )
+          // VNH: the pull requests of a GitHub repository.
+          .when(Boolean(this.repo) || this.tab === "pr", (el) => el.child(
+            HeaderTab({
+              id: "tab-pr",
+              label: "PRs",
+              count: this.prs?.length || null,
+              active: this.tab === "pr",
+              onClick: (cx) => this.setTab("pr", cx),
+            }),
+          ))
           // VNH: the stashes, once there are any.
           .when((this.stashes?.length ?? 0) > 0 || this.tab === "stash", (el) => el.child(
             HeaderTab({
@@ -192,6 +205,7 @@ export const sidebarMethods = {
   refreshAll(cx) {
     this.refresh(cx);
     if (this.tab === "commit") this.loadCommits(cx);
+    if (this.tab === "pr") this.loadPulls(cx, true);
     if (this.refreshSpinning) return;
     this.refreshSpinning = true;
     cx.notify();
@@ -200,7 +214,7 @@ export const sidebarMethods = {
 
   // Git usually answers at once, so the icon always makes a full turn to be seen.
   stopSpinningWhenRead(cx) {
-    if (this.loading || this.commitsLoading) {
+    if (this.loading || this.commitsLoading || this.prsLoading) {
       cx.timer.after(SPIN_MS, (cx) => this.stopSpinningWhenRead(cx));
       return;
     }

@@ -105,6 +105,7 @@ export const gitMethods = {
     this.note = null;
     this.watched = null;
     this.resetCommits();
+    this.resetPulls?.();
     if (this.input) {
       this.message = "";
       this.input.set_value("");

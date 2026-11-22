@@ -9,6 +9,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { theme, props, closeOverlay, exec, setShared, notify, window, home, focused, panes, agents, run } from "herdr";
 import { commitItems, commitAsk, startPrompt, promptView } from "./commit.js";
+import { prItems, prAsk, agentText } from "./pr.js";
 
 const ICON = (n) => `mods/vnh-changes-menu/${n}.svg`;
 const UNDO_DIR = () => `${home()}/.cache/vnh-changes-undo`;
@@ -29,7 +30,15 @@ function sendToAgent(cx, abs, done) {
   if (!address) { notify({ title: "No agent in this tab", body: "Start one, then send the path again", level: "warning", timeout: 3000 }); done(); return; }
   const cwd = (panes().find((p) => p.terminal === address)?.cwd ?? "").replace(/\/+$/, "");
   const path = cwd && abs.startsWith(cwd + "/") ? abs.slice(cwd.length + 1) : abs;
-  const text = `@${/\s/.test(path) ? `"${path}"` : path} `;
+  typeIntoAgent(cx, `@${/\s/.test(path) ? `"${path}"` : path} `, done, address);
+}
+
+// `text` typed into the agent of the shown tab (or `address`), through the clipboard, which is put back afterwards.
+function typeIntoAgent(cx, text, done, given) {
+  const f = focused(), fp = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
+  const inTab = agents().filter((a) => a.tab === f?.tab);
+  const address = given ?? ((fp?.status && fp.terminal) || (inTab.find((a) => a.focused) ?? inTab[0])?.address || agents().find((a) => a.focused)?.address);
+  if (!address) { notify({ title: "No agent in this tab", body: "Start one, then try again", level: "warning", timeout: 3000 }); done(); return; }
   const before = cx.read_from_clipboard();
   cx.write_to_clipboard(text);
   run("pane.focus", { terminal: address });
@@ -39,11 +48,15 @@ function sendToAgent(cx, abs, done) {
 
 export default class ChangesMenu extends View {
   init(_props, cx) {
-    this.ask = null; // "rollback" | "delete" once chosen: the question before it runs
+    this.ask = props()?.ask ?? null; // "rollback" | "delete" once chosen: the question before it runs
     this.busy = false;
+    // A pull request's quick action ("Fix with agent", "Review with agent") runs at once and closes.
+    const auto = props()?.kind === "pr" ? props()?.auto : null;
+    if (auto) { this.busy = true; cx.timer.after(40, (cx) => typeIntoAgent(cx, agentText(auto, props()), () => this.close())); }
   }
 
   a() { return props() ?? {}; }
+  typeIntoAgent(cx, text, done) { typeIntoAgent(cx, text, done); }
   close() { closeOverlay(props()?.overlay); }
 
   abs(path) { return `${String(this.a().root ?? "").replace(/\/+$/, "")}/${path}`; }
@@ -63,6 +76,7 @@ export default class ChangesMenu extends View {
   done(label, cx, then) {
     const { root, on } = this.a();
     setShared("better-changes.reload", { root, on: on ?? null, at: Date.now() });
+    setShared("better-changes.prs", Date.now()); // the PRs tab reads again
     if (then) then();
     this.close();
   }
@@ -213,8 +227,30 @@ export default class ChangesMenu extends View {
     return v_flex().id("cm").w_full().p(5).gap(1).bg(t.popover).children(commitItems(this, t, item, line));
   }
 
+  renderPrMenu(t) {
+    const item = (id, icon, label, enabled, action) => h_flex().id(`cm-${id}`).h(30).px(10).gap(10).items_center().rounded(7)
+      .text_size(13).text_color(enabled ? t.foreground : t.dim).opacity(enabled ? 1 : 0.5)
+      .when(enabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { if (!this.busy) action(cx); }))
+      .child(svg(ICON(icon)).size(14).flex_none().text_color(enabled ? t.muted : t.dim))
+      .child(div().flex_1().child(label));
+    const line = () => div().h(1).my(4).mx(4).bg(t.border);
+    const q = this.ask ? prAsk(this) : null;
+    if (this.busy && this.a().auto) return v_flex().id("cm-auto").w_full().p(12).bg(t.popover).text_size(13).text_color(t.muted).child("Sending to the agent…");
+    if (q) {
+      return v_flex().id("cm-ask").w_full().p(10).gap(10).bg(t.popover).text_size(13)
+        .child(div().text_color(t.foreground).whitespace_normal().child(q.title))
+        .child(div().text_size(11.5).text_color(t.dim).whitespace_normal().child(q.note))
+        .child(h_flex().gap(8).justify_end()
+          .child(div().id("cm-cancel").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().text_color(t.muted).hover((s) => s.bg(t.hover)).on_click(() => this.close()).child("Cancel"))
+          .child(div().id("cm-go").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().bg((q.danger ? t.blocked : t.accent) + "33").text_color(q.danger ? t.blocked : t.foreground)
+            .hover((s) => s.bg((q.danger ? t.blocked : t.accent) + "4d")).on_click((_e, cx) => { if (!this.busy) q.go(cx); }).child(this.busy ? "Working…" : "Do it")));
+    }
+    return v_flex().id("cm").w_full().p(5).gap(1).bg(t.popover).children(prItems(this, t, item, line));
+  }
+
   render() {
     const t = theme(), { kind, name, scope, paths = [], statuses, on } = this.a();
+    if (kind === "pr") return this.renderPrMenu(t);
     if (kind === "commit") return this.renderCommitMenu(t);
     if (kind === "stash") return this.renderStashMenu(t);
     const n = paths.length, one = n === 1, path = paths[0] ?? "";
