@@ -8,7 +8,7 @@
 // much smaller design: no cover panel, no tab of its own, nothing started while everything is awake.
 import { hc, exec, run, spaces, terminals, panes, shared, setShared, readTextFile, home, notify } from "herdr";
 
-export const AUTO_MS = 3 * 60 * 1000;
+export const AUTO_MS = 5 * 60 * 1000;
 const KEY = "vnh.asleep", AUTO = "vnh.sleep.auto";
 // How each agent resumes a conversation, with the flags it was started with kept (see launchArgv / flagsOf).
 const shq = (x) => `'${String(x).replace(/'/g, "'\\''")}'`;
