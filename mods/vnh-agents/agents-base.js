@@ -103,7 +103,7 @@ export default class Agents extends View {
   }
 
   // `vnh-agents.sleep:<terminal>`: puts that terminal's agent to sleep now (the same as the automatic one).
-  sleepNow(address, cx) {
+  sleepNow(address, cx, dry = false) {
     const a = agents().find((x) => x.address === address) ?? (() => {
       const p = panes().find((x) => x.terminal === address); const sp = spaces().find((x) => x.tabs?.some((tb) => tb.id === p?.tab));
       return p ? { address, pane: p.pane, tab: p.tab, space: sp?.id, space_name: sp?.name, title: p.title } : null; })();
@@ -111,7 +111,8 @@ export default class Agents extends View {
     this.sleeping.add(address);
     cx.spawn(async (cx) => {
       try {
-        const r = await sleepAgent(a, this.labelOf?.get(address));
+        const r = await sleepAgent(a, this.labelOf?.get(address), dry);
+        if (dry) return notify({ title: r.ok ? "Would sleep" : "Would not sleep", body: r.ok ? JSON.stringify({ agent: r.rec.agent, session: r.rec.session, flags: r.rec.flags }) : r.why, level: "info", timeout: 8000 });
         notify(r.ok ? { title: "Agent put to sleep", body: a.space_name ?? "", level: "info", timeout: 3000 } : { title: "Not put to sleep", body: r.why, level: "warning", timeout: 5000 });
       } finally { this.sleeping.delete(address); cx.notify(); }
     });

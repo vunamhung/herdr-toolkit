@@ -40,6 +40,7 @@ export default class ChatAgents extends Agents {
         else if (c.startsWith("forget:")) { const r = sleepers().find((x) => x.terminal === c.slice(7)); if (r) forget(r.id); }
         else if (c.startsWith("wake:")) { const r = sleepers().find((x) => x.terminal === c.slice(5)); if (r) wake(r); }
         else if (c.startsWith("sleep:")) this.sleepNow(c.slice(6), cx);
+        else if (c.startsWith("dry:")) this.sleepNow(c.slice(4), cx, true);
         else if (c.startsWith("menu:")) openOverlay({ mod: "chat-menu", kind: "popup", width: 240, props: { tab: "pane", target: { terminal: c.slice(5) } } });
       }
     });

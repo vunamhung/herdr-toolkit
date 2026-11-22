@@ -41,8 +41,13 @@ export function flagsOf(agent, argv) {
   }
   return out;
 }
-// The agent's own argv, exact (macOS: the kernel's process arguments; Linux: /proc), found under the terminal's shell.
-const ARGV = String.raw`import ctypes, ctypes.util, json, os, struct, subprocess, sys
+// The agent under a terminal's shell: its exact argv (macOS: the kernel's process arguments; Linux: /proc) and the
+// conversation it has open (Claude: ~/.claude/sessions/<pid>.json; Codex: its open rollout file; Antigravity: the
+// conversation its per-process log talks about most that exists on disk). The status files may not have the id yet.
+const ARGV = String.raw`import collections, ctypes, ctypes.util, json, os, re, struct, subprocess, sys
+
+HOME = os.path.expanduser("~")
+UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 def argv_of(pid):
     if sys.platform == "darwin":
@@ -55,14 +60,41 @@ def argv_of(pid):
         raw = buf.raw[:size.value]
         argc = struct.unpack("i", raw[:4])[0]
         rest = raw[4:]
-        i = rest.index(b"\0")                      # the executable path
+        i = rest.index(b"\0")
         while i < len(rest) and rest[i] == 0: i += 1
-        parts = rest[i:].split(b"\0")
-        return [p.decode("utf-8", "replace") for p in parts[:argc]]
+        return [p.decode("utf-8", "replace") for p in rest[i:].split(b"\0")[:argc]]
     try:
         return open(f"/proc/{pid}/cmdline", "rb").read().decode("utf-8", "replace").split("\0")[:-1]
     except Exception:
         return None
+
+def open_files(pid):
+    try:
+        out = subprocess.run(["lsof", "-p", str(pid), "-Fn"], capture_output=True, text=True, timeout=8).stdout
+    except Exception:
+        return []
+    return [l[1:] for l in out.splitlines() if l.startswith("n/")]
+
+def session_of(kind, pid):
+    """The conversation the process has open, from what the agent itself keeps, or None."""
+    try:
+        if kind == "claude":
+            return json.load(open(f"{HOME}/.claude/sessions/{pid}.json")).get("sessionId")
+        files = open_files(pid)
+        if kind == "codex":
+            for f in files:
+                m = re.search(r"rollout-.*?(" + UUID.pattern + r")\.jsonl$", f)
+                if m: return m.group(1)
+        if kind == "agy":
+            conv = f"{HOME}/.gemini/antigravity-cli/conversations"
+            for f in files:
+                if re.search(r"antigravity-cli/log/cli-.*\.log$", f):
+                    count = collections.Counter(UUID.findall(open(f, errors="replace").read()))
+                    for cid, _ in count.most_common(5):
+                        if os.path.exists(f"{conv}/{cid}.db"): return cid
+    except Exception:
+        return None
+    return None
 
 root = int(sys.argv[1])
 table = {}
@@ -77,20 +109,23 @@ while queue:
     seen.add(p)
     av = argv_of(p)
     if av:
-        base = os.path.basename(av[0])
-        if base in names: print(json.dumps(av)); sys.exit(0)
-        if base in ("node", "bun") and len(av) > 1 and os.path.basename(av[1]) in names:
-            print(json.dumps([os.path.basename(av[1])] + av[2:])); sys.exit(0)
+        base = os.path.basename(av[0]); kind = None
+        if base in names: kind = base
+        elif base in ("node", "bun") and len(av) > 1 and os.path.basename(av[1]) in names:
+            kind = os.path.basename(av[1]); av = [kind] + av[2:]
+        if kind:
+            print(json.dumps({"argv": av, "pid": p, "kind": kind, "session": session_of(kind, p)}))
+            sys.exit(0)
     queue += table.get(p, [])
 sys.exit(3)
 `;
-/** [binary, ...arguments] of the agent running under terminal `address`, or null if it can't be read. */
+/** { argv: [binary, ...arguments], session } of the agent running under terminal `address`, or null if it can't be read. */
 async function launchArgv(address) {
   const got = await hc(["get", address, "--json"]).catch(() => null);
   let pid = null; try { pid = JSON.parse(got?.stdout ?? "null")?.pid ?? null; } catch {}
   if (!pid) return null;
   const r = await exec("python3", ["-c", ARGV, String(pid)], { timeout: 10000 }).catch(() => null);
-  try { const av = JSON.parse((r?.stdout ?? "").trim()); return Array.isArray(av) && av.length ? av : null; } catch { return null; }
+  try { const j = JSON.parse((r?.stdout ?? "").trim()); return Array.isArray(j?.argv) && j.argv.length ? j : null; } catch { return null; }
 }
 const SESSION = /^[0-9A-Za-z][0-9A-Za-z-]{6,80}$/;
 const NAME = { claude: "Claude Code", agy: "Antigravity", codex: "Codex" };
@@ -114,18 +149,22 @@ const sleep = (ms) => exec("sleep", [String(ms / 1000)]).catch(() => null);
 
 /** Puts the agent of terminal `a.address` to sleep. -> { ok, why? }. Nothing is killed: the agent is asked to exit and,
  *  if it doesn't within 10 s, left running (the record is dropped again). */
-export async function sleepAgent(a, label) {
+export async function sleepAgent(a, label, dry = false) {
   const st = await statusOf(a.address);
-  if (!st?.provider || !RESUME[st.provider]) return { ok: false, why: "not an agent it can resume" };
-  if (!SESSION.test(st.session ?? "")) return { ok: false, why: "no session id yet (the agent hasn't reported one)" };
   // The flags it was started with come back at wake: if they can't be read, it isn't put to sleep.
-  const argv = await launchArgv(a.address);
-  if (!argv) return { ok: false, why: "can't read how it was started (its flags would be lost)" };
+  const probe = await launchArgv(a.address);
+  if (!probe) return { ok: false, why: "can't read how it was started (its flags would be lost)" };
+  const argv = probe.argv, provider = probe.kind ?? st?.provider;
+  if (!provider || !RESUME[provider]) return { ok: false, why: "not an agent it can resume" };
+  // The conversation the process has open, else what its status line last wrote.
+  const session = SESSION.test(probe.session ?? "") ? probe.session : st?.session;
+  if (!SESSION.test(session ?? "")) return { ok: false, why: "can't tell which conversation it has open" };
   const pane = panes().find((p) => p.terminal === a.address);
   const space = spaces().find((s) => s.id === a.space);
-  const id = `${st.provider}:${st.session}`;
-  const rec = { id, agent: st.provider, session: st.session, bin: argv[0], flags: flagsOf(st.provider, argv), terminal: a.address, pane: a.pane ?? pane?.pane ?? null, tab: a.tab ?? null,
-    space: a.space ?? null, spaceName: a.space_name ?? space?.name ?? "", cwd: pane?.cwd ?? null, title: label || st.title || a.title || "", at: Date.now() };
+  const id = `${provider}:${session}`;
+  const rec = { id, agent: provider, session, bin: argv[0], flags: flagsOf(provider, argv), terminal: a.address, pane: a.pane ?? pane?.pane ?? null, tab: a.tab ?? null,
+    space: a.space ?? null, spaceName: a.space_name ?? space?.name ?? "", cwd: pane?.cwd ?? null, title: label || st?.title || a.title || "", at: Date.now() };
+  if (dry) return { ok: true, rec }; // a dry run: what it would do, nothing changed
   save([rec, ...sleepers().filter((r) => r.id !== id)]);
   await hc(["send", a.address, "/exit"]).catch(() => null);
   for (let i = 0; i < 20; i++) { if (agentLeft(a.address)) return { ok: true }; await sleep(500); }
