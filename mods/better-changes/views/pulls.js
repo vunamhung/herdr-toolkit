@@ -39,6 +39,10 @@ export const pullsMethods = {
     this.prsAt = 0;
     this.prsError = null;
     this.prsLoading = false;
+    this.prsDone = null;
+    this.prsDoneAt = 0;
+    this.prsDoneError = null;
+    this.prsDoneLoading = false;
     this.selectedPr = null;
     this.prDetail = null;
     this.prToken = (this.prToken ?? 0) + 1;
@@ -88,6 +92,30 @@ export const pullsMethods = {
       } finally {
         this.prsAt = Date.now();
         this.prsLoading = false;
+        if (this.prFilter === "done") this.loadDone(cx, force); // restored from last time, or the refresh button
+        cx.notify();
+      }
+    });
+  },
+
+  // The merged / closed ones, read when the Completed chip is chosen (and again with the refresh button).
+  loadDone(cx, force = false) {
+    const forge = this.forge();
+    if (!this.root || !forge || this.prsDoneLoading) return;
+    if (!force && this.prsDone && Date.now() - this.prsDoneAt < FRESH_MS) return;
+    const { root, on, context } = this;
+    this.prsDoneLoading = true;
+    this.prsDoneError = null;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const list = await listPulls(forge, root, on, { done: true });
+        if (this.isCurrent(context)) this.prsDone = list ?? [];
+      } catch (e) {
+        if (this.isCurrent(context)) this.prsDoneError = e.message;
+      } finally {
+        this.prsDoneAt = Date.now();
+        this.prsDoneLoading = false;
         cx.notify();
       }
     });
@@ -124,6 +152,7 @@ export const pullsMethods = {
   setPrFilter(filter, cx) {
     this.prFilter = filter;
     localStorage.setItem("vnh-pr-filter", filter);
+    if (filter === "done") this.loadDone(cx);
     cx.notify();
   },
 
@@ -165,12 +194,12 @@ export const pullsMethods = {
     if (!this.prs) return wrap.child(list.child(Message(this.prsLoading ? "Loading pull requests…" : "No pull requests loaded")));
 
     const groups = this.prCounts();
-    const filter = ["mine", "review", "all"].includes(this.prFilter) ? this.prFilter : "all";
+    const filter = ["mine", "review", "all", "done"].includes(this.prFilter) ? this.prFilter : "all";
     const chip = (id, label) =>
-      TextButton({ id: `prf-${id}`, label: `${label} ${groups[id].length}`, active: filter === id, onClick: (cx) => this.setPrFilter(id, cx) });
+      TextButton({ id: `prf-${id}`, label: id === "done" ? label : `${label} ${groups[id].length}`, active: filter === id, onClick: (cx) => this.setPrFilter(id, cx) });
     wrap.child(
       h_flex().flex_none().px(8).py(5).gap(4).items_center().border_b(1).border_color(t.border)
-        .child(chip("mine", "Mine")).child(chip("review", "Review")).child(chip("all", "All"))
+        .child(chip("mine", "Mine")).child(chip("review", "Review")).child(chip("all", "All")).child(chip("done", "Completed"))
         .child(div().flex_1())
         .when(Boolean(this.prsError), (el) => el.child(div().text_size(TEXT.caption).text_color(t.ansi1).tooltip(this.prsError).child("offline"))),
     );
@@ -191,6 +220,14 @@ export const pullsMethods = {
         );
     }
 
+    if (filter === "done") {
+      list.child(GroupHeader({ id: "pr-done", label: "Merged and closed", count: this.prsDone?.length, divided: Boolean(here || this.branch) }));
+      if (this.prsDoneError) list.child(Message(this.prsDoneError, true));
+      else if (!this.prsDone) list.child(Message("Loading completed pull requests…"));
+      else if (!this.prsDone.length) list.child(Message("Nothing merged or closed yet"));
+      for (const pr of this.prsDone ?? []) list.child(this.prRow(pr));
+      return wrap.child(list);
+    }
     const shown = groups[filter].filter((p) => p.number !== here?.number);
     list.child(GroupHeader({ id: "pr-open", label: filter === "mine" ? "Opened by you" : filter === "review" ? "Waiting for your review" : "Open", count: shown.length, divided: Boolean(here || this.branch) }));
     if (!shown.length) list.child(Message(filter === "all" ? "No open pull requests" : filter === "mine" ? "None of yours is open" : "Nobody is waiting for you"));

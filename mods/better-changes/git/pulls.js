@@ -173,7 +173,19 @@ export function azureChecks(evals, f) {
 }
 
 /** The pull requests (open ones, or of one branch in any state) as gh's shape. */
-export async function listPulls(f, root, on, { branch } = {}) {
+export async function listPulls(f, root, on, { branch, done } = {}) {
+  // The finished ones: merged / completed first, then closed / abandoned, newest first.
+  if (done) {
+    const at = (p) => Date.parse(p.updatedAt) || 0;
+    if (f.kind === "github") {
+      const base = ["pr", "list", "-R", f.repo, "--json", LIST_FIELDS];
+      const [merged, closed] = await Promise.all([ghJson([...base, "--state", "merged", "--limit", "30"], root, on), ghJson([...base, "--state", "closed", "--limit", "15"], root, on)]);
+      return [...merged, ...closed].sort((a, b) => at(b) - at(a));
+    }
+    const base = ["repos", "pr", "list", ...inRepo(f), "--output", "json"];
+    const [completed, abandoned] = await Promise.all([azJson([...base, "--status", "completed", "--top", "30"], root, on), azJson([...base, "--status", "abandoned", "--top", "15"], root, on)]);
+    return [...(completed ?? []), ...(abandoned ?? [])].map((p) => fromAzure(p, f)).sort((a, b) => at(b) - at(a));
+  }
   if (f.kind === "github") {
     const base = ["pr", "list", "-R", f.repo, "--json", LIST_FIELDS];
     return ghJson(branch ? [...base, "--head", branch, "--state", "all", "--limit", "1"] : [...base, "--state", "open", "--limit", "40"], root, on);
