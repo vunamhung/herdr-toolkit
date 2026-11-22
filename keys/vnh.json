@@ -13,5 +13,8 @@
     "ctrl-shift-u": "mod.open:portal",
     "cmd-shift-k": "mod.open:walkthrough",
     "ctrl-i": "mod.open:vnh-sessions"
+  },
+  "terminal": {
+    "cmd-a": "vnh-agents.selectinput"
   }
 }

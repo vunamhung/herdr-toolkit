@@ -12,6 +12,7 @@
 
 import Agents from "./agents-base.js";
 import { sleepers, wake, dismiss } from "./sleep.js";
+import { selectInput } from "./selectinput.js";
 import { closeOverlay, nextCommand, openOverlay, props, run, terminals } from "herdr";
 
 let shown = null; // the chat dialog this list opened last
@@ -39,6 +40,8 @@ export default class ChatAgents extends Agents {
         if (c.startsWith("peek:")) this.peek(c.slice(5));
         else if (c.startsWith("forget:")) { const r = sleepers().find((x) => x.terminal === c.slice(7)); if (r) dismiss(r); }
         else if (c.startsWith("wake:")) { const r = sleepers().find((x) => x.terminal === c.slice(5)); if (r) wake(r); }
+        else if (c === "selectinput") selectInput();
+        else if (c.startsWith("selectinput:")) selectInput(c.slice(12));
         else if (c.startsWith("sleep:")) this.sleepNow(c.slice(6), cx);
         else if (c.startsWith("dry:")) this.sleepNow(c.slice(4), cx, true);
         else if (c.startsWith("menu:")) openOverlay({ mod: "chat-menu", kind: "popup", width: 240, props: { tab: "pane", target: { terminal: c.slice(5) } } });
