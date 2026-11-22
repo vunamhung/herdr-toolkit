@@ -70,6 +70,7 @@ export function tone(t, status) {
 export default class Spaces extends View {
   init(_props, cx) {
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
+    this.wasLinked = new Set(); this.goneSince = new Map(); this.reapAt = 0; // spaces seen as worktrees; since when a folder has been gone
     this.lastG = {}; // space -> what its place answered last (shown while its new place is being asked)
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -99,8 +100,29 @@ export default class Spaces extends View {
     cx.timer.every(250, (cx) => this.checkNew(cx));
   }
 
+  // VNH: a worktree space whose folder was deleted (an agent removed the worktree) is closed with its agents, once its folder has
+  // been gone for 15 s, no agent in it is working or waiting for you, and you are not in it. Only spaces seen as worktrees.
+  reap() {
+    const now = Date.now();
+    if (now - this.reapAt < 5000) return;
+    this.reapAt = now;
+    const sp = spaces(), ps = panes(), ags = agents();
+    for (const w of sp) {
+      if (!this.gone?.has(where(w, ps)) || !this.wasLinked.has(w.id) || w.active) { this.goneSince.delete(w.id); continue; }
+      const since = this.goneSince.get(w.id) ?? now;
+      this.goneSince.set(w.id, since);
+      if (now - since < 15000) continue;
+      if (ags.some((a) => a.space === w.id && a.status !== "idle" && a.status !== "done")) continue;
+      try { const z = shared("vnh.asleep") ?? []; if (z.some((r) => r.space === w.id)) setShared("vnh.asleep", z.filter((r) => r.space !== w.id)); } catch {}
+      this.goneSince.delete(w.id); this.wasLinked.delete(w.id);
+      run("space.close", { id: w.id, confirmed: true });
+      break; // one per pass
+    }
+  }
+
   checkNew(cx) {
     const now = Date.now();
+    this.reap();
     const sp = spaces();
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
     const due = this.due(now, sp, panes());
@@ -344,6 +366,7 @@ export default class Spaces extends View {
     const list = sp.map((w, i) => {
       const k = where(w, ps);
       if (k in this.git) this.lastG[w.id] = this.git[k] ?? null;
+      if (this.git[k]?.linked) this.wasLinked.add(w.id);
       return { w, i, g: k in this.git ? this.git[k] ?? null : this.lastG[w.id] ?? null, gone: Boolean(this.gone?.has(k)) };
     });
     const mains = new Set(list.filter((r) => r.g && !r.g.linked).map((r) => r.g.repo));
