@@ -5,7 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
-import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, dismiss, prune, isWoken, wokeAt, fresh } from "./sleep.js";
+import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, dismiss, prune, isWoken, wokeAt, fresh, repairSpaces } from "./sleep.js";
 
 // VNH: the spaces sidebar's colors for theme color names (same table as the shipped spaces mod).
 const VNH_MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -125,6 +125,7 @@ export default class Agents extends View {
   // An agent that has been idle for AUTO_MS goes to sleep: not one that needs you (done / blocked) or works, not
   // the terminal in front of you while the window is active, not a pinned one, not one with a sub-agent working.
   autoSleep(cx) {
+    try { repairSpaces(); } catch {}
     if (!autoOn() || this.sleeping.size > 0) return;
     const now = Date.now(), front = window()?.active ? focused()?.terminal : null;
     if (front) this.touched.set(front, now);

@@ -24,7 +24,11 @@ const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 // `ps`: panes(), read once by the caller (each read copies every pane).
 function place(s, ps) {
   const tabs = new Set((s.tabs ?? []).map((c) => c.id));
-  return ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder;
+  // VNH: a sleeping agent's terminal is parked behind a vnh-cover pane (vnh-agents/sleep.js), which has no folder of its
+  // own: it stands for the folder its agent had, so the space doesn't change repo (and stops nesting) while it sleeps.
+  const p = ps.find((x) => tabs.has(x.tab) && (x.cwd || x.mod === "vnh-cover"));
+  if (p?.mod === "vnh-cover") return (shared("vnh.asleep") ?? []).find((r) => r.cover === p.pane)?.cwd || s.folder;
+  return p?.cwd || s.folder;
 }
 const rowHeight = ({ tree }) => (tree ? 28 : 30);
 const RAIL_CELL = 32;

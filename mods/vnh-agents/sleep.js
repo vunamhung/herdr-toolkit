@@ -208,10 +208,27 @@ function pinSpace(spaceId) {
 }
 function unpinSpace(rec) {
   if (!rec.pin) return;
-  const others = sleepers().filter((r) => r.id !== rec.id && r.space === rec.space && r.pin);
+  // Another sleeper still in this space (its terminal is parked too) takes the pin over: the name holds until the last one wakes.
+  const others = sleepers().filter((r) => r.id !== rec.id && r.space === rec.space);
+  if (others.length > 0) { patch(others[0].id, { pin: rec.pin }); return; }
   const sp = spaces().find((x) => x.id === rec.space);
-  if (others.length === 0 && sp && sp.name === rec.pin) run("space.rename", { id: sp.id, name: "" });
+  if (sp && sp.name === rec.pin) run("space.rename", { id: sp.id, name: "" });
 }
+/** A space whose terminals are all parked (every agent in it asleep) is called after its folder by Herdr; it must keep the name it
+ *  had. Run now and then: renames such a space back to the name its sleeper recorded, and keeps the pin on one sleeper of it. */
+export function repairSpaces() {
+  const ps = panes();
+  for (const sp of spaces()) {
+    const tabs = new Set((sp.tabs ?? []).map((t) => t.id));
+    const mine = sleepers().filter((r) => r.space === sp.id && r.cover);
+    if (!mine.length || ps.some((p) => tabs.has(p.tab) && p.terminal)) continue; // a live terminal names it again, as it should
+    const want = mine.find((r) => r.pin)?.pin ?? mine[0].spaceName;
+    if (!want) continue;
+    if (sp.name !== want) run("space.rename", { id: sp.id, name: want });
+    if (!mine.some((r) => r.pin)) patch(mine[0].id, { pin: want });
+  }
+}
+
 /** Puts the cover where the terminal's pane is and parks the terminal. false: left as it was (the terminal stays at its shell). */
 async function coverUp(rec) {
   const P = paneOf(rec.terminal);
