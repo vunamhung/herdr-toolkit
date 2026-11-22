@@ -345,13 +345,16 @@ export default class Tabs extends View {
     const stop = (_e, cx) => cx.stop_propagation();
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
+    // One snapshot per render (every panes() call copies the whole list into JS), and the sleepers only when a cover exists.
+    const allPanes = panes();
+    const covers = new Map(allPanes.filter(p => p.mod === "vnh-cover").map(p => [p.tab, p.pane]));
+    const sleepers = covers.size ? (shared("vnh.asleep") ?? []) : [];
     const item = (c, i) => {
-      const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id);
+      const lead = allPanes.find(p => p.tab === c.id && p.program?.agent) ?? allPanes.find(p => p.tab === c.id);
       const program = lead?.program;
       // VNH: a tab whose agent sleeps (a vnh-cover pane in it, see vnh-agents/sleep.js) keeps the title it had; its
       // icon is a moon and all its text is gray.
-      const nap = panes().some(p => p.tab === c.id && p.mod === "vnh-cover")
-        ? (shared("vnh.asleep") ?? []).find(r => r.tab === c.id || panes().some(p => p.tab === c.id && p.pane === r.cover)) ?? null : null;
+      const nap = covers.has(c.id) ? sleepers.find(r => r.cover === covers.get(c.id) || r.tab === c.id) ?? null : null;
       const name = nap?.title ? nap.title : label(c, lead);
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         // A rename or status dot on this or an earlier tab can push the active one out.
