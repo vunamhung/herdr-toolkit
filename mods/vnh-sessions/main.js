@@ -159,12 +159,33 @@ export default class Sessions extends View {
   // Every conversation of every agent, newest first.
   all() { return this.order.concat(this.others).sort((a, b) => b.m - a.m); }
 
-  // The space whose folder holds the conversation's (the longest folder wins, so a worktree space beats its repo).
+  // The space a conversation belongs to. A space's own folder says little (it is where the space was made: one is the home folder,
+  // others the folder of another project), so: the space named like a folder on the conversation's path (the deepest one: a
+  // worktree's name beats its repo's), else the space whose live terminals run in a folder that holds it.
   spaceOf(s) {
-    const cwd = s.cwd ?? ""; let best = null;
-    for (const sp of spaces()) {
-      const f = (sp.folder ?? "").replace(/\/$/, "");
-      if (f && (cwd === f || cwd.startsWith(f + "/")) && (!best || f.length > best.folder.length)) best = { id: sp.id, name: sp.name, folder: f };
+    // spaces() and panes() are read once per render (each read copies the whole list), and each conversation answered once.
+    const snap = (this.snap ??= { sp: spaces(), ps: panes(), memo: new Map() });
+    if (snap.memo.has(s.id)) return snap.memo.get(s.id);
+    const r = this.spaceOfIn(s, snap);
+    snap.memo.set(s.id, r);
+    return r;
+  }
+
+  spaceOfIn(s, snap) {
+    const cwd = (s.cwd ?? "").replace(/\/+$/, "");
+    if (!cwd) return null;
+    const all = snap.sp, seg = cwd.split("/").filter(Boolean);
+    for (let i = seg.length - 1; i >= 0; i--) {
+      const sp = all.find((x) => x.name && x.name.toLowerCase() === seg[i].toLowerCase());
+      if (sp) return { id: sp.id, name: sp.name, folder: cwd };
+    }
+    const h = home();
+    let best = null;
+    for (const p of snap.ps) {
+      const f = (p.cwd ?? "").replace(/\/+$/, "");
+      if (!f || f === h || !(cwd === f || cwd.startsWith(f + "/")) || (best && f.length <= best.folder.length)) continue;
+      const sp = all.find((x) => (x.tabs ?? []).some((t) => t.id === p.tab));
+      if (sp) best = { id: sp.id, name: sp.name, folder: f };
     }
     return best;
   }
@@ -174,12 +195,12 @@ export default class Sessions extends View {
   // match a conversation's is that conversation. -> Map("title\0cwd" -> { pane, space, tab label })
   openPanes() {
     const names = new Map();
-    for (const sp of spaces()) for (const tb of sp.tabs ?? []) names.set(tb.id, { space: sp.name, tab: tb.name, spaceId: sp.id });
+    for (const sp of spaces()) for (const tb of sp.tabs ?? []) names.set(tb.id, { space: sp.name, tab: tb.name, named: Boolean(tb.named), spaceId: sp.id });
     const out = new Map();
     for (const p of panes()) {
       if (p.app !== "claude-code" || !p.title) continue;
       const title = p.title.replace(/^[^\p{L}\p{N}]+/u, "").trim(), where = names.get(p.tab);
-      out.set(`${title}\0${p.cwd ?? ""}`, { pane: p.pane, label: where ? `${where.space} · ${where.tab}` : "open", spaceId: where?.spaceId });
+      out.set(`${title}\0${p.cwd ?? ""}`, { pane: p.pane, label: where ? `${where.space} · ${where.tab}` : "open", spaceId: where?.spaceId, tab: where?.tab, named: Boolean(where?.named) });
     }
     return out;
   }
@@ -241,6 +262,7 @@ export default class Sessions extends View {
   }
 
   render() {
+    this.snap = null; // a fresh look at the spaces and panes for this render
     const t = theme(), rows = this.rows(), h = home(), open = this.openPanes();
     if (this.at >= rows.length) this.at = Math.max(0, rows.length - 1);
     const tilde = (p) => (p && h && p.startsWith(h) ? "~" + p.slice(h.length) : p ?? "");
@@ -288,7 +310,8 @@ export default class Sessions extends View {
         .when(!rows.length, (el) => el.child(div().p(12).text_size(12).text_color(t.dim).child(this.busy ? "Reading conversations…" : "No conversation matches")))
         .children(rows.map((s, i) => {
           const on = i === this.at;
-          const title = s.title || s.prompt || "(no prompt)", live = this.liveOf(s, open);
+          // A conversation open in a tab you renamed shows that name (the title Claude kept is the old one).
+          const live = this.liveOf(s, open), title = (live?.named && live.tab) || s.title || s.prompt || "(no prompt)";
           const own = (s.agent ?? "claude") === "claude", asking = own && this.confirm === s.f, shown = own && (asking || this.hover === s.f);
           // Bare icons, no box: they brighten under the pointer.
           const small = (id, icon, color, tip, action) => div().id(id).size(20).flex_none().flex().items_center().justify_center()
