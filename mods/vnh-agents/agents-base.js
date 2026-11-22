@@ -5,7 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
-import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, prune } from "./sleep.js";
+import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, prune, isWoken } from "./sleep.js";
 
 // VNH: the spaces sidebar's colors for theme color names (same table as the shipped spaces mod).
 const VNH_MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -291,6 +291,8 @@ export default class Agents extends View {
     const collapsed = narrow();
     const sort = sortOf();
     let list = agents();
+    // VNH: a woken agent is idle from the start, not done first (sleep.js isWoken).
+    list = list.map((a) => (a.status === "done" && isWoken(a, this.changed[a.address]?.at) ? { ...a, status: "idle" } : a));
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     const real = terminals();
     this.migratePins(real);

@@ -130,6 +130,22 @@ async function launchArgv(address) {
 const SESSION = /^[0-9A-Za-z][0-9A-Za-z-]{6,80}$/;
 const NAME = { claude: "Claude Code", agy: "Antigravity", codex: "Codex" };
 
+// Agents just woken (module state, this mod's own): a resumed agent reports "done" for a moment before "idle"; the
+// list shows it as idle straight away (see isWoken). Cleared at the first status that isn't done, or after 2 min.
+export const woke = [];
+export function isWoken(a, changedAt) {
+  const now = Date.now();
+  for (let i = woke.length - 1; i >= 0; i--) {
+    const w = woke[i];
+    if (now - w.at > 120000) { woke.splice(i, 1); continue; }
+    const mine = w.terminal ? w.terminal === a.address : w.space === a.space && (changedAt ?? 0) >= w.at - 2000;
+    if (!mine) continue;
+    if (a.status !== "done") { woke.splice(i, 1); return false; }
+    return true;
+  }
+  return false;
+}
+
 export const autoOn = () => shared(AUTO) !== false;
 export const setAuto = (on) => setShared(AUTO, Boolean(on));
 export const sleepers = () => shared(KEY) ?? [];
@@ -177,6 +193,7 @@ export async function wake(rec) {
   const t = terminals().find((x) => x.address === rec.terminal);
   const command = RESUME[rec.agent](rec.bin || rec.agent, rec.session, rec.flags ?? []).map((x, i) => (i === 0 ? x : shq(x))).join(" ");
   forget(rec.id);
+  woke.push({ terminal: t && t.state === "live" && !t.program?.agent && t.program?.shell && rec.pane ? rec.terminal : null, space: rec.space, at: Date.now() });
   if (t && t.state === "live" && !t.program?.agent && t.program?.shell && rec.pane) {
     await hc(["send", rec.terminal, command]).catch(() => null);
     run("pane.focus", { pane: rec.pane });
