@@ -738,9 +738,12 @@ export default class FileTree extends View {
     });
   }
 
-  // VNH: every root, the space's own and the folders added to it: the open folders go, each root keeps its first level.
+  // VNH: everything closes: the open folders of every root (the space's own and the folders added to it) and, when there are
+  // several roots, their headers too, so only the headers are left; a click on a header opens it again.
   collapseAll(cx) {
-    for (const R of [this, ...this.subList()]) { R.folders = new Set(); for (const k of [...R.entries.keys()]) if (k) R.entries.delete(k); }
+    const roots = [this, ...this.subList()];
+    for (const R of roots) { R.folders = new Set(); for (const k of [...R.entries.keys()]) if (k) R.entries.delete(k); }
+    if (roots.length > 1) this.closedRoots = new Set(roots.map((R) => R.root));
     cx.notify();
   }
 
