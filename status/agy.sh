@@ -1,51 +1,75 @@
 #!/bin/sh
-# Antigravity CLI (agy) status line command (installed as status/agy.sh): publishes model, effort, context and quota for the Herdr
-# status bar and prints nothing (agy's own status line stays, see stack_with_default in install.sh).
-#
-# agy runs this command with a JSON payload on stdin. What is used:
-#   model.display_name   "Gemini 3.8 Flash (High)"      (already carries the effort for Gemini models)
-#   model.effort         "high"
-#   context_window.used_percentage
-#   quota["gemini-5h" | "gemini-weekly" | "3p-5h" | "3p-weekly"]  { remaining_fraction, reset_time }
-# Gemini models draw on the gemini-* buckets, the third-party ones (Claude, GPT-OSS) on 3p-*.
-# Plain sh on purpose: agy runs the command through `sh`, which has no process substitution.
-# Fields are joined with | (a tab would swallow empty fields: it is IFS whitespace).
-# The payload also holds the account's e-mail and plan: none of it is read or stored.
-input=$(cat)
-# jq: the copy the toolkit installs beside these scripts (status/bin), else the one on PATH. A status script
-# must never fail an agent for want of jq, so without any it quietly does nothing.
+# Antigravity CLI (agy) status line command (optimized single-jq execution):
+# Publishes model, effort, context, quota, title, and subagents directly to
+# ~/.cache/herdr-status/<HC_TERMINAL_ID>.json in a single jq invocation so
+# agy's statusline runner never hits its process timeout under heavy load.
+[ -n "${HC_TERMINAL_ID:-}" ] || exit 0
+case "$HC_TERMINAL_ID" in *[!A-Za-z0-9_-]*) exit 0 ;; esac
+
 JQ="${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/bin/jq"
 [ -x "$JQ" ] || JQ="$JQ.exe"
 [ -x "$JQ" ] || JQ=$(command -v jq 2>/dev/null) || exit 0
-jq() { "$JQ" "$@"; }
-line=$(printf '%s' "$input" | jq -r '
-  def n: if . == null then "" else tostring end;
-  def used: if . == null then "" else ((1 - .) * 100 | round | tostring) end;
-  def epoch: if . == null then "" else (sub("\\.[0-9]+";"") | sub("Z$";"") | strptime("%Y-%m-%dT%H:%M:%S") | mktime | tostring) end;
-  (.model.display_name // .model.id // "") as $name
-  | (if ($name | ascii_downcase | startswith("gemini")) then "gemini" else "3p" end) as $g
-  | (.quota[$g + "-5h"]) as $q5 | (.quota[$g + "-weekly"]) as $q7
-  | [ $name,
-      (.model.effort | n),
-      (.context_window.used_percentage | if . == null then "" else round | tostring end),
-      ($q5.remaining_fraction | used), ($q5.reset_time | epoch),
-      ($q7.remaining_fraction | used), ($q7.reset_time | epoch)
-    ] | join("|")' 2>/dev/null)
-IFS='|' read -r model effort ctx five five_reset seven seven_reset <<EOF
-$line
-EOF
-# Its subagents (the payload lists each with a name, a role (its prompt) and a status): a short label for each, from the first
-# bold phrase of the role, else its first line, so the Agents list can show them under the session. The prompts themselves aren't kept.
-subs=$(printf '%s' "$input" | jq -c '[(.subagents // [])[] | {name: (.name // "agent"), status: (.status // ""), label: ((.role // "") as $r
-  | ([$r | match("\\*\\*([^*\\n]{3,200})\\*\\*"; "g") | .captures[0].string] | first) // ($r | split("\n") | map(select(length > 0)) | first // "")
-  | sub("^You are (an? )?"; "") | sub(" \\(.*$"; "") | .[0:70])}]' 2>/dev/null)
-[ -n "$subs" ] || subs=null
-# agy sets no terminal title (Herdr would show its command line), so the conversation's first prompt, from agy's
-# own history file, goes with the other fields as the title the tab and the agents list show.
-title=""
-cid=$(printf '%s' "$input" | jq -r '.conversation_id // empty' 2>/dev/null)
-if [ -n "$cid" ]; then
-  title=$(grep -m 1 -F "\"conversationId\":\"$cid\"" "$HOME/.gemini/antigravity-cli/history.jsonl" 2>/dev/null | jq -r '.display // empty' 2>/dev/null | head -n 1 | cut -c1-80)
+
+DIR="$HOME/.cache/herdr-status"
+[ -d "$DIR" ] || mkdir -p "$DIR" 2>/dev/null || exit 0
+FILE="$DIR/$HC_TERMINAL_ID.json"
+HIST="$HOME/.gemini/antigravity-cli/history.jsonl"
+
+prev='{}'
+[ -r "$FILE" ] && { prev=$(cat "$FILE" 2>/dev/null); [ -n "$prev" ] || prev='{}'; }
+
+tmp="$DIR/.agy.$$.tmp"
+if [ -r "$HIST" ]; then
+  set -- --rawfile hist "$HIST"
+else
+  set -- --arg hist ""
 fi
-sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" agy "$model" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" "$title" "$cid" "$subs" 2>/dev/null
+
+"$JQ" -c --argjson prev "$prev" "$@" '
+  def used: if . == null then null else ((1 - .) * 100 | round) end;
+  def epoch: if . == null then null else (try (sub("\\.[0-9]+";"") | sub("Z$";"") | strptime("%Y-%m-%dT%H:%M:%S") | mktime) catch null) end;
+  def keep($k; $new): if $new != null then $new elif $prev.provider == "agy" then $prev[$k] else null end;
+  (.model.display_name // .model.id // "") as $raw_model
+  | (if $raw_model == "" then null else $raw_model end) as $model
+  | (.model.effort // "") as $raw_effort
+  | (if $raw_effort == "" then null else ($raw_effort | tostring) end) as $effort
+  | (if ($raw_model | ascii_downcase | startswith("gemini")) then "gemini" else "3p" end) as $g
+  | (.quota[$g + "-5h"]) as $q5
+  | (.quota[$g + "-weekly"]) as $q7
+  | (.conversation_id // "") as $cid
+  | (if $cid != "" then $cid elif $prev.provider == "agy" then $prev.session else null end) as $session
+  | (
+      if ($prev.provider == "agy" and $prev.session == $cid and ($prev.title // "") != "") then $prev.title
+      elif ($cid != "" and $hist != "") then
+        ($hist | split("\n")
+          | map(select(contains("\"conversationId\":\"" + $cid + "\"")))
+          | first // ""
+          | (try fromjson catch {}) | .display // "" | .[0:80]
+          | if . == "" then null else . end)
+      elif $prev.provider == "agy" then $prev.title
+      else null end
+    ) as $title
+  | [(.subagents // [])[] | {
+      name: (.name // "agent"),
+      status: (.status // ""),
+      label: ((.role // "") as $r
+        | ([$r | match("\\*\\*([^*\\n]{3,200})\\*\\*"; "g") | .captures[0].string] | first)
+          // ($r | split("\n") | map(select(length > 0)) | first // "")
+        | sub("^You are (an? )?"; "") | sub(" \\(.*$"; "") | .[0:70])
+    }] as $subs
+  | {
+      provider: "agy",
+      model: $model,
+      effort: $effort,
+      title: $title,
+      subagents: $subs,
+      session: $session,
+      ctx: (.context_window.used_percentage | if . == null then null else round end),
+      five: keep("five"; ($q5.remaining_fraction | used)),
+      five_reset: keep("five_reset"; ($q5.reset_time | epoch)),
+      seven: keep("seven"; ($q7.remaining_fraction | used)),
+      seven_reset: keep("seven_reset"; ($q7.reset_time | epoch)),
+      updated: (now | floor)
+    }
+' > "$tmp" 2>/dev/null && [ -s "$tmp" ] && mv -f "$tmp" "$FILE" || rm -f "$tmp"
 exit 0
