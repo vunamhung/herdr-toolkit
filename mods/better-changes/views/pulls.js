@@ -27,7 +27,7 @@ function plainBody(text) {
     .replace(/\r/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return s.length > 700 ? `${s.slice(0, 700).trimEnd()}…` : s;
+  return s.length > 20000 ? `${s.slice(0, 20000).trimEnd()}…` : s;
 }
 
 export const pullsMethods = {
@@ -308,7 +308,12 @@ export const pullsMethods = {
       about.child(h_flex().gap(4).flex_wrap().children(pr.labels.slice(0, 8).map((l) =>
         div().px(6).rounded(8).bg(t.hover).text_size(TEXT.badge).text_color(t.muted).child(l.name))));
     const body = plainBody(pr.body);
-    if (body) about.child(div().pt(2).text_size(TEXT.small).text_color(t.muted).whitespace_normal().child(body));
+    // A long description scrolls in a box of its own, so the checks and files stay in view.
+    if (body)
+      about.child(
+        v_flex().id("pr-body").flex_none().max_h(170).overflow_y_scrollbar().mt(2).pr(4)
+          .child(div().text_size(TEXT.small).text_color(t.muted).whitespace_normal().child(body)),
+      );
     if (pr.additions || pr.deletions)
       about.child(h_flex().gap(8).items_center().text_size(TEXT.caption).text_color(t.dim)
         .child(DiffStat({ add: pr.additions, del: pr.deletions })).child(`${pr.changedFiles ?? (pr.files ?? []).length} files`));
