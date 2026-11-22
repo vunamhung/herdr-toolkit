@@ -61,6 +61,8 @@ function cleanMessage(raw) {
   return text;
 }
 
+// VNH: how many files a group draws at first, and how many more each click on "Show more" adds.
+const ROW_CAP = 150, ROW_MORE = 300;
 const VIEWS = [
   { id: "flat", label: "Flat", icon: "flat" },
   { id: "columns", label: "Columns", icon: "columns" }, // VNH
@@ -522,7 +524,21 @@ export const sidebarMethods = {
     );
     if (collapsed) return;
     if (this.view === "columns") list.child(this.columnsHeader());
-    this.addRows(list, scope, files);
+    // VNH: a group draws its first ROW_CAP files; the rest come on a click. A repo with hundreds of changed files made one
+    // render so long that Herdr interrupted it ("This view could not be re-rendered … interrupted") and the panel stayed on
+    // its last good frame.
+    this.rowCap ??= {};
+    const cap = this.rowCap[scope] ?? ROW_CAP;
+    this.addRows(list, scope, files.length > cap ? files.slice(0, cap) : files);
+    if (files.length > cap) {
+      const t = theme(), more = files.length - cap;
+      list.child(
+        h_flex().id(`more-${scope}`).h(28).flex_none().px(8).items_center().rounded(6).cursor_pointer()
+          .text_size(12).text_color(t.muted).hover((x) => x.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => { this.rowCap[scope] = cap + ROW_MORE; cx.notify(); })
+          .child(`Show ${Math.min(ROW_MORE, more)} more · ${more.toLocaleString()} not shown`),
+      );
+    }
   },
 
   // A group's files, flat or nested as chosen in the options menu.
