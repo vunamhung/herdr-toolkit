@@ -5,7 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
-import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, dismiss, prune, isWoken, wokeAt } from "./sleep.js";
+import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, dismiss, prune, isWoken, wokeAt, fresh } from "./sleep.js";
 
 // VNH: the spaces sidebar's colors for theme color names (same table as the shipped spaces mod).
 const VNH_MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -286,6 +286,8 @@ export default class Agents extends View {
     if (a.status === "working") return div().size(7).mx(3).flex_none().rounded(4).bg(t.working).loop("opacity", { from: 0.3, to: 1, period: 1800 });
     if (a.status === "blocked" && compact) return div().size(14).flex_none().rounded(4).bg(t.blocked + "26").text_size(10.5).font_bold().text_color(t.blocked).flex().items_center().justify_center().child("!");
     if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
+    // Woken and not looked at yet: a ring with a dot in it (the accent), between idle's empty ring and done's solid dot.
+    if (a.fresh && a.status === "idle") return div().size(9).mx(2).flex_none().rounded(5).border(1.5).border_color(t.accent).flex().items_center().justify_center().child(div().size(3).rounded(2).bg(t.accent));
     // Idle: a ring; done: a dot.
     if (a.status === "idle") return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
     return div().size(7).mx(3).flex_none().rounded(4).bg(a.status === "done" ? color : t.dim + "00");
@@ -299,6 +301,9 @@ export default class Agents extends View {
     let list = agents();
     // VNH: a woken agent is idle from the start, not done first (sleep.js isWoken).
     list = list.map((a) => (a.status === "done" && isWoken(a, this.changed[a.address]?.at) ? { ...a, status: "idle" } : a));
+    // VNH: a woken agent you haven't looked at yet: its own mark, first among the idle ones; looking at it (focusing it) drops that.
+    const viewing = window()?.active;
+    list = list.map((a) => { if (a.focused && viewing) fresh.delete(a.address); return fresh.has(a.address) && a.status === "idle" ? { ...a, fresh: true } : a; });
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     const real = terminals();
     this.migratePins(real);
@@ -316,7 +321,7 @@ export default class Agents extends View {
     const byPriority = sort.id === "priority";
     const urgency = new Map(list.map((a) => [a.address, Math.max(this.rank(a), ...this.tree(all, a.address).map((s) => RANK[kidStatus(s.t, this.listed)] ?? 0))]));
     const rankOf = (a) => urgency.get(a.address);
-    if (byPriority) list = [...list].sort((x, y) => rankOf(y) - rankOf(x) || this.since(y) - this.since(x) || y.seq - x.seq);
+    if (byPriority) list = [...list].sort((x, y) => rankOf(y) - rankOf(x) || (y.fresh ? 1 : 0) - (x.fresh ? 1 : 0) || this.since(y) - this.since(x) || y.seq - x.seq);
     const pinned = list.filter((a) => a.pinned);
     const rest = list.filter((a) => !a.pinned);
     list = [...pinned, ...rest];

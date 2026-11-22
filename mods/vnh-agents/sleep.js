@@ -136,6 +136,8 @@ const NAME = { claude: "Claude Code", agy: "Antigravity", codex: "Codex" };
 // Agents just woken (module state, this mod's own): a resumed agent reports "done" for a moment before "idle"; the
 // list shows it as idle straight away (see isWoken). Cleared at the first status that isn't done, or after 2 min.
 export const woke = [];
+/** Terminals whose agent was woken and that you haven't looked at since: the list puts them first among the idle ones, with their own status mark. */
+export const fresh = new Set();
 /** terminal -> when it was last woken (an agent's "idle since" must not predate its wake). */
 export const wokeAt = new Map();
 export function isWoken(a, changedAt) {
@@ -294,7 +296,7 @@ export async function wake(rec) {
     const np = await uncover(rec);
     if (np) {
       forget(rec.id); unpinSpace(rec);
-      if (inCover) run("pane.focus", { pane: np });
+      if (inCover) run("pane.focus", { pane: np }); else fresh.add(rec.terminal);
       return;
     }
     // The cover or the terminal is gone: nothing to put back; a terminal still parked is let go, and a tab opens.
