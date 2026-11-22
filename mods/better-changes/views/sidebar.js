@@ -528,6 +528,7 @@ export const sidebarMethods = {
     // render so long that Herdr interrupted it ("This view could not be re-rendered … interrupted") and the panel stayed on
     // its last good frame.
     this.rowCap ??= {};
+    (this.groupFiles ??= {})[scope] = files;
     const cap = this.rowCap[scope] ?? ROW_CAP;
     this.addRows(list, scope, files.length > cap ? files.slice(0, cap) : files);
     if (files.length > cap) {
@@ -589,7 +590,28 @@ export const sidebarMethods = {
       .when(Boolean(this.fileIcons), (el) =>
         el.child(FileIcon({ icons: this.fileIcons, path: `${this.root}/${row.path}`, dir: true, open: !closed, t })),
       )
-      .child(div().flex_1().min_w(0).truncate().child(row.name));
+      .child(div().flex_1().min_w(0).truncate().child(row.name))
+      .on_mouse_down("right", (_e, cx) => {
+        cx.stop_propagation();
+        const under = (this.groupFiles?.[scope] ?? []).filter((f) => f.path.startsWith(`${row.path}/`));
+        this.openMenu(scope, "folder", row.name, row.path, under);
+      });
+  },
+
+  // The status letter of a file as the group `scope` lists it.
+  statusIn(file, scope) {
+    return scope === "staged" ? file.stagedStatus : scope === "unstaged" ? file.unstagedStatus : file.status;
+  },
+
+  // VNH: the right-click menu (vnh-changes-menu) of one file or of a folder (every file the group lists under it).
+  openMenu(scope, kind, name, dir, files) {
+    const statuses = {};
+    for (const f of files) statuses[f.path] = this.statusIn(f, scope);
+    const n = files.length, working = scope !== "committed";
+    openOverlay({
+      mod: "vnh-changes-menu", kind: "popup", width: 250, height: working ? 330 : 170,
+      props: { root: this.root, on: this.on ?? null, kind, name, dir, scope, paths: files.map((f) => f.path), statuses },
+    });
   },
 
   fileRow(file, scope, depth) {
@@ -614,10 +636,7 @@ export const sidebarMethods = {
     }).child(FileIcon({ icons: this.fileIcons, path: `${this.root}/${file.path}`, color: t.muted, t }));
     const columns = this.view === "columns";
     // VNH: a right-click opens the file's menu (vnh-changes-menu: Rollback…, Delete…, Stage, Unstage).
-    row.on_mouse_down("right", (_e, cx) => {
-      cx.stop_propagation();
-      openOverlay({ mod: "vnh-changes-menu", kind: "popup", width: 240, height: 160, props: { root: this.root, on: this.on ?? null, path: file.path, scope, status } });
-    });
+    row.on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); this.openMenu(scope, "file", name, null, [file]); });
     // VNH: start a drag (see dropZone); a plain click still opens the diff.
     if (this.staging === "split" && (scope === "staged" || scope === "unstaged")) row.on_mouse_down("left", (e) => { this.dragStart = { path: file.path, scope, name, x: e.position.x, y: e.position.y }; });
     if (tree) row.child(div().flex_1().min_w(0).truncate().child(name));

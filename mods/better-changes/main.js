@@ -10,7 +10,7 @@
 // but the token colours: syntax.js colours a diff's code, and Better Files has the same file.
 import { View } from "gpui-kit";
 import { TextareaState } from "gpui-base";
-import { props, shared, setShared, nextCommand, layout, run, notify, closeOverlay } from "herdr";
+import { props, shared, setShared, nextCommand, layout, run, notify, closeOverlay, exec, home } from "herdr";
 import { loadSettings, duration } from "./settings.js";
 import { followFileIcons } from "./file-icons.js";
 import { panelCommands } from "./panel.js";
@@ -173,11 +173,31 @@ class BetterChanges extends View {
     if (command === "changes" || command === "commit") this.setTab(command, cx);
     if (command === "flat" || command === "tree" || command === "columns") this.setView(command, cx);
     if (command === "inline" || command === "split") this.setDiffLayout(command, cx);
+    if (command.startsWith("undo:")) this.undoRollback(command.slice(5), cx); // the notice of a Rollback (vnh-changes-menu)
     if (command.startsWith("open:")) {
       const file = this.files.find((f) => f.path === command.slice(5));
       if (file)
         this.pick(file, file.conflict ? "conflict" : file.unstaged ? "unstaged" : "staged", cx);
     }
+  }
+
+  // VNH: puts back what a Rollback saved (vnh-changes-menu keeps it in ~/.cache/vnh-changes-undo/<id>/): the staged changes with the
+  // index, the worktree's changes, the untracked files it deleted. Only the panel that shows that repository does it.
+  async undoRollback(id, cx) {
+    if (!/^[0-9a-z]+$/.test(id) || !this.root) return;
+    const B = `${home()}/.cache/vnh-changes-undo/${id}`;
+    const r = await exec("sh", ["-c", 'cat "$1/manifest.json"', "x", B]).catch(() => null);
+    let m = null; try { m = JSON.parse(r?.stdout ?? ""); } catch {}
+    if (!m || m.root !== this.root) { notify({ title: "Can't undo", body: m ? "It was another repository." : "What it saved is gone.", level: "warning", timeout: 5000 }); return; }
+    const steps = [];
+    if (m.staged?.length) steps.push('git apply --index "$1/staged.patch"');
+    if (m.work?.length) steps.push('[ -s "$1/work.patch" ] && git apply "$1/work.patch" || true');
+    for (const p of m.copies ?? []) steps.push(`mkdir -p "$(dirname -- ${JSON.stringify(p)})" && cp -p "$1/files/"${JSON.stringify(p)} ${JSON.stringify(p)}`);
+    const res = await exec("sh", ["-c", steps.length ? steps.join(" && ") : "true", "x", B], { cwd: this.root }).catch(() => null);
+    if (res?.code === 0) {
+      setShared("better-changes.reload", { root: this.root, on: null, at: Date.now() });
+      notify({ title: "Rollback undone", body: `${m.work?.length || m.copies?.length || 0} file(s) are back`, level: "success", timeout: 4000 });
+    } else notify({ title: "Couldn't undo", body: (res?.stderr || "").trim().slice(0, 200) || "git apply failed (the files changed since?)", level: "error", timeout: 7000 });
   }
 
   follow(cx) {
