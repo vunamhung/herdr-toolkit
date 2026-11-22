@@ -166,6 +166,14 @@ export async function statusOf(terminal) {
 // Has the agent ended in this terminal (its foreground is the shell again, or the terminal is gone)? Asked of the core
 // directly, so it holds for a terminal that is parked behind a cover too.
 const SHELLS = /^-?(zsh|bash|fish|sh|dash|nu|elvish|xonsh)$/;
+// Has an agent started in this terminal and reported its status (so Herdr shows it as one)?
+async function agentUp(address) {
+  const got = await hc(["get", address, "--json"]).catch(() => null);
+  try {
+    const j = JSON.parse(got?.stdout ?? "null");
+    return Boolean(j && j.state === "live" && !SHELLS.test(j.foreground?.name ?? "") && j.status);
+  } catch { return false; }
+}
 async function agentLeft(address) {
   const got = await hc(["get", address, "--json"]).catch(() => null);
   try {
@@ -274,12 +282,16 @@ export async function wake(rec) {
   const command = RESUME[rec.agent](rec.bin || rec.agent, rec.session, rec.flags ?? []).map((x, i) => (i === 0 ? x : shq(x))).join(" ");
   // Under a cover: the terminal comes back into the slot first, then it resumes.
   if (rec.cover) {
+    // The agent starts first, in the terminal that is still hidden; the cover stays up (it says "Waking…") until the agent
+    // has reported itself, and only then does the terminal take the slot: the plain shell is never on screen.
+    patch(rec.id, { waking: true });
+    wokeAt.set(rec.terminal, Date.now());
+    woke.push({ terminal: rec.terminal, space: rec.space, at: Date.now() });
+    await hc(["send", rec.terminal, command]).catch(() => null);
+    for (let i = 0; i < 100; i++) { if (await agentUp(rec.terminal)) break; await sleep(150); }
     const np = await uncover(rec);
     if (np) {
       forget(rec.id); unpinSpace(rec);
-      wokeAt.set(rec.terminal, Date.now());
-      woke.push({ terminal: rec.terminal, space: rec.space, at: Date.now() });
-      await hc(["send", rec.terminal, command]).catch(() => null);
       run("pane.focus", { pane: np });
       return;
     }
@@ -301,12 +313,13 @@ export async function wake(rec) {
   notify({ title: "Woke in a new tab", body: rec.title || NAME[rec.agent], level: "info", timeout: 3000 });
 }
 
-/** Drops sleepers that are running again (resumed by hand): an agent's status file names the same session. */
+/** Drops sleepers that are running again somewhere else (resumed by hand): an agent's status file names the same session
+ *  in another terminal. The sleeper's own terminal doesn't count: that is a wake in progress. */
 export async function prune(liveAddresses) {
   const list = sleepers();
   if (!list.length) return;
-  const running = new Set();
-  for (const address of liveAddresses) { const st = await statusOf(address); if (st?.provider && st.session) running.add(`${st.provider}:${st.session}`); }
-  const keep = list.filter((r) => !running.has(r.id));
+  const running = new Map();
+  for (const address of liveAddresses) { const st = await statusOf(address); if (st?.provider && st.session) running.set(`${st.provider}:${st.session}`, address); }
+  const keep = list.filter((r) => r.waking || !running.has(r.id) || running.get(r.id) === r.terminal);
   if (keep.length !== list.length) save(keep);
 }

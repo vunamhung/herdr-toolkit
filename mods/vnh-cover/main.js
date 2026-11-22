@@ -37,6 +37,6 @@ export default class Cover extends View {
       // a quiet hint at the bottom
       .child(h_flex().absolute().bottom(14).left(0).right(0).justify_center()
         .child(div().px(14).h(30).rounded(15).bg(t.raised).border_1().border_color(t.border).flex().items_center().text_size(12).text_color(t.muted)
-          .child(this.waking ? "Waking…" : `${r ? names[r.agent] ?? "Agent" : "Agent"} is asleep · click to resume`)));
+          .child(this.waking || r?.waking ? "Waking…" : `${r ? names[r.agent] ?? "Agent" : "Agent"} is asleep · click to resume`)));
   }
 }
