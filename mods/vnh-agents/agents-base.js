@@ -5,7 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
-import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, prune, isWoken } from "./sleep.js";
+import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, prune, isWoken, wokeAt } from "./sleep.js";
 
 // VNH: the spaces sidebar's colors for theme color names (same table as the shipped spaces mod).
 const VNH_MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -99,6 +99,10 @@ export default class Agents extends View {
     cx.timer.every(30000, (cx) => cx.notify());
     // VNH: idle agents go to sleep by themselves (sleep.js); once per 15 s, one at a time.
     this.sleeping = new Set();
+    // When each agent was last touched: the terminal in front of you counts as touched while you're there. Auto sleep
+    // measures idleness from the latest of this, its last status change, its wake and this mod's start, so a restart,
+    // a reload or a wake never makes an agent look as idle as it was before.
+    this.touched = new Map(); this.bootAt = Date.now();
     if (!props()?.sortMenu) cx.timer.every(15000, (cx) => this.autoSleep(cx));
   }
 
@@ -123,11 +127,13 @@ export default class Agents extends View {
   autoSleep(cx) {
     if (!autoOn() || this.sleeping.size > 0) return;
     const now = Date.now(), front = window()?.active ? focused()?.terminal : null;
+    if (front) this.touched.set(front, now);
     const all = terminals();
     const list = agents();
     for (const a of list) {
       if (a.status !== "idle" || a.pinned || a.address === front || this.sleeping.has(a.address)) continue;
-      if (now - (this.changed[a.address]?.at ?? now) < AUTO_MS) continue;
+      const last = Math.max(this.changed[a.address]?.at ?? 0, this.touched.get(a.address) ?? 0, wokeAt.get(a.address) ?? 0, this.bootAt);
+      if (now - last < AUTO_MS) continue;
       if (this.tree(all.concat(this.recordKids(all)), a.address).some((k) => (RANK[kidStatus(k.t, this.listed ?? new Map())] ?? 0) > RANK.idle)) continue;
       this.sleeping.add(a.address);
       cx.spawn(async (cx) => {
@@ -299,6 +305,7 @@ export default class Agents extends View {
     const all = real.concat(this.recordKids(real));
     const shown = focused()?.agent;
     const now = Date.now();
+    { const front = window()?.active ? focused()?.terminal : null; if (front) this.touched.set(front, now); }
     this.track(list, now);
     // A kept sub-agent (one with a pane) is in agents() too: where a tree shows
     // it, it gets no row of its own, unless it's pinned.

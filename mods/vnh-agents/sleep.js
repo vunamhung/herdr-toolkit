@@ -133,6 +133,8 @@ const NAME = { claude: "Claude Code", agy: "Antigravity", codex: "Codex" };
 // Agents just woken (module state, this mod's own): a resumed agent reports "done" for a moment before "idle"; the
 // list shows it as idle straight away (see isWoken). Cleared at the first status that isn't done, or after 2 min.
 export const woke = [];
+/** terminal -> when it was last woken (an agent's "idle since" must not predate its wake). */
+export const wokeAt = new Map();
 export function isWoken(a, changedAt) {
   const now = Date.now();
   for (let i = woke.length - 1; i >= 0; i--) {
@@ -193,6 +195,7 @@ export async function wake(rec) {
   const t = terminals().find((x) => x.address === rec.terminal);
   const command = RESUME[rec.agent](rec.bin || rec.agent, rec.session, rec.flags ?? []).map((x, i) => (i === 0 ? x : shq(x))).join(" ");
   forget(rec.id);
+  wokeAt.set(rec.terminal, Date.now());
   woke.push({ terminal: t && t.state === "live" && !t.program?.agent && t.program?.shell && rec.pane ? rec.terminal : null, space: rec.space, at: Date.now() });
   if (t && t.state === "live" && !t.program?.agent && t.program?.shell && rec.pane) {
     await hc(["send", rec.terminal, command]).catch(() => null);
