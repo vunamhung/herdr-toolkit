@@ -27,9 +27,9 @@ export function agentText(kind, a) {
   const ref = `PR #${a.number} (${a.url})`;
   if (kind === "fix") {
     const names = (a.failed ?? []).map((f) => `- ${f.name}${f.url ? ` ${f.url}` : ""}`).join("\n");
-    return `Fix the failing checks of ${ref}, "${a.title}", branch ${a.headRef}.\nFailing:\n${names}\nRead the logs with: the failing check's log (its link is above; on GitHub: gh run view <run id> --log-failed). Find the cause, fix it in this branch, run the check locally, and tell me what you changed.`;
+    return `Fix the failing checks of ${ref}, "${a.title}", branch ${a.headRef}.\nFailing:\n${names}\nRead the logs with: the failing check's log (its link is above; on GitHub: gh run view <run id> --log-failed). Find the cause, fix it in this branch, run the check locally, and tell me what you changed. Answer in Vietnamese.`;
   }
-  return `Review ${ref}, "${a.title}" (${a.headRef} into ${a.baseRef}). Read it with: git fetch origin ${a.headRef} && git diff origin/${a.baseRef}...FETCH_HEAD, and the discussion on its page. Tell me what is wrong or risky, in order of importance, and what you would change. Do not edit anything or post comments.`;
+  return `Review ${ref}, "${a.title}" (${a.headRef} into ${a.baseRef}). Read it with: git fetch origin ${a.headRef} && git diff origin/${a.baseRef}...FETCH_HEAD, and the discussion on its page. Tell me what is wrong or risky, in order of importance, and what you would change. Do not edit anything or post comments. Answer in Vietnamese.`;
 }
 
 /** Items for the menu of a pull request. `v` is the menu view; item/line are its row builders. */
