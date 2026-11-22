@@ -348,11 +348,15 @@ export default class Tabs extends View {
     const item = (c, i) => {
       const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id);
       const program = lead?.program;
-      const name = label(c, lead);
+      // VNH: a tab whose agent sleeps (a vnh-cover pane in it, see vnh-agents/sleep.js) keeps the title it had; its
+      // icon is a moon and all its text is gray.
+      const nap = panes().some(p => p.tab === c.id && p.mod === "vnh-cover")
+        ? (shared("vnh.asleep") ?? []).find(r => r.tab === c.id || panes().some(p => p.tab === c.id && p.pane === r.cover)) ?? null : null;
+      const name = nap?.title ? nap.title : label(c, lead);
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         // A rename or status dot on this or an earlier tab can push the active one out.
         .when(i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
-        .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
+        .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(nap ? t.dim : c.active ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
         .on_mouse_up("left", () => {
@@ -362,7 +366,8 @@ export default class Tabs extends View {
         })
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
         // VNH: while an agent in this tab works its icon breathes (the same slow opacity loop as the space tiles).
-        .when(Boolean(program?.icon), el => {
+        .when(Boolean(nap), el => el.child(svg("mods/vnh-agents/moon.svg").size(14).text_color(t.dim)))
+        .when(Boolean(program?.icon) && !nap, el => {
           const icon = program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14);
           return el.child(c.working_since != null ? icon.loop("opacity", { from: 0.35, to: 1, period: 1800 }) : icon);
         })
