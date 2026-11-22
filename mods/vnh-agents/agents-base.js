@@ -4,7 +4,8 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
+import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, prune } from "./sleep.js";
 
 // VNH: the spaces sidebar's colors for theme color names (same table as the shipped spaces mod).
 const VNH_MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -96,6 +97,48 @@ export default class Agents extends View {
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
+    // VNH: idle agents go to sleep by themselves (sleep.js); once per 15 s, one at a time.
+    this.sleeping = new Set();
+    if (!props()?.sortMenu) cx.timer.every(15000, (cx) => this.autoSleep(cx));
+  }
+
+  // `vnh-agents.sleep:<terminal>`: puts that terminal's agent to sleep now (the same as the automatic one).
+  sleepNow(address, cx) {
+    const a = agents().find((x) => x.address === address) ?? (() => {
+      const p = panes().find((x) => x.terminal === address); const sp = spaces().find((x) => x.tabs?.some((tb) => tb.id === p?.tab));
+      return p ? { address, pane: p.pane, tab: p.tab, space: sp?.id, space_name: sp?.name, title: p.title } : null; })();
+    if (!a) return notify({ title: "No such terminal", body: address, level: "warning", timeout: 3000 });
+    this.sleeping.add(address);
+    cx.spawn(async (cx) => {
+      try {
+        const r = await sleepAgent(a, this.labelOf?.get(address));
+        notify(r.ok ? { title: "Agent put to sleep", body: a.space_name ?? "", level: "info", timeout: 3000 } : { title: "Not put to sleep", body: r.why, level: "warning", timeout: 5000 });
+      } finally { this.sleeping.delete(address); cx.notify(); }
+    });
+  }
+
+  // An agent that has been idle for AUTO_MS goes to sleep: not one that needs you (done / blocked) or works, not
+  // the terminal in front of you while the window is active, not a pinned one, not one with a sub-agent working.
+  autoSleep(cx) {
+    if (!autoOn() || this.sleeping.size > 0) return;
+    const now = Date.now(), front = window()?.active ? focused()?.terminal : null;
+    const all = terminals();
+    const list = agents();
+    for (const a of list) {
+      if (a.status !== "idle" || a.pinned || a.address === front || this.sleeping.has(a.address)) continue;
+      if (now - (this.changed[a.address]?.at ?? now) < AUTO_MS) continue;
+      if (this.tree(all.concat(this.recordKids(all)), a.address).some((k) => (RANK[kidStatus(k.t, this.listed ?? new Map())] ?? 0) > RANK.idle)) continue;
+      this.sleeping.add(a.address);
+      cx.spawn(async (cx) => {
+        try {
+          const label = this.labelOf?.get(a.address);
+          const r = await sleepAgent(a, label);
+          if (r.ok) notify({ title: "Agent put to sleep", body: `${a.space_name ?? ""} · ${label ?? a.title ?? ""}`.trim(), level: "info", timeout: 3000 });
+        } finally { this.sleeping.delete(a.address); cx.notify(); }
+      });
+      break; // one per pass
+    }
+    prune(all.filter((t) => t.state === "live" && t.program?.agent).map((t) => t.address));
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -166,7 +209,14 @@ export default class Agents extends View {
         })
         .child(svg(`mods/workspace-chrome/${s.icon}.svg`).size(14).flex_none().text_color(t.muted))
         .child(div().flex_1().child(s.label))
-        .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))));
+        .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))))
+      // VNH: idle agents sleeping by themselves
+      .child(div().h(1).my(4).mx(4).bg(t.border))
+      .child(h_flex().id("sleep-auto").h(31).px(8).gap(9).rounded(7).items_center().text_color(t.foreground).hover((el) => el.bg(t.hover))
+        .on_click(() => { setAuto(!autoOn()); closeOverlay(props().overlay); })
+        .child(svg("mods/vnh-agents/moon.svg").size(14).flex_none().text_color(t.muted))
+        .child(div().flex_1().child(`Sleep idle agents after ${AUTO_MS / 60000} min`))
+        .when(autoOn(), (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground))));
   }
 
   peek(addr) {
@@ -306,6 +356,7 @@ export default class Agents extends View {
       const many = tabCounts.get(a.tab) > 1;
       return [a.address, tab ? title(many ? { ...tab, named: false } : tab, many ? a : leads.get(a.tab)) : (a.title || a.program?.name || "")];
     }));
+    this.labelOf = labels;
     const label = (a) => labels.get(a.address);
     const detail = new Map(list.map(a => [a.address, /^\d+$/.test(label(a)) ? null : label(a)]));
     const seen = {};
@@ -435,9 +486,41 @@ export default class Agents extends View {
           .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
     };
+    // VNH: sleeping agents (sleep.js) under their own "Asleep" group: a dim moon, the space and the conversation's
+    // title, since when; a click wakes it, a hover offers x to forget it.
+    const dozing = collapsed ? [] : sleepers();
+    const asleepRows = () => {
+      if (!dozing.length) return [];
+      const open = !this.folded.has("asleep");
+      const head = h_flex().id("asleep").px(8).pt(8).h(30).flex_none().gap(6).items_center().text_size(11).font_medium().cursor_pointer()
+        .hover((s) => s.text_color(t.foreground))
+        .on_click((_e, cx) => { open ? this.folded.add("asleep") : this.folded.delete("asleep"); cx.notify(); })
+        .child(div().truncate().text_color(t.dim).child("Asleep"))
+        .child(div().text_color(t.dim).child(String(dozing.length)))
+        .child(div().flex_1())
+        .when(!open, (el) => el.child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
+      if (!open) return [head];
+      return [head, ...dozing.map((r) => {
+        const hot = this.hovered === `z:${r.id}`;
+        return h_flex().id(`z-${r.id}`).px(8).h(30).flex_none().rounded(8).items_center().gap(9).cursor_pointer()
+          .hover((s) => s.bg(t.hover))
+          .on_hover((on, cx) => { if (on) this.hovered = `z:${r.id}`; else if (this.hovered === `z:${r.id}`) this.hovered = null; cx.notify(); })
+          .tooltip("Wake it: resumes the conversation")
+          .on_click(() => wake(r))
+          .child(div().flex_none().opacity(0.45).child(svg("mods/vnh-agents/moon.svg").size(15).text_color(t.muted)))
+          .child(h_flex().flex_1().min_w(0).gap(5).items_center()
+            .child(div().min_w(0).max_w(120).truncate().text_color(t.dim).child(r.spaceName || "?"))
+            .when(Boolean(r.title), (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).opacity(0.7).child(`\u00b7 ${r.title}`))))
+          .when(hot, (el) => el.child(div().id(`zx-${r.id}`).flex_none().p(2).rounded(4).text_color(t.dim).cursor_pointer().tooltip("Forget it")
+            .hover((s) => s.bg(t.hover).text_color(t.foreground))
+            .on_click((_e, cx) => { cx.stop_propagation(); forget(r.id); this.hovered = null; cx.notify(); })
+            .child(svg("mods/pane/close.svg").size(12))))
+          .when(!hot, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - r.at))));
+      })];
+    };
     const rows = collapsed
       ? list.flatMap(withKids)
-      : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : g.members.flatMap(withKids))]);
+      : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : g.members.flatMap(withKids))]).concat(asleepRows());
 
     return v_flex()
       .size_full()
@@ -463,7 +546,7 @@ export default class Agents extends View {
                 .text_size(11)
                 .text_color(t.dim)
                 .hover((s) => s.text_color(t.foreground))
-                .on_click(() => openOverlay({ mod: "agents", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
+                .on_click(() => openOverlay({ mod: "agents", kind: "popup", width: 250, height: 190, props: { sortMenu: true } }))
                 .tooltip(`Sort agents: ${sort.label}`)
                 .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
             ),

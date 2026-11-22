@@ -11,6 +11,7 @@
 // else it installs nothing. The layout's agents slot points here (install.sh).
 
 import Agents from "./agents-base.js";
+import { sleepers, wake } from "./sleep.js";
 import { closeOverlay, nextCommand, openOverlay, props, run, terminals } from "herdr";
 
 let shown = null; // the chat dialog this list opened last
@@ -36,6 +37,8 @@ export default class ChatAgents extends Agents {
       for (;;) {
         const c = await nextCommand();
         if (c.startsWith("peek:")) this.peek(c.slice(5));
+        else if (c.startsWith("wake:")) { const r = sleepers().find((x) => x.terminal === c.slice(5)); if (r) wake(r); }
+        else if (c.startsWith("sleep:")) this.sleepNow(c.slice(6), cx);
         else if (c.startsWith("menu:")) openOverlay({ mod: "chat-menu", kind: "popup", width: 240, props: { tab: "pane", target: { terminal: c.slice(5) } } });
       }
     });

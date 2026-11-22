@@ -74,7 +74,7 @@ tmp=$(mktemp "$DATA/limits.XXXXXX") && jq -n --argjson prev "$prev" \
 # stores it in ~/.cache/herdr-status/<terminal>.json, the same file format Codex and agy write, so the
 # bar shows the agent in front of you whichever one it is. limits.json above stays as the Claude-wide
 # fallback (a chat run by herdr-chat never calls this script).
-sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" claude "$model" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" 2>/dev/null
+sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" claude "$model" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" "" "$([ "$sid" = "-" ] && echo "" || echo "$sid")" 2>/dev/null
 
 # Status line moved to the Herdr status bar: print nothing here.
 # To bring the in-terminal status line back, delete the next line.

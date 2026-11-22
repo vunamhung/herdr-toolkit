@@ -41,5 +41,5 @@ cid=$(printf '%s' "$input" | jq -r '.conversation_id // empty' 2>/dev/null)
 if [ -n "$cid" ]; then
   title=$(grep -m 1 -F "\"conversationId\":\"$cid\"" "$HOME/.gemini/antigravity-cli/history.jsonl" 2>/dev/null | jq -r '.display // empty' 2>/dev/null | head -n 1 | cut -c1-80)
 fi
-sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" agy "$model" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" "$title" 2>/dev/null
+sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" agy "$model" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" "$title" "$cid" 2>/dev/null
 exit 0

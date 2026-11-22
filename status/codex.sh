@@ -63,5 +63,6 @@ if [ -z "$effort" ]; then
   effort=$(sed -n 's/^model_reasoning_effort[[:space:]]*=[[:space:]]*"\{0,1\}\([A-Za-z]*\)"\{0,1\}.*/\1/p' "$CODEX_HOME/config.toml" 2>/dev/null | head -1)
   [ -n "$effort" ] || effort="$default_effort"
 fi
-sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" codex "$name" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" 2>/dev/null
+sid=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
+sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" codex "$name" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" "" "$sid" 2>/dev/null
 exit 0
