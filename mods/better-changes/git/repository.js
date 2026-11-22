@@ -157,11 +157,12 @@ export const gitMethods = {
 
   async readSidebarState(git, context, cx) {
     const committed = await readCommitted(git, this.committed, this.settings.limits.files);
-    const { branch, repo } = await readBranchAndRepo(git);
+    const { branch, repo, origin } = await readBranchAndRepo(git);
     if (!this.isCurrent(context)) return;
     this.committed = committed;
     this.branch = branch;
     this.repo = repo;
+    this.origin = origin;
     if (this.tab === "commit") this.loadCommits(cx);
   },
 

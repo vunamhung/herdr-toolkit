@@ -37,6 +37,7 @@ export async function readBranchAndRepo(git) {
   return {
     branch: branch.code === 0 ? branch.stdout.trim() : null,
     repo: origin.code === 0 ? githubRepo(origin.stdout) : null,
+    origin: origin.code === 0 ? origin.stdout.trim() : null, // VNH: Azure DevOps is told apart by it (forgeOf)
   };
 }
 

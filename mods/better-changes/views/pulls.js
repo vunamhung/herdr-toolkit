@@ -6,7 +6,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { theme, openOverlay } from "herdr";
 import { timeAgo } from "./../git/model.js";
 import { TEXT, codeFont, Icon, FileIcon, PanelHeader, IconButton, TextButton, GroupHeader, Row, DiffStat, Message } from "./ui.js";
-import { ghJson, gh, LIST_FIELDS, DETAIL_FIELDS, TRUNKS, summarize, readiness, reviewLabel, loginOf, authorOf, atOf } from "../git/pulls.js";
+import { TRUNKS, summarize, readiness, reviewLabel, loginOf, authorOf, atOf, forgeOf, listPulls, whoami, pullDetail, isMine, isAskedOf, createUrl } from "../git/pulls.js";
 
 const FRESH_MS = 60000; // a list this young is not read again when the tab is shown
 const CAP_CHECKS = 60, CAP_FILES = 150;
@@ -44,28 +44,33 @@ export const pullsMethods = {
     this.prToken = (this.prToken ?? 0) + 1;
   },
 
+  // Where this repository's pull requests live (GitHub or Azure DevOps), or null.
+  forge() {
+    if (this.forgeKey !== `${this.origin}|${this.repo}`) { this.forgeKey = `${this.origin}|${this.repo}`; this.forgeValue = forgeOf(this.origin, this.repo); }
+    return this.forgeValue;
+  },
+
   // The open pull requests, the one of this branch (open or not), and who "me" is. `force` ignores how fresh the list is.
   loadPulls(cx, force = false) {
     if (!this.root || this.prsLoading) return;
     // A failure counts as a read too, so a poll doesn't call gh again and again.
-    if (!this.repo) {
-      const msg = "This repository's origin isn't on GitHub.";
+    const forge = this.forge();
+    if (!forge) {
+      const msg = "This repository's origin isn't on GitHub or Azure DevOps.";
       if (this.prsError !== msg) { this.prsError = msg; cx.notify(); }
       return;
     }
     if (!force && Date.now() - this.prsAt < FRESH_MS) return;
-    const { root, on, repo, branch, context } = this;
+    const { root, on, branch, context } = this;
     this.prsLoading = true;
     this.prsError = null;
     cx.notify();
     cx.spawn(async (cx) => {
       try {
         const [list, me, head] = await Promise.all([
-          ghJson(["pr", "list", "-R", repo, "--state", "open", "--limit", "40", "--json", LIST_FIELDS], root, on),
-          this.prMe ?? gh(["api", "user", "--jq", ".login"], root, on).then((r) => (r.code === 0 ? r.stdout.trim() : null)),
-          branch && !TRUNKS.has(branch)
-            ? ghJson(["pr", "list", "-R", repo, "--head", branch, "--state", "all", "--limit", "1", "--json", LIST_FIELDS], root, on).catch(() => [])
-            : [],
+          listPulls(forge, root, on),
+          this.prMe ?? whoami(forge, root, on),
+          branch && !TRUNKS.has(branch) ? listPulls(forge, root, on, { branch }).catch(() => []) : [],
         ]);
         if (!this.isCurrent(context)) return;
         this.prs = list ?? [];
@@ -94,11 +99,11 @@ export const pullsMethods = {
     this.prDetailError = null;
     this.prDetailLoading = true;
     const token = ++this.prToken;
-    const { root, on, repo, context } = this;
+    const { root, on, context } = this, forge = this.forge();
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        const d = await ghJson(["pr", "view", String(pr.number), "-R", repo, "--json", DETAIL_FIELDS], root, on);
+        const d = await pullDetail(forge, pr, root, on);
         if (token === this.prToken && this.isCurrent(context)) this.prDetail = d;
       } catch (e) {
         if (token === this.prToken) this.prDetailError = e.message;
@@ -128,10 +133,10 @@ export const pullsMethods = {
     const merged = pr.number === this.selectedPr?.number ? { ...pr, ...(this.prDetail ?? {}) } : pr;
     const c = summarize(merged.statusCheckRollup);
     return {
-      kind: "pr", root: this.root, on: this.on ?? null, repo: this.repo,
+      kind: "pr", root: this.root, on: this.on ?? null, forge: this.forge(),
       number: pr.number, title: pr.title, url: pr.url, state: pr.state, isDraft: Boolean(pr.isDraft),
       headRef: pr.headRefName, baseRef: pr.baseRefName, oid: merged.headRefOid ?? pr.headRefOid ?? "",
-      mine: Boolean(this.prMe) && authorOf(pr) === this.prMe, failed: c.failed.slice(0, 12).map((f) => ({ name: f.name, url: f.url })),
+      mine: isMine(pr, this.prMe), failed: c.failed.slice(0, 12).map((f) => ({ name: f.name, url: f.url })),
       verdict: readiness(merged, c).text, ...extra,
     };
   },
@@ -146,8 +151,8 @@ export const pullsMethods = {
     const all = this.prs ?? [], me = this.prMe;
     return {
       all,
-      mine: all.filter((p) => me && authorOf(p) === me),
-      review: all.filter((p) => me && (p.reviewRequests ?? []).some((r) => loginOf(r) === me)),
+      mine: all.filter((p) => isMine(p, me)),
+      review: all.filter((p) => isAskedOf(p, me)),
     };
   },
 
@@ -179,7 +184,7 @@ export const pullsMethods = {
         list.child(
           h_flex().id("pr-create").flex_none().px(8).h(30).gap(8).items_center().rounded(7).cursor_pointer()
             .hover((s) => s.bg(t.hover)).text_size(TEXT.small).text_color(t.muted)
-            .on_click((_e, cx) => cx.open_url(`https://github.com/${this.repo}/pull/new/${encodeURIComponent(this.branch).replace(/%2F/g, "/")}`))
+            .on_click((_e, cx) => cx.open_url(createUrl(this.forge(), this.branch)))
             .child(Icon("pr-open", 14).text_color(t.dim))
             .child(div().flex_1().truncate().child(`Open a pull request for ${this.branch}`))
             .child(Icon("external-link", 12).text_color(t.dim)),

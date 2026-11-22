@@ -160,7 +160,7 @@ export const sidebarMethods = {
             }),
           )
           // VNH: the pull requests of a GitHub repository.
-          .when(Boolean(this.repo) || this.tab === "pr", (el) => el.child(
+          .when(Boolean(this.forge?.()) || this.tab === "pr", (el) => el.child(
             HeaderTab({
               id: "tab-pr",
               label: "PRs",
