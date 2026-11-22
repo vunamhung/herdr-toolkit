@@ -173,6 +173,17 @@ export default class Agents extends View {
     run("terminal.peek", { terminal: addr });
   }
 
+  // Claude Code's in-process sub-agents (its Agent tool), which herdr-core keeps per terminal in `records`
+  // ({ id: { app, state, title } }), as terminal-shaped rows under the live terminal that runs them: they get
+  // the same tree lines and state dot as `hc run` sub-agents. Idea and the field from jbped/herdr-mods agents-plus (MIT).
+  recordKids(all) {
+    return all.filter((t) => t.state === "live" && t.records).flatMap((t) =>
+      Object.entries(t.records).map(([id, r]) => ({
+        address: `rec:${t.address}:${id}`, parent: t.address, state: "live", status: r.state || "working",
+        name: r.title || id, program: t.program, record: { id, ...r },
+      })));
+  }
+
   // Live sub-agents of `addr`, depth first, each with the tree lines in front of it.
   tree(all, addr, lead = []) {
     const kids = all.filter((k) => k.parent === addr && k.state === "live");
@@ -202,7 +213,7 @@ export default class Agents extends View {
       .text_size(12.5)
       .when(on, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover))
-      .on_click(() => (this.listed.has(k.address) ? run("pane.focus", { terminal: k.address }) : this.peek(k.address)))
+      .on_click(() => (k.record ? run("pane.focus", { terminal: k.parent }) : this.listed.has(k.address) ? run("pane.focus", { terminal: k.address }) : this.peek(k.address)))
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
@@ -230,8 +241,9 @@ export default class Agents extends View {
     const sort = sortOf();
     let list = agents();
     this.listed = new Map(list.map((a) => [a.address, a.status]));
-    const all = terminals();
-    this.migratePins(all);
+    const real = terminals();
+    this.migratePins(real);
+    const all = real.concat(this.recordKids(real));
     const shown = focused()?.agent;
     const now = Date.now();
     this.track(list, now);

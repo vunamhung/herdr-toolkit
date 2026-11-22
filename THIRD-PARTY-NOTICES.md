@@ -16,7 +16,7 @@ Everything below is derived from other projects. Those files stay under their or
 | `mods/vnh-tabs/` | Herdr `tabs` 0.1.16 | Apache-2.0 | Timeline and Insights buttons, one right-hand view at a time |
 | `layouts/VNH.json` | Herdr layout `main` 0.1.16 | Apache-2.0 | The VNH layout |
 | `overlays/frame/settings/` | Herdr's Settings window (`frame/settings`) | Apache-2.0 | A Mods tab, a shortcut editor in Keyboard |
-| `mods/vnh-agents/` | `chat-agents` of [ChmaraX/herdr-chat](https://github.com/ChmaraX/herdr-chat) (Adam Chmara) | MIT | A bar on every agent of the shown space |
+| `mods/vnh-agents/` | `chat-agents` of [ChmaraX/herdr-chat](https://github.com/ChmaraX/herdr-chat) (Adam Chmara) | MIT | A bar on every agent of the shown space; the in-process sub-agent rows (`recordKids`, the `records` field) follow [jbped/herdr-mods](https://github.com/jbped/herdr-mods) `agents-plus` (Jake Pedigo), MIT |
 | `overlays/mods/chat/main.js`, `overlays/mods/chat-agents/agents-base.js`, `vendor/herdr-chat/` | `chat`, `chat-agents` and the release archive of herdr-chat 0.5.0 (unchanged, with its checksums) | MIT | The chat publishes its model for the status bar; a breathing dot instead of a spinner |
 | `mods/vnh-filetree/` | `filetree` of [cybertron288/herdr-mods](https://github.com/cybertron288/herdr-mods), a port of [data-goblin/claude-code-filetree](https://github.com/data-goblin/claude-code-filetree) (Kurt Buhler) | MIT | Markdown tab, ignored-files toggle, extra folders in a space, drag to agents |
 | `mods/file-icons/` | Herdr `files` ([ogulcancelik/herdr](https://github.com/ogulcancelik/herdr)) with Material Icon Theme icons | Apache-2.0; icons MIT (`LICENSE-material-icon-theme.txt`) | File and folder icons in the rows and preview header |
@@ -895,4 +895,30 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+```
+
+### jbped/herdr-mods (agents-plus)
+
+```
+MIT License
+
+Copyright (c) 2026 Jake Pedigo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
