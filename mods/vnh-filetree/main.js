@@ -1332,6 +1332,10 @@ export default class FileTree extends View {
       this.seenView = want.n;
       if (VIEWS.some(([v]) => v === want.view) && want.view !== this.view) { this.view = want.view; this.hits = null; this.closePreview(); this.savePrefs(); }
     }
+    // VNH: switching to another space shows the tree, not the Recent list you may have left on in the last one.
+    { const sid = spaces().find((x) => x.active)?.id;
+      if (this.lastSpace !== undefined && sid !== this.lastSpace && this.view !== "tree" && !this.file) { this.view = "tree"; this.hits = null; this.closePreview(); this.savePrefs(); }
+      this.lastSpace = sid; }
     const t = theme(), look = frameLook(), R = look.radius, now = Date.now();
     const rows = this.file ? [] : this.rows();
     if (this.scrollTo !== null && this.scrollTo !== undefined) {
