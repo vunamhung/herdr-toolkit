@@ -262,6 +262,18 @@ export async function dismiss(rec) {
   unpinSpace(rec);
 }
 
+// A conversation can only be resumed once something was said in it: Claude writes its transcript at the first message,
+// Antigravity lists a conversation's prompts in its history file, Codex's rollout holds the user's message.
+const HAS_CONVERSATION = {
+  claude: 'ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl >/dev/null 2>&1 && grep -q \'"type":"user"\' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl',
+  agy: 'grep -q "\\"conversationId\\":\\"$1\\"" "$HOME/.gemini/antigravity-cli/history.jsonl"',
+  codex: 'f=$(ls "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*"$1".jsonl 2>/dev/null | head -n 1); [ -n "$f" ] && grep -q \'"role":"user"\' "$f"',
+};
+async function hasConversation(provider, session) {
+  const r = await exec("sh", ["-c", HAS_CONVERSATION[provider], "x", session], { timeout: 10000 }).catch(() => null);
+  return r?.code === 0;
+}
+
 /** Puts the agent of terminal `a.address` to sleep. -> { ok, why? }. Nothing is killed: the agent is asked to exit and,
  *  if it doesn't within 10 s, left running (the record is dropped again). */
 export async function sleepAgent(a, label, dry = false) {
@@ -274,6 +286,7 @@ export async function sleepAgent(a, label, dry = false) {
   // The conversation the process has open, else what its status line last wrote.
   const session = SESSION.test(probe.session ?? "") ? probe.session : st?.session;
   if (!SESSION.test(session ?? "")) return { ok: false, why: "can't tell which conversation it has open" };
+  if (!(await hasConversation(provider, session))) return { ok: false, why: "nothing has been said in it yet, so there is no conversation to resume", empty: true };
   const pane = panes().find((p) => p.terminal === a.address);
   const space = spaces().find((s) => s.id === a.space);
   const id = `${provider}:${session}`;

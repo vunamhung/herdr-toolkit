@@ -99,6 +99,7 @@ export default class Agents extends View {
     cx.timer.every(30000, (cx) => cx.notify());
     // VNH: idle agents go to sleep by themselves (sleep.js); once per 15 s, one at a time.
     this.sleeping = new Set();
+    this.skipUntil = new Map(); // agents that couldn't be put to sleep (nothing said yet...): not tried again for a while
     // When each agent was last touched: the terminal in front of you counts as touched while you're there. Auto sleep
     // measures idleness from the latest of this, its last status change, its wake and this mod's start, so a restart,
     // a reload or a wake never makes an agent look as idle as it was before.
@@ -132,7 +133,7 @@ export default class Agents extends View {
     const all = terminals();
     const list = agents();
     for (const a of list) {
-      if (a.status !== "idle" || a.pinned || a.address === front || this.sleeping.has(a.address)) continue;
+      if (a.status !== "idle" || a.pinned || a.address === front || this.sleeping.has(a.address) || (this.skipUntil.get(a.address) ?? 0) > now) continue;
       const last = Math.max(this.changed[a.address]?.at ?? 0, this.touched.get(a.address) ?? 0, wokeAt.get(a.address) ?? 0, this.bootAt);
       if (now - last < AUTO_MS) continue;
       if (this.tree(all.concat(this.recordKids(all)), a.address).some((k) => (RANK[kidStatus(k.t, this.listed ?? new Map())] ?? 0) > RANK.idle)) continue;
@@ -141,6 +142,7 @@ export default class Agents extends View {
         try {
           const label = this.labelOf?.get(a.address);
           const r = await sleepAgent(a, label);
+          if (!r.ok) this.skipUntil.set(a.address, Date.now() + 3 * 60 * 1000);
           if (r.ok) notify({ title: "Agent put to sleep", body: `${a.space_name ?? ""} · ${label ?? a.title ?? ""}`.trim(), level: "info", timeout: 3000 });
         } finally { this.sleeping.delete(a.address); cx.notify(); }
       });
@@ -540,8 +542,10 @@ export default class Agents extends View {
         return h_flex().id(`z-${r.id}`).px(8).h(30).flex_none().rounded(8).items_center().gap(9).cursor_pointer()
           .hover((s) => s.bg(t.hover))
           .on_hover((on, cx) => { if (on) this.hovered = `z:${r.id}`; else if (this.hovered === `z:${r.id}`) this.hovered = null; cx.notify(); })
-          .tooltip("Wake it: resumes the conversation")
-          .on_click(() => wake(r))
+          .tooltip("Wake it and go to it")
+          // A click on the row (anywhere on it, not just the moon) goes to the sleeping tab at once, where the cover says "Waking…",
+          // and wakes it: the agent gets the keyboard when it is up.
+          .on_click(() => { const target = r.cover || r.pane; if (target) run("pane.focus", { pane: target }); wake(r); })
           .child(div().flex_none().opacity(0.45).child(svg("mods/vnh-agents/moon.svg").size(15).text_color(t.muted)))
           .child(h_flex().flex_1().min_w(0).gap(5).items_center()
             .child(div().min_w(0).max_w(120).truncate().text_color(t.dim).child(r.spaceName || "?"))
