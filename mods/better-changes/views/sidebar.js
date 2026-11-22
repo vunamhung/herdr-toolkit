@@ -121,7 +121,9 @@ export const sidebarMethods = {
           ? this.selectedCommit
             ? this.renderCommit()
             : this.renderHistory()
-          : this.renderChanges(),
+          : this.tab === "stash"
+            ? this.renderStashes()
+            : this.renderChanges(),
       );
   },
 
@@ -153,7 +155,17 @@ export const sidebarMethods = {
               active: this.tab === "commit",
               onClick: (cx) => this.setTab("commit", cx),
             }),
-          ),
+          )
+          // VNH: the stashes, once there are any.
+          .when((this.stashes?.length ?? 0) > 0 || this.tab === "stash", (el) => el.child(
+            HeaderTab({
+              id: "tab-stash",
+              label: "Stashes",
+              count: this.stashes?.length || null,
+              active: this.tab === "stash",
+              onClick: (cx) => this.setTab("stash", cx),
+            }),
+          )),
       )
       // VNH: a toggle between the flat list and the tree (its icon is the current view's); the rest of the view options
       // (columns, diff layout, staging) are in the ⋮ menu.
@@ -239,6 +251,13 @@ export const sidebarMethods = {
       row("fetch", "refresh", "Fetch", 0),
       row("pull", "chevron-down", "Pull (fast-forward)", behind),
       row("push", "external-link", "Push", ahead),
+      MenuDivider(),
+      h_flex().id("sync-stash").h(28).flex_none().px(6).gap(8).items_center().rounded(6).text_size(12.5)
+        .text_color(busy ? t.dim : t.foreground).opacity(busy ? 0.5 : 1)
+        .when(!busy, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { close(); this.stashAll(cx); cx.notify(); }))
+        .child(div().w(14).flex_none())
+        .child(Icon("minus", 14).text_color(t.muted))
+        .child(div().flex_1().child(this.syncing === "stash" ? "Stashing…" : "Stash all changes")),
     ];
   },
 
@@ -636,7 +655,7 @@ export const sidebarMethods = {
     for (const f of files) statuses[f.path] = this.statusIn(f, scope);
     const n = files.length, working = scope !== "committed";
     openOverlay({
-      mod: "vnh-changes-menu", kind: "popup", width: 250, height: working ? 330 : 170,
+      mod: "vnh-changes-menu", kind: "popup", width: 250, height: working ? 500 : 250,
       props: { root: this.root, on: this.on ?? null, kind, name, dir, scope, paths: files.map((f) => f.path), statuses },
     });
   },
@@ -710,6 +729,27 @@ export const sidebarMethods = {
         .border_color(checked ? t.accent : t.dim).when(checked, (el) => el.bg(t.accent))
         .hover((st) => st.border_color(t.accent))
         .when(checked, (el) => el.child(Icon("check", 11).text_color(t.background))));
+  },
+
+  // VNH: the stashes: a click or a right-click opens the stash's menu (Apply, Pop, Drop, Copy).
+  renderStashes() {
+    const t = theme();
+    const list = v_flex().id("stash-list").flex_1().min_h(0).overflow_y_scrollbar().p(6);
+    if (!this.stashes?.length) return list.child(Message("No stashes"));
+    for (const [i, s] of this.stashes.entries()) {
+      const open = (_e, cx) => {
+        cx.stop_propagation();
+        openOverlay({ mod: "vnh-changes-menu", kind: "popup", width: 250, height: 170, props: { kind: "stash", root: this.root, on: this.on ?? null, ref: s.ref, message: s.message || s.full } });
+      };
+      list.child(
+        h_flex().id(`stash-${i}`).flex_none().px(8).py(6).gap(8).items_center().rounded(7).cursor_pointer()
+          .hover((x) => x.bg(t.hover)).on_click(open).on_mouse_down("right", open)
+          .child(v_flex().flex_1().min_w(0).gap(1)
+            .child(div().truncate().child(s.message || s.full))
+            .child(div().truncate().text_size(TEXT.caption).text_color(t.dim).child(`${s.ref} · ${timeAgo(s.at)}`))),
+      );
+    }
+    return list;
   },
 
   renderHistory() {

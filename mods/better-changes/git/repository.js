@@ -80,6 +80,7 @@ export const gitMethods = {
     cx.spawn(async (cx) => {
       try {
         await this.readRepository(cwd, on, context, cx);
+        await this.readStashes(on, context);
       } catch (error) {
         if (this.isCurrent(context)) this.error = error.message;
       } finally {
@@ -427,6 +428,37 @@ export const gitMethods = {
         this.refresh(cx);
         cx.notify();
       }
+    });
+  },
+
+  // VNH: the stash list (the Stashes tab): { ref, message, at }, newest first.
+  async readStashes(on, context) {
+    if (!this.root) { this.stashes = []; return; }
+    const r = await this.git(["stash", "list", "--format=%gd%x00%gs%x00%ct"], this.root, on);
+    if (!this.isCurrent(context)) return;
+    this.stashes = r.code !== 0 ? [] : r.stdout.split("\n").filter(Boolean).map((l) => {
+      const [ref, message, at] = l.split("\0");
+      return { ref, message: (message ?? "").replace(/^(WIP on|On) [^:]+: /, ""), full: message ?? "", at: Number(at) * 1000 };
+    });
+  },
+
+  // Stash every change, untracked files too (the ⋮ menu).
+  stashAll(cx) {
+    if (!this.root || this.busy || this.syncing) return;
+    const { root, on, context } = this;
+    this.syncing = "stash";
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+      const r = await this.git(["stash", "push", "--include-untracked", "-m", `${this.branch ?? "stash"} ${stamp}`], root, on);
+      this.syncing = null;
+      const out = (r.stderr || r.stdout || "").trim();
+      if (r.code !== 0) notify({ title: "Stash failed", body: out.slice(0, 220), level: "error", timeout: 7000 });
+      else if (/No local changes/i.test(out)) notify({ title: "Nothing to stash", level: "info", timeout: 2500 });
+      else notify({ title: "Stashed everything", body: "It is in the Stashes tab.", level: "success", timeout: 3500 });
+      if (this.isCurrent(context)) this.refresh(cx);
+      setShared("better-changes.reload", { root, on: on ?? null, at: Date.now() });
+      cx.notify();
     });
   },
 

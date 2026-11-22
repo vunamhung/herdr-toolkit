@@ -55,7 +55,7 @@ class BetterChanges extends View {
     });
     followFileIcons(this, cx);
 
-    this.tab = localStorage.getItem("tab") === "commit" ? "commit" : "changes";
+    { const saved = localStorage.getItem("tab"); this.tab = saved === "commit" || saved === "stash" ? saved : "changes"; }
     // VNH: "columns" is a flat list with name, folder and changes in aligned columns.
     this.view = ["flat", "columns"].includes(localStorage.getItem("view")) ? localStorage.getItem("view") : "tree";
     // VNH: "fluid" (one list) or "split" (Unstaged above, Staged below, each scrolling).

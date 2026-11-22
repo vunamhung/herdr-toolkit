@@ -168,6 +168,30 @@ export default class ChangesMenu extends View {
     } catch (e) { this.fail("Rollback", e); }
   }
 
+  renderStashMenu(t) {
+    const { ref, message } = this.a();
+    const item = (id, icon, label, enabled, action) => h_flex().id(`cm-${id}`).h(30).px(10).gap(10).items_center().rounded(7)
+      .text_size(13).text_color(enabled ? t.foreground : t.dim).opacity(enabled ? 1 : 0.5)
+      .when(enabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { if (!this.busy) action(cx); }))
+      .child(svg(ICON(icon)).size(14).flex_none().text_color(enabled ? t.muted : t.dim))
+      .child(div().flex_1().child(label));
+    if (this.ask === "drop") {
+      return v_flex().id("cm-ask").w_full().p(10).gap(10).bg(t.popover).text_size(13)
+        .child(div().text_color(t.foreground).child(`Drop ${ref}?`))
+        .child(div().text_size(11.5).text_color(t.dim).child(`${String(message).slice(0, 80)} — it is gone for good.`))
+        .child(h_flex().gap(8).justify_end()
+          .child(div().id("cm-cancel").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().text_color(t.muted).hover((s) => s.bg(t.hover)).on_click(() => this.close()).child("Cancel"))
+          .child(div().id("cm-go").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().bg(t.blocked + "33").text_color(t.blocked).hover((s) => s.bg(t.blocked + "4d"))
+            .on_click((_e, cx) => { if (!this.busy) this.runOps("Drop", () => this.git(["stash", "drop", ref]), cx, "Stash dropped"); }).child("Drop")));
+    }
+    return v_flex().id("cm").w_full().p(5).gap(1).bg(t.popover)
+      .child(item("apply", "plus", "Apply (keep the stash)", true, (cx) => this.runOps("Apply", () => this.git(["stash", "apply", "--index", ref]), cx, "Stash applied")))
+      .child(item("pop", "undo", "Pop (apply and remove)", true, (cx) => this.runOps("Pop", () => this.git(["stash", "pop", "--index", ref]), cx, "Stash popped")))
+      .child(item("drop", "trash", "Drop…", true, (cx) => { this.ask = "drop"; cx.notify(); }))
+      .child(div().h(1).my(4).mx(4).bg(t.border))
+      .child(item("copy", "copy", "Copy message", true, (cx) => { cx.write_to_clipboard(String(message)); notify({ title: "Copied the message", level: "info", timeout: 2000 }); this.close(); }));
+  }
+
   renderCommitMenu(t) {
     const item = (id, icon, label, enabled, action) => h_flex().id(`cm-${id}`).h(30).px(10).gap(10).items_center().rounded(7)
       .text_size(13).text_color(enabled ? t.foreground : t.dim).opacity(enabled ? 1 : 0.5)
@@ -192,6 +216,7 @@ export default class ChangesMenu extends View {
   render() {
     const t = theme(), { kind, name, scope, paths = [], statuses, on } = this.a();
     if (kind === "commit") return this.renderCommitMenu(t);
+    if (kind === "stash") return this.renderStashMenu(t);
     const n = paths.length, one = n === 1, path = paths[0] ?? "";
     const isFolder = kind === "folder", what = isFolder ? `${name}/ (${plural(n, "file")})` : name;
     const os = window()?.platform;
@@ -218,11 +243,18 @@ export default class ChangesMenu extends View {
       else await exec("open", [isFolder ? absPath : "-R", ...(isFolder ? [] : [absPath])], { on: on ?? null }).catch(() => null);
       this.close();
     };
+    const stashFiles = (cx) => this.runOps("Stash", () => this.git(["stash", "push", "--include-untracked", "-m", `${name} ${new Date().toISOString().slice(0, 16).replace("T", " ")}`, "--", ...paths]), cx, "Stashed: see the Stashes tab");
+    const ours = (side) => (cx) => this.runOps(side === "ours" ? "Accept ours" : "Accept theirs", async () => { await this.git(["checkout", `--${side}`, "--", ...paths]); await this.git(["add", "--", ...paths]); }, cx, side === "ours" ? "Kept our side" : "Took their side");
+    const ignore = (cx) => this.runOps("Ignore", () => this.sh('cd "$1"; shift; for p in "$@"; do printf "%s\\n" "/$p" >> .gitignore; done', paths), cx, "Added to .gitignore");
+    const historyOf = () => { run("tab.new", { folder: this.a().root, name: `history ${name}`.slice(0, 40), argv: ["sh", "-lc", `git log --follow --stat --color=always -- ${JSON.stringify(isFolder ? this.a().dir : path)} | less -R`] }); this.close(); };
+    const blameOf = () => { run("tab.new", { folder: this.a().root, name: `blame ${name}`.slice(0, 40), argv: ["sh", "-lc", `git blame --color-lines -- ${JSON.stringify(path)} | less -R`] }); this.close(); };
     const paths_ = [
       item("send", "at", "Send to agent (@path)", !on, (cx) => { this.busy = true; sendToAgent(cx, absPath, () => this.close()); }),
       item("copy-path", "copy", "Copy path", true, copy(absPath, "path")),
       item("copy-rel", "copy", "Copy relative path", true, copy(isFolder ? (this.a().dir ?? name) : path, "relative path")),
       ...(isFolder ? [] : [item("open", "file", "Open file", !on, () => open())]),
+      item("history", "history", isFolder ? "History of the folder" : "History of the file", !on, () => historyOf()),
+      ...(isFolder ? [] : [item("blame", "blame", "Blame (who changed each line)", !on && scope !== "untracked", () => blameOf())]),
       item("reveal", "folder", on ? "Reveal (not on another machine)" : os === "macos" ? (isFolder ? "Open the folder" : "Reveal in Finder") : "Show in the file manager", !on, () => reveal()),
     ];
 
@@ -248,7 +280,10 @@ export default class ChangesMenu extends View {
         .child(line())
         .child(item("stage", "plus", isFolder ? "Stage all in the folder" : "Stage", canStage, (cx) => this.stage("Stage", ["add"], cx)))
         .child(item("unstage", "minus", isFolder ? "Unstage all in the folder" : "Unstage", canUnstage, (cx) => this.stage("Unstage", ["restore", "--staged"], cx)))
-        .child(line()))
+        .child(item("stash", "stash", isFolder ? "Stash the folder…" : "Stash this file", n > 0, stashFiles))
+        .child(line())
+        .when(scope === "conflict", (c) => c.child(item("ours", "check", "Accept ours", n > 0, ours("ours"))).child(item("theirs", "check", "Accept theirs", n > 0, ours("theirs"))).child(line()))
+        .when(scope === "unstaged" && [...kinds].includes("untracked"), (c) => c.child(item("ignore", "ignore", "Add to .gitignore", !on, ignore)).child(line())))
       .children(paths_);
   }
 }
