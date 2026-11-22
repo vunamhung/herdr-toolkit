@@ -223,6 +223,25 @@ export const sidebarMethods = {
     ];
   },
 
+  // VNH: Fetch / Pull / Push, with what is waiting each way.
+  syncOptions(close) {
+    const t = theme(), ahead = this.committed?.unpushed?.size ?? 0, behind = Number(this.behind) || 0;
+    const busy = Boolean(this.syncing) || this.busy;
+    const row = (id, icon, label, count) =>
+      h_flex().id(`sync-${id}`).h(28).flex_none().px(6).gap(8).items_center().rounded(6).text_size(12.5)
+        .text_color(busy ? t.dim : t.foreground).opacity(busy ? 0.5 : 1)
+        .when(!busy, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { close(); this.syncAction(id, cx); cx.notify(); }))
+        .child(div().w(14).flex_none())
+        .child(Icon(icon, 14).text_color(t.muted))
+        .child(div().flex_1().child(this.syncing === id ? `${label}…` : label))
+        .when(count > 0, (el) => el.child(div().text_size(TEXT.caption).text_color(t.dim).child(String(count))));
+    return [
+      row("fetch", "refresh", "Fetch", 0),
+      row("pull", "chevron-down", "Pull (fast-forward)", behind),
+      row("push", "external-link", "Push", ahead),
+    ];
+  },
+
   renderMore() {
     return Menu({
       id: "more",
@@ -234,7 +253,7 @@ export const sidebarMethods = {
       },
       trigger: IconButton({ id: "more-trigger", icon: "more", label: "Options" }),
       width: 250,
-      children: this.viewOptions(() => { this.menuOpen = false; }),
+      children: [...this.viewOptions(() => { this.menuOpen = false; }), MenuDivider(), ...this.syncOptions(() => { this.menuOpen = false; })],
     });
   },
 
@@ -389,7 +408,8 @@ export const sidebarMethods = {
   commitButtonLabel() {
     if (this.operation === "commit") return "Committing…";
     if (this.operation === "amend") return "Amending…";
-    return this.commitMode === "amend" ? "Amend" : "Commit";
+    if (this.operation === "push") return "Pushing…";
+    return this.commitMode === "amend" ? "Amend" : this.commitMode === "push" ? "Commit and Push" : "Commit";
   },
 
   // VNH: ✨ before Commit writes a Conventional Commits message for the staged diff with the
@@ -466,8 +486,15 @@ export const sidebarMethods = {
         id: "mode-commit",
         icon: "commit",
         label: "Commit",
-        selected: !amend,
+        selected: this.commitMode !== "amend" && this.commitMode !== "push",
         onClick: choose("commit"),
+      }),
+      MenuOption({
+        id: "mode-push",
+        icon: "commit",
+        label: "Commit and Push",
+        selected: this.commitMode === "push",
+        onClick: choose("push"),
       }),
     ];
     if (this.hasHead) {

@@ -1,6 +1,6 @@
 // The mod's Git state: following the repository, changing the index, history,
 // commit and amend. The reads themselves are in git-reads.js.
-import { spaces, panes, focused, exec, watchFolder, shared, setShared } from "herdr";
+import { spaces, panes, focused, exec, watchFolder, shared, setShared, notify } from "herdr";
 import {
   readStatus,
   readBranchAndRepo,
@@ -381,6 +381,7 @@ export const gitMethods = {
     const { root, on, context } = this;
     const draft = this.message;
     const amend = this.commitMode === "amend";
+    const pushAfter = this.commitMode === "push"; // VNH: Commit and Push
     const expected = this.amendHead;
     this.busy = true;
     this.operation = amend ? "amend" : "commit";
@@ -401,6 +402,12 @@ export const gitMethods = {
           on,
         );
         if (result.code !== 0) throw Error((result.stderr || result.stdout).trim());
+        if (pushAfter) {
+          this.operation = "push"; cx.notify();
+          const pushed = await this.pushNow(root, on);
+          if (pushed) notify({ title: "Committed, but the push failed", body: pushed.slice(0, 220), level: "error", timeout: 8000 });
+          else notify({ title: "Committed and pushed", level: "success", timeout: 3000 });
+        }
         this.reload = Date.now();
         setShared("better-changes.reload", { root, on: on ?? null, at: this.reload });
         if (this.isCurrent(context)) {
@@ -420,6 +427,38 @@ export const gitMethods = {
         this.refresh(cx);
         cx.notify();
       }
+    });
+  },
+
+  // `git push`; a branch with no upstream is pushed with -u to origin. -> "" when it went well, else git's message.
+  async pushNow(root, on) {
+    let r = await this.git(["push"], root, on);
+    if (r.code !== 0 && /no upstream branch|has no upstream/i.test(r.stderr || "")) r = await this.git(["push", "-u", "origin", "HEAD"], root, on);
+    return r.code === 0 ? "" : (r.stderr || r.stdout || "push failed").trim().split("\n").filter(Boolean).slice(-3).join(" ");
+  },
+
+  // VNH: Fetch / Pull / Push from the ⋮ menu. Pull only fast-forwards (a diverged branch says so instead of merging).
+  syncAction(kind, cx) {
+    if (!this.root || this.busy || this.syncing) return;
+    const { root, on, context } = this;
+    this.syncing = kind;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      let error = "";
+      try {
+        if (kind === "push") error = await this.pushNow(root, on);
+        else {
+          const r = await this.git(kind === "pull" ? ["pull", "--ff-only"] : ["fetch", "--prune"], root, on);
+          if (r.code !== 0) error = (r.stderr || r.stdout || "failed").trim().split("\n").filter(Boolean).slice(-3).join(" ");
+        }
+      } catch (e) { error = String(e?.message ?? e); }
+      this.syncing = null;
+      const name = { fetch: "Fetch", pull: "Pull", push: "Push" }[kind];
+      if (error) notify({ title: `${name} failed`, body: error.slice(0, 220), level: "error", timeout: 8000 });
+      else notify({ title: `${name} done`, level: "success", timeout: 2500 });
+      if (this.isCurrent(context)) { this.refresh(cx); this.loadCommits(cx); }
+      setShared("better-changes.reload", { root, on: on ?? null, at: Date.now() });
+      cx.notify();
     });
   },
 
