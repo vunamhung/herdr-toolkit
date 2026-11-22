@@ -213,39 +213,6 @@ export default class Agents extends View {
     return RANK[a.status] ?? 0;
   }
 
-  sortMenu(t) {
-    const on = sortOf().id;
-    return v_flex()
-      .w_full()
-      .p(5)
-      .bg(t.popover)
-      .text_size(12.8)
-      .child(div().px(8).pt(4).pb(6).text_size(11).text_color(t.dim).child("Sort agents"))
-      .children(SORTS.map((s) => h_flex()
-        .id(`sort-${s.id}`)
-        .h(31)
-        .px(8)
-        .gap(9)
-        .rounded(7)
-        .items_center()
-        .text_color(t.foreground)
-        .hover((el) => el.bg(t.hover))
-        .on_click(() => {
-          setShared("agents.sort", s.id);
-          closeOverlay(props().overlay);
-        })
-        .child(svg(`mods/workspace-chrome/${s.icon}.svg`).size(14).flex_none().text_color(t.muted))
-        .child(div().flex_1().child(s.label))
-        .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))))
-      // VNH: idle agents sleeping by themselves
-      .child(div().h(1).my(4).mx(4).bg(t.border))
-      .child(h_flex().id("sleep-auto").h(31).px(8).gap(9).rounded(7).items_center().text_color(t.foreground).hover((el) => el.bg(t.hover))
-        .on_click(() => { setAuto(!autoOn()); closeOverlay(props().overlay); })
-        .child(svg("mods/vnh-agents/moon.svg").size(14).flex_none().text_color(t.muted))
-        .child(div().flex_1().child(`Sleep idle agents after ${AUTO_MS / 60000} min`))
-        .when(autoOn(), (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground))));
-  }
-
   peek(addr) {
     run("terminal.peek", { terminal: addr });
   }
@@ -320,7 +287,6 @@ export default class Agents extends View {
 
   render(cx) {
     const t = theme();
-    if (props()?.sortMenu) return this.sortMenu(t);
     const collapsed = narrow();
     const sort = sortOf();
     let list = agents();
@@ -601,15 +567,30 @@ export default class Agents extends View {
             .items_center()
             .justify_between()
             .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Agents"))
+            // VNH: two small toggles in place of the sort menu: the sort (priority / grouped by space) and the automatic sleep.
             .child(
-              div()
-                .id("ag-sort")
-                .text_size(11)
-                .text_color(t.dim)
-                .hover((s) => s.text_color(t.foreground))
-                .on_click(() => openOverlay({ mod: "agents", kind: "popup", width: 250, height: 190, props: { sortMenu: true } }))
-                .tooltip(`Sort agents: ${sort.label}`)
-                .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
+              h_flex().gap(8).items_center()
+                .child(
+                  div()
+                    .id("ag-nap-auto")
+                    .text_size(11)
+                    .text_color(t.dim)
+                    .opacity(autoOn() ? 1 : 0.35)
+                    .hover((s) => s.text_color(t.foreground))
+                    .on_click((_e, cx) => { setAuto(!autoOn()); cx.notify(); })
+                    .tooltip(autoOn() ? `Idle agents sleep after ${AUTO_MS / 60000} min: on (click to turn off)` : "Automatic sleep: off (click to turn on)")
+                    .child(svg("mods/vnh-agents/moon.svg").size(13)),
+                )
+                .child(
+                  div()
+                    .id("ag-sort")
+                    .text_size(11)
+                    .text_color(t.dim)
+                    .hover((s) => s.text_color(t.foreground))
+                    .on_click((_e, cx) => { setShared("agents.sort", (sort.id === "priority" ? SORTS[1] : SORTS[0]).id); cx.notify(); })
+                    .tooltip(`Sorted by ${sort.label.toLowerCase()}: click for ${(sort.id === "priority" ? SORTS[1] : SORTS[0]).label.toLowerCase()}`)
+                    .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
+                ),
             ),
         ),
       )
