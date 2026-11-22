@@ -616,7 +616,7 @@ export const sidebarMethods = {
     // VNH: a right-click opens the file's menu (vnh-changes-menu: Rollback…, Delete…, Stage, Unstage).
     row.on_mouse_down("right", (_e, cx) => {
       cx.stop_propagation();
-      openOverlay({ mod: "vnh-changes-menu", kind: "popup", width: 240, height: 160, props: { root: this.root, on: this.on ?? null, path: file.path, scope, status, base: this.committed?.name ?? null } });
+      openOverlay({ mod: "vnh-changes-menu", kind: "popup", width: 240, height: 160, props: { root: this.root, on: this.on ?? null, path: file.path, scope, status } });
     });
     // VNH: start a drag (see dropZone); a plain click still opens the diff.
     if (this.staging === "split" && (scope === "staged" || scope === "unstaged")) row.on_mouse_down("left", (e) => { this.dragStart = { path: file.path, scope, name, x: e.position.x, y: e.position.y }; });

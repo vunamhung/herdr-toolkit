@@ -3,19 +3,12 @@
 // to reload (shared "better-changes.reload", as its own stage / unstage does).
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, props, closeOverlay, exec, setShared, notify } from "herdr";
+import { theme, props, closeOverlay, exec, setShared, notify, window } from "herdr";
 
 const ICON = (n) => `mods/vnh-changes-menu/${n}.svg`;
 
 // What "Rollback" does to this file, by where it is listed and its status letter (A: new, D: deleted, M: changed).
-function rollbackPlan(scope, status, base) {
-  // A committed file (in a commit the remote doesn't have): back to what the remote's branch has, as an uncommitted change.
-  if (scope === "committed") {
-    if (!base) return null;
-    return status === "A"
-      ? { what: `Delete this file, which ${base} doesn't have`, args: [["rm", "-f", "-q", "--"]] }
-      : { what: `Restore this file to ${base}'s version (the difference becomes an uncommitted change)`, args: [["restore", `--source=${base}`, "--staged", "--worktree", "--"]] };
-  }
+function rollbackPlan(scope, status) {
   if (scope === "unstaged" && status === "A") return { what: "Delete this new, untracked file", args: [["clean", "-f", "-q", "--"]] };
   if (scope === "unstaged") return { what: "Discard the changes that aren't staged", args: [["restore", "--"]] };
   if (scope === "staged" && status === "A") return { what: "Unstage and delete this new file", args: [["rm", "-f", "-q", "--"]] };
@@ -48,10 +41,11 @@ export default class ChangesMenu extends View {
   }
 
   render() {
-    const t = theme(), { path, scope, status, base } = this.p();
+    const t = theme(), { path, scope, status, root, on } = this.p();
     const name = String(path ?? "").split("/").pop();
-    const plan = rollbackPlan(scope, status, base);
+    const plan = rollbackPlan(scope, status);
     const canStage = scope === "unstaged", canUnstage = scope === "staged", canDelete = Boolean(path);
+    const abs = `${String(root ?? "").replace(/\/+$/, "")}/${path}`;
     const item = (id, icon, label, enabled, action) => h_flex().id(`cm-${id}`).h(30).px(10).gap(10).items_center().rounded(7)
       .text_size(13).text_color(enabled ? t.foreground : t.dim).opacity(enabled ? 1 : 0.5)
       .when(enabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => action(cx)))
@@ -69,6 +63,22 @@ export default class ChangesMenu extends View {
             .hover((s) => s.bg(t.hover)).on_click(() => this.close()).child("Cancel"))
           .child(div().id("cm-go").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().bg(t.blocked + "33").text_color(t.blocked)
             .hover((s) => s.bg(t.blocked + "4d")).on_click((_e, cx) => { if (!this.busy) go(cx); }).child(rb ? "Rollback" : "Delete")));
+    }
+    // A committed file is already in a commit: nothing here rewrites it. Its menu is about the path.
+    if (scope === "committed") {
+      const copy = (text, what) => (cx) => { cx.write_to_clipboard(text); notify({ title: `Copied the ${what}`, body: text, level: "info", timeout: 2000 }); this.close(); };
+      const reveal = async () => {
+        const os = window()?.platform;
+        if (os === "windows") await exec("explorer", [`/select,${abs.replace(/\//g, "\\")}`], { on: on ?? null }).catch(() => null);
+        else if (os === "linux") await exec("xdg-open", [abs.replace(/\/[^/]*$/, "")], { on: on ?? null }).catch(() => null);
+        else await exec("open", ["-R", abs], { on: on ?? null }).catch(() => null);
+        this.close();
+      };
+      return v_flex().id("cm-committed").w_full().p(5).gap(1).bg(t.popover)
+        .child(item("copy-path", "copy", "Copy path", true, copy(abs, "path")))
+        .child(item("copy-rel", "copy", "Copy relative path", true, copy(path, "relative path")))
+        .child(div().h(1).my(4).mx(4).bg(t.border))
+        .child(item("reveal", "folder", on ? "Open the folder" : (window()?.platform === "macos" ? "Reveal in Finder" : "Show in the file manager"), true, () => reveal()));
     }
     return v_flex().id("cm").w_full().p(5).gap(1).bg(t.popover)
       .child(item("rollback", "undo", "Rollback…", Boolean(plan), (cx) => { this.ask = "rollback"; cx.notify(); }))
