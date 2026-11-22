@@ -738,7 +738,11 @@ export default class FileTree extends View {
     });
   }
 
-  collapseAll(cx) { this.folders = new Set(); for (const k of [...this.entries.keys()]) if (k) this.entries.delete(k); cx.notify(); }
+  // VNH: every root, the space's own and the folders added to it: the open folders go, each root keeps its first level.
+  collapseAll(cx) {
+    for (const R of [this, ...this.subList()]) { R.folders = new Set(); for (const k of [...R.entries.keys()]) if (k) R.entries.delete(k); }
+    cx.notify();
+  }
 
   // ── search ───────────────────────────────────────────────────────────────────────────
   search(query, cx) {
