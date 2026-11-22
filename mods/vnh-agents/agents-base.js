@@ -539,17 +539,17 @@ export default class Agents extends View {
       if (!open) return [head];
       return [head, ...dozing.map((r) => {
         const hot = this.hovered === `z:${r.id}`;
-        return h_flex().id(`z-${r.id}`).px(8).h(30).flex_none().rounded(8).items_center().gap(9).cursor_pointer()
+        return h_flex().id(`z-${r.id}`).relative().px(8).h(30).flex_none().rounded(8).items_center().gap(9).cursor_pointer()
           .hover((s) => s.bg(t.hover))
           .on_hover((on, cx) => { if (on) this.hovered = `z:${r.id}`; else if (this.hovered === `z:${r.id}`) this.hovered = null; cx.notify(); })
-          .tooltip("Wake it and go to it")
-          // A click on the row (anywhere on it, not just the moon) goes to the sleeping tab at once, where the cover says "Waking…",
-          // and wakes it: the agent gets the keyboard when it is up.
-          .on_click(() => { const target = r.cover || r.pane; if (target) run("pane.focus", { pane: target }); wake(r); })
           .child(div().flex_none().opacity(0.45).child(svg("mods/vnh-agents/moon.svg").size(15).text_color(t.muted)))
           .child(h_flex().flex_1().min_w(0).gap(5).items_center()
             .child(div().min_w(0).max_w(120).truncate().text_color(t.dim).child(r.spaceName || "?"))
             .when(Boolean(r.title), (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).opacity(0.7).child(`\u00b7 ${r.title}`))))
+          // The whole row is the click target: a layer over all of it (the x below sits above the layer), since the texts under it
+          // took the click and only the moon passed it on.
+          .child(div().id(`zw-${r.id}`).absolute().top(0).left(0).right(0).bottom(0).cursor_pointer().tooltip("Wake it: resumes the conversation")
+            .on_click((_e, cx) => { cx.stop_propagation(); wake(r); }))
           .when(hot, (el) => el.child(div().id(`zx-${r.id}`).flex_none().p(2).rounded(4).text_color(t.dim).cursor_pointer().tooltip("Forget it")
             .hover((s) => s.bg(t.hover).text_color(t.foreground))
             .on_click((_e, cx) => { cx.stop_propagation(); dismiss(r); this.hovered = null; cx.notify(); })
