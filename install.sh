@@ -32,7 +32,7 @@ backup() {
 # Our own mods, then the third-party ones this repo carries (each with its LICENSE; the ones we changed say so in
 # their first lines), so one clone is the whole UI. herdr-chat (chat, new-chat, chat-menu, chat-agents and its
 # host) is installed from vendor/herdr-chat below.
-MODS="claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions vnh-agents vnh-cover vnh-filetree vnh-timeline file-icons better-changes cloudflare-deploys insights filetree portal run walkthrough"
+MODS="claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions vnh-agents vnh-cover vnh-changes-menu vnh-filetree vnh-timeline file-icons better-changes cloudflare-deploys insights filetree portal run walkthrough"
 for mod in $MODS; do
   echo "mod: $mod"
   backup "$HERDR/mods/$mod"

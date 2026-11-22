@@ -2,7 +2,7 @@
 // The sidebar: its tabs, options menu, file groups and commit views.
 import { div } from "gpui-kit";
 import { v_flex, h_flex, v_resizable, resizable_panel } from "gpui-base";
-import { theme, shared, setShared, exec, agents, spaces, notify } from "herdr";
+import { theme, shared, setShared, exec, agents, spaces, notify, openOverlay } from "herdr";
 import { fileTree, timeAgo } from "../git/model.js";
 import {
   TEXT,
@@ -613,6 +613,11 @@ export const sidebarMethods = {
       onClick: (cx) => this.pick(file, scope, cx),
     }).child(FileIcon({ icons: this.fileIcons, path: `${this.root}/${file.path}`, color: t.muted, t }));
     const columns = this.view === "columns";
+    // VNH: a right-click opens the file's menu (vnh-changes-menu: Rollback…, Delete…, Stage, Unstage).
+    row.on_mouse_down("right", (_e, cx) => {
+      cx.stop_propagation();
+      openOverlay({ mod: "vnh-changes-menu", kind: "popup", width: 240, height: 160, props: { root: this.root, on: this.on ?? null, path: file.path, scope, status } });
+    });
     // VNH: start a drag (see dropZone); a plain click still opens the diff.
     if (this.staging === "split" && (scope === "staged" || scope === "unstaged")) row.on_mouse_down("left", (e) => { this.dragStart = { path: file.path, scope, name, x: e.position.x, y: e.position.y }; });
     if (tree) row.child(div().flex_1().min_w(0).truncate().child(name));
