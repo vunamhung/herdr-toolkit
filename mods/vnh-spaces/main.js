@@ -70,6 +70,7 @@ export function tone(t, status) {
 export default class Spaces extends View {
   init(_props, cx) {
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
+    this.lastG = {}; // space -> what its place answered last (shown while its new place is being asked)
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
     this.pending = new Set(); // where()s to look at next
@@ -338,15 +339,28 @@ export default class Spaces extends View {
     const sp = spaces(), ps = panes();
     const ready = (w) => this.shown.has(w.id) || where(w, ps) in this.git || Date.now() - (this.born[w.id] ??= Date.now()) > 1500;
     for (const w of sp) if (!this.shown.has(w.id) && ready(w)) this.shown.add(w.id);
-    const list = sp.map((w, i) => ({ w, i, g: this.git[where(w, ps)] ?? null, gone: Boolean(this.gone?.has(where(w, ps))) }));
+    // VNH: a space whose place changed (a cd, another first terminal) is asked again, and until git answers it keeps what it had:
+    // without that its worktrees dropped out from under it for a moment and showed at its level.
+    const list = sp.map((w, i) => {
+      const k = where(w, ps);
+      if (k in this.git) this.lastG[w.id] = this.git[k] ?? null;
+      return { w, i, g: k in this.git ? this.git[k] ?? null : this.lastG[w.id] ?? null, gone: Boolean(this.gone?.has(k)) };
+    });
     const mains = new Set(list.filter((r) => r.g && !r.g.linked).map((r) => r.g.repo));
-    const nested = (r) => r.g?.linked && mains.has(r.g.repo);
+    // VNH: a repo with no space on its main checkout (the first terminal of the space named after it sits in one of its
+    // worktrees) is stood in for by the space named like it, so the worktrees still nest under it.
+    const stand = new Map();
+    for (const r of list) if (r.g?.linked && !mains.has(r.g.repo) && !stand.has(r.g.repo)) {
+      const p = list.find((x) => x.g?.repo === r.g.repo && x.w.name.toLowerCase() === (r.g.name ?? "").toLowerCase());
+      if (p) stand.set(r.g.repo, p);
+    }
+    const nested = (r) => r.g?.linked && (mains.has(r.g.repo) || (stand.has(r.g.repo) && stand.get(r.g.repo) !== r));
     const out = [];
     const placed = new Set(); // repos whose worktrees are listed (under the first of its spaces)
     for (const r of list) {
       if (nested(r)) continue;
       out.push({ ...r, tree: null });
-      if (!r.g || r.g.linked || placed.has(r.g.repo)) continue;
+      if (!r.g || (r.g.linked && stand.get(r.g.repo) !== r) || placed.has(r.g.repo)) continue;
       placed.add(r.g.repo);
       const kids = list.filter((k) => nested(k) && k.g.repo === r.g.repo);
       kids.forEach((k, n) => out.push({ ...k, tree: n === kids.length - 1 ? "└─" : "├─" }));
