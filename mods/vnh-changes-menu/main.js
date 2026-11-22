@@ -8,6 +8,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { theme, props, closeOverlay, exec, setShared, notify, window, home, focused, panes, agents, run } from "herdr";
+import { commitItems, commitAsk, startPrompt, promptView } from "./commit.js";
 
 const ICON = (n) => `mods/vnh-changes-menu/${n}.svg`;
 const UNDO_DIR = () => `${home()}/.cache/vnh-changes-undo`;
@@ -64,6 +65,47 @@ export default class ChangesMenu extends View {
     setShared("better-changes.reload", { root, on: on ?? null, at: Date.now() });
     if (then) then();
     this.close();
+  }
+
+  // A commit action: `fn` runs (git), then the panel reloads and a notice says it went well.
+  async runOps(name, fn, cx, ok) {
+    this.busy = true; cx.notify();
+    try { await fn(); this.done(name, cx, () => notify({ title: ok ?? `${name} done`, level: "success", timeout: 3500 })); } catch (e) { this.fail(name, e); }
+  }
+
+  // A git command that may stop on a conflict: then its own abort puts everything back.
+  async tryAbort(args, abortArgs) {
+    const { root, on } = this.a();
+    const r = await exec("git", args, { cwd: root, on: on ?? null });
+    if (r.code === 0) return r;
+    await exec("git", abortArgs, { cwd: root, on: on ?? null }).catch(() => null);
+    throw new Error(`It conflicts, so it was aborted and nothing changed.\n${(r.stderr || r.stdout || "").trim().split("\n").slice(-2).join(" ")}`);
+  }
+
+  startPrompt() { startPrompt(this); }
+
+  async submitPrompt(cx) {
+    const name = String(this.input?.value() ?? "").trim(), { hash, root } = this.a();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$/.test(name) || name.includes("..")) { notify({ title: "Not a usable name", body: "Letters, digits, . _ - /", level: "warning", timeout: 3500 }); return; }
+    if (this.busy) return;
+    if (this.ask === "branch") return this.runOps("New branch", () => this.git(["switch", "-c", name, hash]), cx, `On ${name}`);
+    const parent = String(root).replace(/\/+$/, "").replace(/\/[^/]*$/, ""), dir = `${parent}/${name.replace(/\//g, "-")}`;
+    return this.runOps("New worktree", async () => { await this.git(["worktree", "add", "-b", name, dir, hash]); run("space.new", { name, folder: dir }); }, cx, `Worktree ${name} created`);
+  }
+
+  // Reset to `target` (a commit, or HEAD~1), after saving HEAD (and for hard: the working tree as a stash commit).
+  async reset(mode, cx, target = this.a().hash, label = "Reset") {
+    const { root, on } = this.a();
+    this.busy = true; cx.notify();
+    try {
+      const head = (await this.git(["rev-parse", "HEAD"])).stdout.trim();
+      let stash = "";
+      if (mode === "hard") stash = (await exec("git", ["stash", "create"], { cwd: root, on: on ?? null }).catch(() => ({ stdout: "" }))).stdout.trim();
+      const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      if (!on) await this.sh('B="$2"; mkdir -p "$B"; printf "%s" "$3" > "$B/manifest.json"', [`${home()}/.cache/vnh-changes-undo/${id}`, JSON.stringify({ type: "reset", id, root, at: Date.now(), head, mode, stash })]);
+      await this.git(["reset", `--${mode}`, target]);
+      this.done(label, cx, () => notify({ title: `${label} done`, body: on ? "On another machine: this can't be undone." : "Click to undo.", level: "info", timeout: 20000, ...(on ? {} : { action: { name: `better-changes.undo:${id}` } }) }));
+    } catch (e) { this.fail(label, e); }
   }
 
   fail(label, e) {
@@ -126,8 +168,30 @@ export default class ChangesMenu extends View {
     } catch (e) { this.fail("Rollback", e); }
   }
 
+  renderCommitMenu(t) {
+    const item = (id, icon, label, enabled, action) => h_flex().id(`cm-${id}`).h(30).px(10).gap(10).items_center().rounded(7)
+      .text_size(13).text_color(enabled ? t.foreground : t.dim).opacity(enabled ? 1 : 0.5)
+      .when(enabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { if (!this.busy) action(cx); }))
+      .child(svg(ICON(icon)).size(14).flex_none().text_color(enabled ? t.muted : t.dim))
+      .child(div().flex_1().child(label));
+    const line = () => div().h(1).my(4).mx(4).bg(t.border);
+    if (this.ask === "branch" || this.ask === "worktree") return promptView(this, t);
+    const q = this.ask ? commitAsk(this) : null;
+    if (q) {
+      return v_flex().id("cm-ask").w_full().p(10).gap(10).bg(t.popover).text_size(13)
+        .child(div().text_color(t.foreground).child(q.title))
+        .child(div().text_size(11.5).text_color(t.dim).child(q.note))
+        .child(h_flex().gap(8).justify_end()
+          .child(div().id("cm-cancel").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().text_color(t.muted).hover((s) => s.bg(t.hover)).on_click(() => this.close()).child("Cancel"))
+          .child(div().id("cm-go").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().bg((q.danger ? t.blocked : t.accent) + "33").text_color(q.danger ? t.blocked : t.foreground)
+            .hover((s) => s.bg((q.danger ? t.blocked : t.accent) + "4d")).on_click((_e, cx) => { if (!this.busy) q.go(cx); }).child("Do it")));
+    }
+    return v_flex().id("cm").w_full().p(5).gap(1).bg(t.popover).children(commitItems(this, t, item, line));
+  }
+
   render() {
     const t = theme(), { kind, name, scope, paths = [], statuses, on } = this.a();
+    if (kind === "commit") return this.renderCommitMenu(t);
     const n = paths.length, one = n === 1, path = paths[0] ?? "";
     const isFolder = kind === "folder", what = isFolder ? `${name}/ (${plural(n, "file")})` : name;
     const os = window()?.platform;

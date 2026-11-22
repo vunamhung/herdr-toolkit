@@ -788,6 +788,15 @@ export const sidebarMethods = {
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => this.openCommit(commit, cx))
+      // VNH: a right-click opens the commit's menu (vnh-changes-menu).
+      .on_mouse_down("right", (_e, cx) => {
+        cx.stop_propagation();
+        openOverlay({
+          mod: "vnh-changes-menu", kind: "popup", width: 280, height: 470,
+          props: { kind: "commit", root: this.root, on: this.on ?? null, hash: commit.hash, short: commit.short, subject: commit.subject,
+            isHead: this.commits[0]?.hash === commit.hash, pushed: Boolean(this.committed?.unpushed) && !this.committed.unpushed.has(commit.hash), hasParent: this.commits.length > 1 },
+        });
+      })
       .child(
         v_flex()
           .flex_1()

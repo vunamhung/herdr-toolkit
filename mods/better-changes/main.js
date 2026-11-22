@@ -189,6 +189,15 @@ class BetterChanges extends View {
     const r = await exec("sh", ["-c", 'cat "$1/manifest.json"', "x", B]).catch(() => null);
     let m = null; try { m = JSON.parse(r?.stdout ?? ""); } catch {}
     if (!m || m.root !== this.root) { notify({ title: "Can't undo", body: m ? "It was another repository." : "What it saved is gone.", level: "warning", timeout: 5000 }); return; }
+    if (m.type === "reset") {
+      // HEAD goes back where it was (hard: with the working tree, kept as a stash commit); untracked files were never touched.
+      const steps = [`git reset --${m.mode === "hard" ? "hard" : m.mode} ${m.head}`];
+      if (m.stash) steps.push(`git stash apply --index ${m.stash}`);
+      const res = await exec("sh", ["-c", steps.join(" && "), "x"], { cwd: this.root }).catch(() => null);
+      if (res?.code === 0) { setShared("better-changes.reload", { root: this.root, on: null, at: Date.now() }); notify({ title: "Reset undone", body: m.head.slice(0, 8), level: "success", timeout: 4000 }); }
+      else notify({ title: "Couldn't undo the reset", body: (res?.stderr || "").trim().slice(0, 200), level: "error", timeout: 7000 });
+      return;
+    }
     const steps = [];
     if (m.staged?.length) steps.push('git apply --index "$1/staged.patch"');
     if (m.work?.length) steps.push('[ -s "$1/work.patch" ] && git apply "$1/work.patch" || true');
