@@ -5,7 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
-import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, dismiss, prune, isWoken, wokeAt, fresh, repairSpaces } from "./sleep.js";
+import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, dismiss, prune, isWoken, wokeAt, fresh, repairSpaces, statusOf } from "./sleep.js";
 
 // VNH: the spaces sidebar's colors for theme color names (same table as the shipped spaces mod).
 const VNH_MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -99,12 +99,27 @@ export default class Agents extends View {
     cx.timer.every(30000, (cx) => cx.notify());
     // VNH: idle agents go to sleep by themselves (sleep.js); once per 15 s, one at a time.
     this.sleeping = new Set();
+    // Antigravity's subagents: its status line payload lists them, status/agy.sh keeps them in the terminal's status file;
+    // read here every 2 s for the agy agents (terminal -> [{ name, label, status }]).
+    this.agySubs = new Map();
+    if (!props()?.sortMenu) cx.timer.every(2000, (cx) => this.readAgySubs(cx));
     this.skipUntil = new Map(); // agents that couldn't be put to sleep (nothing said yet...): not tried again for a while
     // When each agent was last touched: the terminal in front of you counts as touched while you're there. Auto sleep
     // measures idleness from the latest of this, its last status change, its wake and this mod's start, so a restart,
     // a reload or a wake never makes an agent look as idle as it was before.
     this.touched = new Map(); this.bootAt = Date.now();
     if (!props()?.sortMenu) cx.timer.every(15000, (cx) => this.autoSleep(cx));
+  }
+
+  async readAgySubs(cx) {
+    const next = new Map(), now = Date.now() / 1000;
+    for (const a of agents()) {
+      const st = await statusOf(a.address);
+      if (st?.provider !== "agy" || !Array.isArray(st.subagents) || now - (st.updated ?? 0) > 120) continue;
+      const live = st.subagents.filter((s) => /^(running|working|in[_ -]?progress|pending|started)$/i.test(s.status ?? ""));
+      if (live.length) next.set(a.address, live);
+    }
+    if (JSON.stringify([...next]) !== JSON.stringify([...this.agySubs])) { this.agySubs = next; cx.notify(); }
   }
 
   // `vnh-agents.sleep:<terminal>`: puts that terminal's agent to sleep now (the same as the automatic one).
@@ -237,11 +252,16 @@ export default class Agents extends View {
   // ({ id: { app, state, title } }), as terminal-shaped rows under the live terminal that runs them: they get
   // the same tree lines and state dot as `hc run` sub-agents. Idea and the field from jbped/herdr-mods agents-plus (MIT).
   recordKids(all) {
-    return all.filter((t) => t.state === "live" && t.records).flatMap((t) =>
+    const agyKids = all.filter((t) => t.state === "live" && this.agySubs?.has(t.address)).flatMap((t) =>
+      this.agySubs.get(t.address).map((s, i) => ({
+        address: `agy:${t.address}:${i}`, parent: t.address, state: "live", status: "working",
+        name: s.label ? `${s.name}: ${s.label}` : s.name, program: t.program, record: { id: String(i), ...s },
+      })));
+    return agyKids.concat(all.filter((t) => t.state === "live" && t.records).flatMap((t) =>
       Object.entries(t.records).map(([id, r]) => ({
         address: `rec:${t.address}:${id}`, parent: t.address, state: "live", status: r.state || "working",
         name: r.title || id, program: t.program, record: { id, ...r },
-      })));
+      }))));
   }
 
   // Live sub-agents of `addr`, depth first, each with the tree lines in front of it.

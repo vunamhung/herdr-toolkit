@@ -34,6 +34,12 @@ line=$(printf '%s' "$input" | jq -r '
 IFS='|' read -r model effort ctx five five_reset seven seven_reset <<EOF
 $line
 EOF
+# Its subagents (the payload lists each with a name, a role (its prompt) and a status): a short label for each, from the first
+# bold phrase of the role, else its first line, so the Agents list can show them under the session. The prompts themselves aren't kept.
+subs=$(printf '%s' "$input" | jq -c '[(.subagents // [])[] | {name: (.name // "agent"), status: (.status // ""), label: ((.role // "") as $r
+  | ([$r | match("\\*\\*([^*\\n]{3,200})\\*\\*"; "g") | .captures[0].string] | first) // ($r | split("\n") | map(select(length > 0)) | first // "")
+  | sub("^You are (an? )?"; "") | sub(" \\(.*$"; "") | .[0:70])}]' 2>/dev/null)
+[ -n "$subs" ] || subs=null
 # agy sets no terminal title (Herdr would show its command line), so the conversation's first prompt, from agy's
 # own history file, goes with the other fields as the title the tab and the agents list show.
 title=""
@@ -41,5 +47,5 @@ cid=$(printf '%s' "$input" | jq -r '.conversation_id // empty' 2>/dev/null)
 if [ -n "$cid" ]; then
   title=$(grep -m 1 -F "\"conversationId\":\"$cid\"" "$HOME/.gemini/antigravity-cli/history.jsonl" 2>/dev/null | jq -r '.display // empty' 2>/dev/null | head -n 1 | cut -c1-80)
 fi
-sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" agy "$model" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" "$title" "$cid" 2>/dev/null
+sh "${HERDR_APP_HOME:-$HOME/.config/herdr-app}/status/write.sh" agy "$model" "$effort" "$ctx" "$five" "$five_reset" "$seven" "$seven_reset" "$title" "$cid" "$subs" 2>/dev/null
 exit 0
