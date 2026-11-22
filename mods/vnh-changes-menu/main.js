@@ -8,7 +8,14 @@ import { theme, props, closeOverlay, exec, setShared, notify } from "herdr";
 const ICON = (n) => `mods/vnh-changes-menu/${n}.svg`;
 
 // What "Rollback" does to this file, by where it is listed and its status letter (A: new, D: deleted, M: changed).
-function rollbackPlan(scope, status) {
+function rollbackPlan(scope, status, base) {
+  // A committed file (in a commit the remote doesn't have): back to what the remote's branch has, as an uncommitted change.
+  if (scope === "committed") {
+    if (!base) return null;
+    return status === "A"
+      ? { what: `Delete this file, which ${base} doesn't have`, args: [["rm", "-f", "-q", "--"]] }
+      : { what: `Restore this file to ${base}'s version (the difference becomes an uncommitted change)`, args: [["restore", `--source=${base}`, "--staged", "--worktree", "--"]] };
+  }
   if (scope === "unstaged" && status === "A") return { what: "Delete this new, untracked file", args: [["clean", "-f", "-q", "--"]] };
   if (scope === "unstaged") return { what: "Discard the changes that aren't staged", args: [["restore", "--"]] };
   if (scope === "staged" && status === "A") return { what: "Unstage and delete this new file", args: [["rm", "-f", "-q", "--"]] };
@@ -41,10 +48,10 @@ export default class ChangesMenu extends View {
   }
 
   render() {
-    const t = theme(), { path, scope, status } = this.p();
+    const t = theme(), { path, scope, status, base } = this.p();
     const name = String(path ?? "").split("/").pop();
-    const plan = rollbackPlan(scope, status);
-    const canStage = scope === "unstaged", canUnstage = scope === "staged", canDelete = scope !== "committed";
+    const plan = rollbackPlan(scope, status, base);
+    const canStage = scope === "unstaged", canUnstage = scope === "staged", canDelete = Boolean(path);
     const item = (id, icon, label, enabled, action) => h_flex().id(`cm-${id}`).h(30).px(10).gap(10).items_center().rounded(7)
       .text_size(13).text_color(enabled ? t.foreground : t.dim).opacity(enabled ? 1 : 0.5)
       .when(enabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => action(cx)))
