@@ -9,7 +9,7 @@
 // comes back into the same slot at wake, with its history.
 // The idea (put idle agents to sleep, wake the same conversation) is from fakie-dev/herdr-suspender (MIT); this is a
 // much smaller design: no cover panel, no tab of its own, nothing started while everything is awake.
-import { hc, exec, run, spaces, terminals, panes, shared, setShared, readTextFile, home, notify } from "herdr";
+import { hc, exec, run, spaces, terminals, panes, shared, setShared, readTextFile, home, notify, focused } from "herdr";
 
 export const AUTO_MS = 5 * 60 * 1000;
 const KEY = "vnh.asleep", AUTO = "vnh.sleep.auto";
@@ -289,10 +289,12 @@ export async function wake(rec) {
     woke.push({ terminal: rec.terminal, space: rec.space, at: Date.now() });
     await hc(["send", rec.terminal, command]).catch(() => null);
     for (let i = 0; i < 100; i++) { if (await agentUp(rec.terminal)) break; await sleep(150); }
+    // Waking it doesn't take you to it: only if you were in the cover itself (you clicked it) does the agent get the keyboard.
+    const inCover = focused()?.pane === rec.cover;
     const np = await uncover(rec);
     if (np) {
       forget(rec.id); unpinSpace(rec);
-      run("pane.focus", { pane: np });
+      if (inCover) run("pane.focus", { pane: np });
       return;
     }
     // The cover or the terminal is gone: nothing to put back; a terminal still parked is let go, and a tab opens.
@@ -305,11 +307,10 @@ export async function wake(rec) {
   woke.push({ terminal: t && t.state === "live" && !t.program?.agent && t.program?.shell && rec.pane ? rec.terminal : null, space: rec.space, at: Date.now() });
   if (t && t.state === "live" && !t.program?.agent && t.program?.shell && rec.pane) {
     await hc(["send", rec.terminal, command]).catch(() => null);
-    run("pane.focus", { pane: rec.pane });
     return;
   }
   const sp = spaces().find((s) => s.id === rec.space) ?? spaces().find((s) => s.active);
-  run("tab.new", { space: sp?.id, folder: rec.cwd ?? undefined, name: (rec.title || NAME[rec.agent]).slice(0, 40), argv: ["sh", "-lc", `exec ${command}`] });
+  run("tab.new", { space: sp?.id, focus: false, folder: rec.cwd ?? undefined, name: (rec.title || NAME[rec.agent]).slice(0, 40), argv: ["sh", "-lc", `exec ${command}`] });
   notify({ title: "Woke in a new tab", body: rec.title || NAME[rec.agent], level: "info", timeout: 3000 });
 }
 
