@@ -153,8 +153,16 @@ export const sidebarMethods = {
             }),
           ),
       )
-      // VNH: a view dropdown (the current view's icon and a chevron), as Fork's.
-      .when(this.tab === "changes", (el) => el.child(this.renderViewMenu()))
+      // VNH: a toggle between the flat list and the tree (its icon is the current view's); the rest of the view options
+      // (columns, diff layout, staging) are in the ⋮ menu.
+      .when(this.tab === "changes", (el) => el.child(
+        IconButton({
+          id: "view-toggle",
+          icon: (VIEWS.find((v) => v.id === this.view) ?? VIEWS[0]).icon,
+          label: this.view === "tree" ? "Tree view: switch to the flat list" : "Flat list: switch to the tree view",
+          onClick: (cx) => this.setView(this.view === "tree" ? "flat" : "tree", cx),
+        }),
+      ))
       .child(
         IconButton({
           id: "refresh",
@@ -186,60 +194,34 @@ export const sidebarMethods = {
     cx.notify();
   },
 
-  // VNH: Fork style: a check column on the left, the option's icon, its label. The same
-  // settings as the ⋮ menu (file list view, diff layout).
-  renderViewMenu() {
+  // VNH: Fork style: a check column on the left, the option's icon, its label: the options of the ⋮ menu (file list view,
+  // diff layout, staging). `close` shuts the menu after a choice.
+  viewOptions(close) {
     const t = theme();
     const option = (id, icon, label, selected, set) =>
       h_flex().id(`vm-${id}`).h(28).flex_none().px(6).gap(8).items_center().rounded(6).cursor_pointer()
         .text_size(12.5).text_color(t.foreground)
         .role("menu_item_radio").aria_selected(Boolean(selected))
         .hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { this.viewMenuOpen = false; set(cx); cx.notify(); })
+        .on_click((_e, cx) => { close(); set(cx); cx.notify(); })
         .child(div().w(14).flex_none().flex().justify_center()
           .when(selected, (el) => el.child(Icon("check", 13).text_color(t.foreground))))
         .child(Icon(icon, 14).text_color(t.muted))
         .child(div().flex_1().child(label));
-    const current = VIEWS.find((v) => v.id === this.view) ?? VIEWS[1];
-    const trigger = h_flex().id("view-menu-trigger").h(26).px(5).gap(2).flex_none().items_center().rounded(6)
-      .cursor_pointer().text_color(t.dim).tooltip("File list and diff view")
-      .hover((s) => s.bg(t.hover).text_color(t.foreground))
-      .child(Icon(current.icon, 15))
-      .child(Icon("chevron-down", 11));
-    return Menu({
-      id: "view-menu",
-      open: Boolean(this.viewMenuOpen),
-      focus: this.viewMenuFocus,
-      onOpenChange: (open, cx) => { this.viewMenuOpen = open; cx.notify(); },
-      trigger,
-      width: 250,
-      children: [
-        option("flat", "flat", "Flat list (single column)", this.view === "flat", (cx) => this.setView("flat", cx)),
-        option("columns", "columns", "Flat list (multiple columns)", this.view === "columns", (cx) => this.setView("columns", cx)),
-        option("tree", "tree", "Tree view", this.view === "tree", (cx) => this.setView("tree", cx)),
-        MenuDivider(),
-        option("inline", "diff-inline", "Inline diff", this.diffLayout === "inline", (cx) => this.setDiffLayout("inline", cx)),
-        option("split", "diff-split", "Side by side diff", this.diffLayout === "split", (cx) => this.setDiffLayout("split", cx)),
-        MenuDivider(),
-        option("fluid-staging", "staging-fluid", "Fluid staging", this.staging !== "split", (cx) => this.setStaging("fluid", cx)),
-        option("split-staging", "staging-split", "Split view staging", this.staging === "split", (cx) => this.setStaging("split", cx)),
-      ],
-    });
+    return [
+      option("flat", "flat", "Flat list (single column)", this.view === "flat", (cx) => this.setView("flat", cx)),
+      option("columns", "columns", "Flat list (multiple columns)", this.view === "columns", (cx) => this.setView("columns", cx)),
+      option("tree", "tree", "Tree view", this.view === "tree", (cx) => this.setView("tree", cx)),
+      MenuDivider(),
+      option("inline", "diff-inline", "Inline diff", this.diffLayout === "inline", (cx) => this.setDiffLayout("inline", cx)),
+      option("split", "diff-split", "Side by side diff", this.diffLayout === "split", (cx) => this.setDiffLayout("split", cx)),
+      MenuDivider(),
+      option("fluid-staging", "staging-fluid", "Fluid staging", this.staging !== "split", (cx) => this.setStaging("fluid", cx)),
+      option("split-staging", "staging-split", "Split view staging", this.staging === "split", (cx) => this.setStaging("split", cx)),
+    ];
   },
 
   renderMore() {
-    const option = (group, choice, selected, set) =>
-      MenuOption({
-        id: `${group}-${choice.id}`,
-        icon: choice.icon,
-        label: choice.label,
-        selected,
-        onClick: (cx) => {
-          this.menuOpen = false;
-          set(choice.id, cx);
-          cx.notify();
-        },
-      });
     return Menu({
       id: "more",
       open: this.menuOpen,
@@ -249,17 +231,8 @@ export const sidebarMethods = {
         cx.notify();
       },
       trigger: IconButton({ id: "more-trigger", icon: "more", label: "Options" }),
-      children: [
-        MenuLabel("Changes"),
-        ...VIEWS.map((v) =>
-          option("view", v, this.view === v.id, (id, cx) => this.setView(id, cx)),
-        ),
-        MenuDivider(),
-        MenuLabel("Diff"),
-        ...LAYOUTS.map((l) =>
-          option("layout", l, this.diffLayout === l.id, (id, cx) => this.setDiffLayout(id, cx)),
-        ),
-      ],
+      width: 250,
+      children: this.viewOptions(() => { this.menuOpen = false; }),
     });
   },
 
