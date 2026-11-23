@@ -13,9 +13,10 @@
 // session files (~/.cache/over9k/agents/<terminal>.json); prompts.py reads it.
 // Followed: the agent you're in, else the last one you were in.
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { theme, exec, home, appHome, focused, agents, panes, readTextFile, hc } from "herdr";
+import { theme, exec, home, appHome, focused, agents, panes, readTextFile, hc, run, spaces, setShared } from "herdr";
+import { loadConvos, repoRoot, ago, AGENT_ICON } from "./convos.js";
 
 // Python 3 runs as "python3", else "python" (as on Windows): found once.
 let PY = null;
@@ -23,6 +24,8 @@ const python = (args) => (PY ??= exec("python3", ["-c", "1"]).then((r) => (r?.co
   .then((p) => exec(p, args));
 
 const PAGE = 40;
+const RESUME = { claude: 'exec claude --resume "$1"', agy: 'exec agy --conversation "$1"', codex: 'exec codex resume "$1"' };
+const ICON = (n) => `mods/vnh-prompts/${n}.svg`;
 const READER = () => `${appHome()}/mods/vnh-prompts/prompts.py`;
 const pad = (n) => String(n).padStart(2, "0");
 
@@ -70,8 +73,12 @@ export default class Prompts extends View {
     this.note = "Open an agent to see its prompts";
     this.shown = PAGE; // how many cards are drawn (newest first); a long session has hundreds, and drawing them all ran past the render time limit
     this.memo = new Map(); // per prompt: its text and reply as plain words, worked out once
+    // VNH: a toggle in the header switches between the timeline of the agent in view and the list of this repository's conversations.
+    let saved = null; try { saved = localStorage.getItem("vnh-timeline-mode"); } catch {}
+    this.mode = saved === "convos" ? "convos" : "timeline";
+    this.convos = null; this.convosAt = 0; this.convosBusy = false; this.convosRoot = null; this.convoShown = 50; this.curSession = null; this.rootOf = new Map();
     this.follow(cx);
-    cx.timer.every(2000, (cx) => { this.follow(cx); if (agents().find((x) => x.address === this.agent)?.status === "working") this.readLive(cx); else this.live = null; });
+    cx.timer.every(2000, (cx) => { this.follow(cx); if (this.mode === "convos") this.loadConvos(cx); if (agents().find((x) => x.address === this.agent)?.status === "working") this.readLive(cx); else this.live = null; });
   }
 
   // The agent you're in (else the last one), its transcript, re-read when it grows.
@@ -118,6 +125,70 @@ export default class Prompts extends View {
     });
   }
 
+  setMode(mode, cx) {
+    this.mode = mode;
+    try { localStorage.setItem("vnh-timeline-mode", mode); } catch {}
+    if (mode === "convos") this.loadConvos(cx, true);
+    cx.notify();
+  }
+
+  // This repository's conversations: the git top level of the folder of the agent in view (else of the focused terminal), read at most
+  // every 30 s, and at once when the repository changes.
+  loadConvos(cx, force = false) {
+    if (this.convosBusy) return;
+    const f = focused();
+    const cwd = panes().find((x) => x.terminal === (this.agent ?? f?.terminal))?.cwd ?? panes().find((x) => x.terminal === f?.terminal)?.cwd ?? null;
+    if (!cwd) return;
+    this.convosBusy = true;
+    cx.spawn(async (cx) => {
+      try {
+        let root = this.rootOf.get(cwd);
+        if (root === undefined) { root = await repoRoot(cwd); this.rootOf.set(cwd, root); }
+        if (!root) { this.convos = []; this.convosRoot = null; cx.notify(); return; }
+        if (!force && root === this.convosRoot && this.convos && Date.now() - this.convosAt < 30000) return;
+        if (root !== this.convosRoot) { this.convos = null; this.convoShown = 50; }
+        this.convosRoot = root;
+        // The conversation the agent in view is in, to mark it.
+        const st = this.agent ? await readTextFile(`${home()}/.cache/herdr-status/${this.agent}.json`).then((x) => JSON.parse(x ?? "null")).catch(() => null) : null;
+        this.curSession = st?.session ?? null;
+        const list = await loadConvos(root, (part) => { if (root === this.convosRoot) { this.convos = part; cx.notify(); } });
+        if (root === this.convosRoot) { this.convos = list; this.convosAt = Date.now(); }
+        cx.notify();
+      } finally { this.convosBusy = false; }
+    });
+  }
+
+  // A click on a conversation: its preview in a tab of its own (one per space; another click switches it).
+  openPreview(s) {
+    const space = spaces().find((x) => x.active);
+    if (!space) return;
+    const cur = space.tabs.find((t) => t.active)?.id ?? null;
+    const doc = { agent: s.agent ?? "claude", id: s.id, f: s.f ?? "", cwd: s.cwd ?? "", title: s.title ?? "", branch: s.branch ?? "", n: s.n ?? 0, prompt: s.prompt ?? "", back: cur };
+    const ids = new Set(space.tabs.map((t) => t.id));
+    const pv = panes().find((p) => p.mod === "vnh-convo" && ids.has(p.tab));
+    if (pv) {
+      if (cur === pv.tab) doc.back = null;
+      setShared("vnh.convo.open", { pane: pv.pane, doc, n: Date.now() });
+      run("tab.select", { id: pv.tab });
+    } else run("tab.new", { space: space.id, name: (doc.title || doc.prompt || "Conversation").slice(0, 40), mod: "vnh-convo", props: doc });
+  }
+
+  // The ▶ on a row: back to the pane that already runs it, else start it again in a new tab at its folder.
+  async resumeConvo(s) {
+    for (const a of agents()) {
+      const st = await readTextFile(`${home()}/.cache/herdr-status/${a.address}.json`).then((x) => JSON.parse(x ?? "null")).catch(() => null);
+      if (st?.session && st.session === s.id) {
+        const p = panes().find((x) => x.terminal === a.address);
+        const sp = spaces().find((x) => (x.tabs ?? []).some((t) => t.id === p?.tab));
+        if (sp) run("space.select", { id: sp.id });
+        if (p) { run("tab.select", { id: p.tab }); run("pane.focus", { pane: p.pane }); }
+        return;
+      }
+    }
+    const space = spaces().find((x) => x.active);
+    run("tab.new", { space: space?.id, folder: s.cwd ?? undefined, name: (s.title || s.prompt || s.agent || "claude").slice(0, 40), argv: ["sh", "-lc", RESUME[s.agent ?? "claude"] ?? RESUME.claude, "resume", s.id] });
+  }
+
   // `plain(text)` and the reply's summary cost a few regular expressions over text that can be long; they are worked out once per prompt
   // (again only when its reply grew), not on every draw.
   decorate(p) {
@@ -150,8 +221,56 @@ export default class Prompts extends View {
     return a?.tab_name || a?.program?.name || "";
   }
 
+  // The switch of the header: shows what a click goes to.
+  modeButton(t) {
+    const convos = this.mode === "convos";
+    return div().id("tl-mode").size(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+      .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .tooltip(convos ? "Timeline of this conversation" : "Conversations of this repository")
+      .accessibility_label(convos ? "Show the timeline" : "Show the conversations")
+      .on_click((_e, cx) => this.setMode(convos ? "timeline" : "convos", cx))
+      .child(svg(ICON(convos ? "timeline" : "convos")).size(15).flex_none());
+  }
+
+  renderConvos(t) {
+    const list = this.convos, root = this.convosRoot;
+    const rows = (list ?? []).slice(0, this.convoShown).map((s, i) => {
+      const agent = s.agent ?? "claude", cur = Boolean(this.curSession) && s.id === this.curSession;
+      const title = (s.title || s.prompt || s.id).replace(/\s+/g, " ").trim();
+      return h_flex().id(`convo-${s.id}`).flex_none().px(10).py(7).gap(9).items_center().rounded(8).cursor_pointer().hover((x) => x.bg(t.hover))
+        .on_click((_e, cx) => { this.openPreview(s); cx.notify(); })
+        .child(image(AGENT_ICON[agent] ?? AGENT_ICON.claude).size(14).flex_none())
+        .child(v_flex().flex_1().min_w(0).gap(1)
+          .child(div().truncate().text_size(12.5).text_color(t.foreground).when(cur, (el) => el.font_semibold()).child(title))
+          .child(div().truncate().text_size(11).text_color(t.dim)
+            .child([ago(s.m), s.n ? `${s.n} prompt${s.n > 1 ? "s" : ""}` : "", s.branch ?? ""].filter(Boolean).join(" · "))))
+        .when(cur, (el) => el.child(div().size(7).flex_none().rounded(4).bg(t.accent).tooltip("The conversation you are in")))
+        .child(div().id(`resume-${s.id}`).size(24).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim)
+          .hover((x) => x.bg(t.raised).text_color(t.accent)).tooltip("Resume this conversation")
+          .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .on_click((_e, cx) => { cx.stop_propagation(); this.resumeConvo(s); })
+          .child(svg(ICON("play")).size(11).flex_none()));
+    });
+    return v_flex().id("over9k-prompts").size_full().min_h(0).rounded(10).overflow_hidden()
+      .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+      .child(h_flex().h(42).flex_none().px(10).gap(8).items_center().border_b(1).border_color(t.border)
+        .child(this.modeButton(t))
+        .when((list?.length ?? 0) > 0, (el) => el.child(div().flex_none().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted)
+          .child(`${list.length} conversation${list.length > 1 ? "s" : ""}`)))
+        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(root ? root.split("/").pop() : "")))
+      .when(list === null, (el) => el.child(div().px(14).py(10).text_size(12).text_color(t.dim).child("Reading the conversations…")))
+      .when(list !== null && list.length === 0, (el) => el.child(div().px(14).py(10).text_size(12).text_color(t.dim).child(root ? "No conversations in this repository yet" : "Open an agent in a repository to see its conversations")))
+      .child(v_flex().id("convos-scroll").flex_1().min_h(0).overflow_y_scrollbar().px(6).pt(6).pb(8).gap(1)
+        .children(rows)
+        .when((list?.length ?? 0) > this.convoShown, (el) => el.child(div().id("convos-more").h(32).flex_none().mx(4).flex().items_center().justify_center().rounded(8).cursor_pointer()
+          .text_size(12).text_color(t.muted).hover((x) => x.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => { this.convoShown += 50; cx.notify(); })
+          .child(`Show ${Math.min(50, list.length - this.convoShown)} older · ${list.length - this.convoShown} not shown`))));
+  }
+
   render(cx) {
     const t = theme();
+    if (this.mode === "convos") return this.renderConvos(t);
     const list = this.prompts, view = list.slice(0, this.shown);
     const working = agents().find((x) => x.address === this.agent)?.status === "working";
     const item = (p, i) => {
@@ -208,7 +327,8 @@ export default class Prompts extends View {
         if (this.open != null && e.key !== "enter" && e.key !== "escape") this.open = this.at;
         cx.notify();
       })
-      .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
+      .child(h_flex().h(42).flex_none().pl(10).pr(14).gap(8).items_center().border_b(1).border_color(t.border)
+        .child(this.modeButton(t))
         // VNH: no "Timeline" title here; the tab bar's Timeline button already names the panel.
         .when(list.length > 0, (el) => el.child(div().flex_none().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted)
           .child(`${list.length} prompt${list.length > 1 ? "s" : ""}`)))
