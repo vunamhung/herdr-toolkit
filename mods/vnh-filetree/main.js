@@ -15,10 +15,22 @@ const ICON = (name) => `mods/${NAME}/${name}.svg`;
 // VNH: a file in Helix, in a tab of its own, started in the project's root (not in the file's folder: the tab's folder is what the other
 // panels follow): Space on a file, or a press on the blank after its name (see onEye). hx-open.py starts it so that Esc quits
 // Helix, shows the tab you came from again and closes this one.
-function openInHelix(abs, on, root) {
+async function openInHelix(abs, on, root) {
   if (on) { notify({ title: "Helix opens the files of this computer only", level: "info", timeout: 3000 }); return; }
   const space = spaces().find((s) => s.active);
   if (!space || !abs) return;
+  // One Helix tab per space: when it is running (hx-open.py registers it), the file is opened in it (Alt-o there is `:open` of the path
+  // written to open-<terminal>) and its tab is shown; else a tab is started.
+  try {
+    const reg = JSON.parse((await readTextFile(`${home()}/.cache/vnh-hx/registry.json`).catch(() => null)) ?? "{}");
+    const term = reg[space.id], pane = term ? panes().find((p) => p.terminal === term) : null;
+    if (pane) {
+      await writeTextFile(`${home()}/.cache/vnh-hx/open-${term}`, abs);
+      await exec("sh", ["-c", 'exec "$HOME/.local/bin/hc" keys "$1" alt+o', "x", term]);
+      run("tab.select", { id: pane.tab });
+      return;
+    }
+  } catch {}
   const back = space.tabs.find((t) => t.active)?.id ?? "";
   run("tab.new", { space: space.id, folder: root || abs.slice(0, abs.lastIndexOf("/")) || "/", name: abs.split("/").pop().slice(0, 40),
     argv: ["sh", "-lc", 'exec python3 -I "$1" "$2" "$3" "$4"', "hx", `${appHome()}/mods/vnh-filetree/hx-open.py`, abs, back, String(theme().background ?? "")] });
