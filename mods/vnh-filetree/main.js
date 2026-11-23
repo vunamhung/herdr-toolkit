@@ -425,6 +425,10 @@ export default class FileTree extends View {
     // VNH: Recent and the follow-scroll belong to the agent you are looking at (its Claude session), not to every agent in the repo.
     this.mine = null; this.mineKey = ""; this.mineAt = 0;
     this.agyLast = new Map(); this.agyBusy = false;
+    // VNH: the files each agent session wrote, published for the Changes panel's "only this session's files".
+    this.sessionFiles = new Map(); this.filesDirty = false;
+    for (const h of this.history) if (h.session && h.kind === "write") { if (!this.sessionFiles.has(h.session)) this.sessionFiles.set(h.session, new Set()); this.sessionFiles.get(h.session).add(h.abs); }
+    this.filesDirty = this.sessionFiles.size > 0;
     try { this.allAgents = localStorage.getItem("allAgents") === "1"; } catch { this.allAgents = false; }
     this.saved = new Map(); this.flashes = new Map(); this.bashStarts = new Map(); this.recent = [];
     this.sizes = new Map(); this.sizing = new Set(); this.visible = [];
@@ -997,6 +1001,11 @@ export default class FileTree extends View {
       const path = abs.replace(/\\/g, "/");
       this.flashes.set(path, { tone, at: now });
       this.history.push({ abs: path, kind: KIND[tone] ?? "write", at: now, session: session ?? null });
+      if (session && tone === "orange") {
+        if (!this.sessionFiles.has(session)) this.sessionFiles.set(session, new Set());
+        this.sessionFiles.get(session).add(path);
+        this.filesDirty = true;
+      }
       const rel = relTo(this.root, abs);
       if (rel) inside.push(rel);
     }
@@ -1060,6 +1069,12 @@ export default class FileTree extends View {
   tick(cx) {
     const now = Date.now();
     let dirty = false;
+    if (this.filesDirty) {
+      this.filesDirty = false;
+      const out = {};
+      for (const [sid, set] of [...this.sessionFiles].slice(-12)) out[sid] = [...set].slice(-400);
+      setShared("vnh.session-files", out);
+    }
     this.readMine().then(() => { if (this.dirtyMine) { this.dirtyMine = false; cx.notify(); } }).catch(() => {});
     for (const [p, v] of this.flashes) {
       const age = now - v.at;

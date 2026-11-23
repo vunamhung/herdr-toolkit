@@ -10,7 +10,7 @@
 // but the token colours: syntax.js colours a diff's code, and Better Files has the same file.
 import { View } from "gpui-kit";
 import { TextareaState } from "gpui-base";
-import { props, shared, setShared, nextCommand, layout, run, notify, closeOverlay, exec, home } from "herdr";
+import { props, shared, setShared, nextCommand, layout, run, notify, closeOverlay, exec, home, focused, panes, agents, readTextFile } from "herdr";
 import { loadSettings, duration } from "./settings.js";
 import { followFileIcons } from "./file-icons.js";
 import { panelCommands } from "./panel.js";
@@ -65,6 +65,9 @@ class BetterChanges extends View {
       shared("better-changes.diff-layout") ??
       (localStorage.getItem("diff-layout") === "split" ? "split" : "inline");
     if (this.mode === "sidebar") setShared("better-changes.diff-layout", this.diffLayout);
+    // VNH: "only this session's files" (⋮ menu): the Changes list keeps what the agent in view wrote.
+    try { this.sessionOnly = localStorage.getItem("vnh-session-only") === "1"; } catch { this.sessionOnly = false; }
+    this.mine = null; this.mineKey = ""; this.mineAt = 0;
     this.menuOpen = false;
     this.menuFocus = cx.focus_handle();
     this.viewMenuFocus = cx.focus_handle(); // VNH: the view dropdown (renderViewMenu)
@@ -173,6 +176,7 @@ class BetterChanges extends View {
   command(command, cx) {
     if (command === "refresh") this.refreshAll(cx);
     if (command === "generate") this.generateMessage(cx); // VNH: ⌥S (keys.json), the ✨ button
+    if (command === "session-only") this.setSessionOnly(!this.sessionOnly, cx);
     if (command === "changes" || command === "commit" || command === "pr") this.setTab(command, cx);
     if (command === "flat" || command === "tree" || command === "columns") this.setView(command, cx);
     if (command === "inline" || command === "split") this.setDiffLayout(command, cx);
@@ -212,7 +216,25 @@ class BetterChanges extends View {
     } else notify({ title: "Couldn't undo", body: (res?.stderr || "").trim().slice(0, 200) || "git apply failed (the files changed since?)", level: "error", timeout: 7000 });
   }
 
+  // The Claude / agy session(s) of the agent in the focused pane (with a shell focused: of the agents of its tab), from the status files.
+  async readMine(cx) {
+    const f = focused();
+    if (!f?.tab) return;
+    const fp = f.pane ? panes().find((p) => p.pane === f.pane) : null;
+    const terms = fp?.status && fp.terminal ? [fp.terminal] : agents().filter((a) => a.tab === f.tab).map((a) => a.address);
+    const key = terms.join(","), now = Date.now();
+    if (key === this.mineKey && now - this.mineAt < 4000) return;
+    this.mineKey = key; this.mineAt = now;
+    const sessions = [];
+    for (const t of terms) {
+      const text = await readTextFile(`${home()}/.cache/herdr-status/${t}.json`).catch(() => null);
+      try { const id = JSON.parse(text ?? "{}").session; if (id) sessions.push(id); } catch {}
+    }
+    if (sessions.join() !== (this.mine ?? []).join()) { this.mine = sessions.length ? sessions : null; cx.notify(); }
+  }
+
   follow(cx) {
+    if (this.mode === "sidebar" && this.sessionOnly && this.tab === "changes") this.readMine(cx).catch(() => {});
     const style = shared("better-changes.diff-layout");
     if (style && style !== this.diffLayout) {
       this.diffLayout = style;

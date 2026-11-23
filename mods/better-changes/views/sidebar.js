@@ -90,6 +90,21 @@ export const sidebarMethods = {
     cx.notify();
   },
 
+  setSessionOnly(on, cx) {
+    this.sessionOnly = on;
+    localStorage.setItem("vnh-session-only", on ? "1" : "0");
+    cx.notify();
+  },
+
+  // VNH: the files the agent in view wrote, as paths relative to the repository, or null when nothing is filtered (the option is off, or
+  // no agent is in view). Fed by the Files panel (vnh-filetree), which sees every Claude and agy write.
+  sessionPaths() {
+    if (!this.sessionOnly || !this.mine || !this.root) return null;
+    const all = shared("vnh.session-files") ?? {}, root = `${this.root.replace(/\/+$/, "")}/`, set = new Set();
+    for (const sid of this.mine) for (const abs of all[sid] ?? []) if (abs.startsWith(root)) set.add(abs.slice(root.length));
+    return set;
+  },
+
   setView(view, cx) {
     this.view = view;
     localStorage.setItem("view", view);
@@ -244,6 +259,8 @@ export const sidebarMethods = {
       option("inline", "diff-inline", "Inline diff", this.diffLayout === "inline", (cx) => this.setDiffLayout("inline", cx)),
       option("split", "diff-split", "Side by side diff", this.diffLayout === "split", (cx) => this.setDiffLayout("split", cx)),
       MenuDivider(),
+      option("session-only", "check", "Only this session's files", this.sessionOnly, (cx) => this.setSessionOnly(!this.sessionOnly, cx)),
+      MenuDivider(),
       option("fluid-staging", "staging-fluid", "Fluid staging", this.staging !== "split", (cx) => this.setStaging("fluid", cx)),
       option("split-staging", "staging-split", "Split view staging", this.staging === "split", (cx) => this.setStaging("split", cx)),
     ];
@@ -293,15 +310,20 @@ export const sidebarMethods = {
   renderChanges() {
     const list = v_flex().id("changes-list").flex_1().min_h(0).overflow_y_scrollbar().p(6);
     if (this.error) return list.child(Message(this.error, true));
-    const conflicts = this.files.filter((f) => f.conflict);
-    const unstaged = this.files.filter((f) => f.unstaged && !f.conflict);
-    const staged = this.files.filter((f) => f.staged);
-    const committed = this.committed?.total ? this.committed : null;
+    const mine = this.sessionPaths(), keep = (arr) => (mine ? arr.filter((f) => mine.has(f.path)) : arr);
+    const files = keep(this.files);
+    const conflicts = files.filter((f) => f.conflict);
+    const unstaged = files.filter((f) => f.unstaged && !f.conflict);
+    const staged = files.filter((f) => f.staged);
+    const own = mine && this.committed?.total ? keep(this.committed.files) : null;
+    const committed = own ? (own.length ? { ...this.committed, files: own, total: own.length } : null) : this.committed?.total ? this.committed : null;
+    if (mine) list.child(this.sessionChip(files.length));
+    else if (this.sessionOnly) list.child(div().px(8).h(22).flex().items_center().text_size(TEXT.caption).text_color(theme().dim).child("Only this session's files: no agent in view, showing every file"));
     const nothing = !conflicts.length && !unstaged.length && !staged.length && !committed;
     // VNH: split view staging, as Fork's: working changes above, the staging area below.
     if (this.staging === "split" && !nothing) return this.renderSplitStaging(list, conflicts, unstaged, staged, committed);
     if (nothing)
-      list.child(Message(this.loading || !this.root ? "Loading changes…" : "No changes"));
+      list.child(Message(this.loading || !this.root ? "Loading changes…" : mine ? "None of this session's files has changes" : "No changes"));
     this.groupsDrawn = 0;
     this.addGroup(list, "conflict", "Conflicts", conflicts);
     this.addGroup(list, "staged", "Staged", staged);
@@ -319,6 +341,17 @@ export const sidebarMethods = {
     if (this.total > limit)
       list.child(Message(`Showing the first ${limit.toLocaleString()} changed files.`));
     return v_flex().id("changes").flex_1().min_h(0).child(list).child(this.renderCommitBox());
+  },
+
+  // VNH: says the list is filtered, and turns it off with a click.
+  sessionChip(shown) {
+    const t = theme(), total = this.files.length;
+    return h_flex().id("session-chip").flex_none().h(26).px(8).mb(4).gap(6).items_center().rounded(6).cursor_pointer()
+      .bg(t.hover).text_size(TEXT.caption).text_color(t.muted).tooltip("Show every changed file")
+      .on_click((_e, cx) => this.setSessionOnly(false, cx))
+      .child(Icon("check", 12).text_color(t.accent))
+      .child(div().flex_1().min_w(0).truncate().child(`Only this session's files · ${shown} of ${total}`))
+      .child(Icon("close", 12).text_color(t.dim));
   },
 
   renderSplitStaging(top, conflicts, unstaged, staged, committed) {
