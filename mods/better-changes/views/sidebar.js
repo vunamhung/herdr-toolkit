@@ -103,9 +103,9 @@ export const sidebarMethods = {
   // no agent is in view). Fed by the Files panel (vnh-filetree), which sees every Claude and agy write.
   sessionPaths() {
     if (!this.sessionOnly || !this.mine || !this.root) return null;
-    const all = shared("vnh.session-files") ?? {}, root = `${this.root.replace(/\/+$/, "")}/`, set = new Set(this.sessionSet ?? []);
-    for (const sid of this.mine) for (const abs of all[sid] ?? []) if (abs.startsWith(root)) set.add(abs.slice(root.length));
-    return set;
+    // Only what the ledger join says (main.js, readSessionFiles): the Files panel's older log of "paths this session wrote" has no times,
+    // so a file another agent wrote later would still be counted.
+    return this.sessionSet ?? new Set();
   },
 
   setView(view, cx) {

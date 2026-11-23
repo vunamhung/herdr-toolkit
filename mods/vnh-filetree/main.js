@@ -1071,12 +1071,6 @@ export default class FileTree extends View {
   tick(cx) {
     const now = Date.now();
     let dirty = false;
-    if (this.filesDirty) {
-      this.filesDirty = false;
-      const out = {};
-      for (const [sid, set] of [...this.sessionFiles].slice(-12)) out[sid] = [...set].slice(-400);
-      setShared("vnh.session-files", out);
-    }
     this.readMine().then(() => { if (this.dirtyMine) { this.dirtyMine = false; cx.notify(); } }).catch(() => {});
     for (const [p, v] of this.flashes) {
       const age = now - v.at;
