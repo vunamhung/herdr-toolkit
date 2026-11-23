@@ -1056,9 +1056,11 @@ export default class FileTree extends View {
     if (key === this.mineKey && now - this.mineAt < 5000) return;
     this.mineKey = key; this.mineAt = now;
     const sessions = new Set();
+    this.lastSession ??= new Map(); // a half-written or session-less read keeps the session last seen (no flicker)
     for (const t of terms) {
       const text = await readTextFile(`${home()}/.cache/herdr-status/${t}.json`).catch(() => null);
-      try { const id = JSON.parse(text ?? "{}").session; if (id) sessions.add(id); } catch {}
+      try { const id = JSON.parse(text ?? "{}").session; if (id) this.lastSession.set(t, id); } catch {}
+      if (this.lastSession.has(t)) sessions.add(this.lastSession.get(t));
     }
     const next = sessions.size ? sessions : terms.length ? new Set() : null; // an agent without a session yet has nothing
     if ((next?.size ?? 0) !== (this.mine?.size ?? 0) || [...(next ?? [])].some((x) => !this.mine?.has(x))) { this.mine = next; this.agoAt = 0; this.dirtyMine = true; }

@@ -302,14 +302,18 @@ class BetterChanges extends View {
     const key = terms.join(","), now = Date.now();
     if (key === this.mineKey && now - this.mineAt < 4000) return;
     this.mineKey = key; this.mineAt = now;
+    // A status file is rewritten by the agent all the time: a read that catches it half written, or without the session for a moment,
+    // keeps the session last seen for that terminal (so the list doesn't flash empty); a new session replaces it.
+    this.lastSession ??= new Map();
     const sessions = [];
     for (const t of terms) {
       const text = await readTextFile(`${home()}/.cache/herdr-status/${t}.json`).catch(() => null);
-      try { const id = JSON.parse(text ?? "{}").session; if (id) sessions.push(id); } catch {}
+      try { const id = JSON.parse(text ?? "{}").session; if (id) this.lastSession.set(t, id); } catch {}
+      if (this.lastSession.has(t)) sessions.push(this.lastSession.get(t));
     }
     // An agent is in view but has no session yet (just started): it has written nothing, so the list is empty. No agent at all: no filter.
     const next = sessions.length ? sessions : terms.length ? [] : null;
-    if (next?.join() !== this.mine?.join() || Boolean(next) !== Boolean(this.mine)) { this.mine = next; this.sessionSet = null; this.sessionKey = ""; cx.notify(); }
+    if (next?.join() !== this.mine?.join() || Boolean(next) !== Boolean(this.mine)) { this.mine = next; this.sessionKey = ""; cx.notify(); } // the old set stays until the new one is read: no flash
   }
 
   // Asks SESSION_PY, at most every 6 s and when the session or the number of changed files changed.
@@ -323,8 +327,8 @@ class BetterChanges extends View {
       .then((r) => {
         if (r.code !== 0 || !this.isCurrent(context)) return;
         const out = JSON.parse(r.stdout.trim().split("\n").pop());
-        this.sessionSet = new Set(out.paths);
-        cx.notify();
+        const next = new Set(out.paths), same = this.sessionSet && next.size === this.sessionSet.size && [...next].every((p) => this.sessionSet.has(p));
+        if (!same) { this.sessionSet = next; cx.notify(); }
       })
       .catch(() => {})
       .finally(() => { this.sessionBusy = false; });
