@@ -123,6 +123,8 @@ export const pullsMethods = {
 
   openPr(pr, cx) {
     this.selectedPr = pr;
+    this.pendingPr = null;
+    this.saveUi();
     this.prDetail = null;
     this.prDetailError = null;
     this.prDetailLoading = true;
@@ -161,15 +163,18 @@ export const pullsMethods = {
 
   closePr(cx) {
     this.selectedPr = null;
+    this.pendingPr = null;
     this.prDetail = null;
     this.prCode = null;
     this.prToken++;
+    this.saveUi();
     cx.notify();
   },
 
   setPrFilter(filter, cx) {
     this.prFilter = filter;
     localStorage.setItem("vnh-pr-filter", filter);
+    this.saveUi();
     if (filter === "done") this.loadDone(cx);
     cx.notify();
   },

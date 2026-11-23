@@ -78,7 +78,9 @@ export const sidebarMethods = {
 
   setTab(tab, cx) {
     this.tab = tab;
+    this.pendingPr = this.pendingCommit = null;
     localStorage.setItem("tab", tab);
+    this.saveUi();
     if (tab === "commit") this.loadCommits(cx);
     if (tab === "pr") this.loadPulls(cx);
     cx.notify();
@@ -93,6 +95,7 @@ export const sidebarMethods = {
   setSessionOnly(on, cx) {
     this.sessionOnly = on;
     localStorage.setItem("vnh-session-only", on ? "1" : "0");
+    this.saveUi();
     cx.notify();
   },
 
@@ -1006,7 +1009,9 @@ export const sidebarMethods = {
           label: "Back to commits",
           onClick: (cx) => {
             this.selectedCommit = null;
+            this.pendingCommit = null;
             this.commitToken++;
+            this.saveUi();
             cx.notify();
           },
         }),

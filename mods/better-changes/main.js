@@ -316,6 +316,52 @@ class BetterChanges extends View {
     if (next?.join() !== this.mine?.join() || Boolean(next) !== Boolean(this.mine)) { this.mine = next; this.sessionKey = ""; cx.notify(); } // the old set stays until the new one is read: no flash
   }
 
+  // ── The panel's state, kept per tab (each agent / shell tab has its own) ──────────────────────────────────────────────
+  // Which sub-tab (Changes / Commits / PRs / Stashes), the session filter, the PR filter, the open PR and the open commit.
+  // Saved in localStorage under the id of the tab in view whenever one of them changes, put back when that tab is shown again.
+  uiStore() { try { return JSON.parse(localStorage.getItem("vnh-ui-by-tab") ?? "{}"); } catch { return {}; } }
+
+  saveUi() {
+    if (this.mode !== "sidebar" || !this.uiKey) return;
+    const all = this.uiStore();
+    all[this.uiKey] = { tab: this.tab, only: Boolean(this.sessionOnly), prf: this.prFilter ?? "all", pr: this.selectedPr?.number ?? this.pendingPr ?? null, commit: this.selectedCommit?.hash ?? this.pendingCommit ?? null, at: Date.now() };
+    const keys = Object.keys(all);
+    if (keys.length > 80) for (const k of keys.sort((a, b) => all[a].at - all[b].at).slice(0, keys.length - 80)) delete all[k];
+    try { localStorage.setItem("vnh-ui-by-tab", JSON.stringify(all)); } catch {}
+  }
+
+  // The tab in view changed: show its own state (a tab never seen keeps what is shown now, and starts from there).
+  applyUi(key, cx) {
+    const st = this.uiStore()[key];
+    this.uiKey = key;
+    if (!st) { this.saveUi(); return; }
+    this.tab = ["changes", "commit", "pr", "stash"].includes(st.tab) ? st.tab : "changes";
+    this.sessionOnly = Boolean(st.only);
+    this.prFilter = st.prf ?? "all";
+    this.selectedPr = null; this.prDetail = null; this.prCode = null; this.prToken = (this.prToken ?? 0) + 1;
+    this.selectedCommit = null; this.commitToken = (this.commitToken ?? 0) + 1;
+    this.pendingPr = st.pr ?? null; this.pendingCommit = st.commit ?? null; this.pendingAt = Date.now();
+    localStorage.setItem("tab", this.tab);
+    if (this.tab === "commit") this.loadCommits(cx);
+    if (this.tab === "pr") { this.loadPulls(cx); if (this.prFilter === "done") this.loadDone(cx); }
+    this.resolvePending(cx);
+    cx.notify();
+  }
+
+  // The open PR / commit of a saved state is opened once its list is there (they are read a moment after the switch).
+  resolvePending(cx) {
+    if (!this.pendingPr && !this.pendingCommit) return;
+    if (Date.now() - this.pendingAt > 20000) { this.pendingPr = this.pendingCommit = null; return; }
+    if (this.pendingPr && this.tab === "pr") {
+      const pr = [...(this.prs ?? []), this.prBranch, ...(this.prsDone ?? [])].find((p) => p && p.number === this.pendingPr);
+      if (pr) { this.pendingPr = null; this.openPr(pr, cx); }
+    }
+    if (this.pendingCommit && this.tab === "commit") {
+      const c = this.commits.find((x) => x.hash === this.pendingCommit);
+      if (c) { this.pendingCommit = null; this.openCommit(c, cx); }
+    }
+  }
+
   // Asks SESSION_PY, at most every 6 s and when the session or the number of changed files changed.
   readSessionFiles(cx) {
     if (this.sessionBusy || !this.root || this.on || !this.mine) return;
@@ -335,6 +381,11 @@ class BetterChanges extends View {
   }
 
   follow(cx) {
+    if (this.mode === "sidebar") {
+      const tab = focused()?.tab; // the Changes panel itself has no tab: it keeps the last one
+      if (tab && tab !== this.uiKey) this.applyUi(tab, cx);
+      this.resolvePending(cx);
+    }
     if (this.mode === "sidebar" && this.sessionOnly && this.tab === "changes") { this.readMine(cx).catch(() => {}); this.readSessionFiles(cx); }
     const style = shared("better-changes.diff-layout");
     if (style && style !== this.diffLayout) {

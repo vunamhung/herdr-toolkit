@@ -501,6 +501,8 @@ export const gitMethods = {
     const context = this.context;
     const token = ++this.commitToken;
     this.selectedCommit = commit;
+    this.pendingCommit = null;
+    this.saveUi?.();
     this.commitFiles = [];
     this.commitFilesError = null;
     this.commitFilesLoading = true;
