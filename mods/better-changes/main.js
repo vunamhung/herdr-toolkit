@@ -20,21 +20,31 @@ import { diffMethods } from "./views/diff.js";
 import { paneHeaderMethods } from "./views/pane-header.js";
 import { pullsMethods } from "./views/pulls.js";
 
-// VNH: which of the changed files the agent session(s) in view wrote, for "only this session's files". Run in the repository:
-// the exact paths of the session's Write / Edit / NotebookEdit tool calls (its sub-agents' too: they keep their own transcripts), the
-// files changed while one of its shell commands ran (a script, sed, a formatter: the transcript times each one), and agy's edit_file /
-// write_file steps. A file changed after the session's last activity (its last transcript record; agy's conversation file time) is not
-// its: another agent wrote it. Prints {paths: [relative to the repository, still changed]}.
-const SESSION_PY = String.raw`import sys, os, re, json, glob, subprocess, sqlite3, datetime
+// VNH: which of the changed files the agent(s) in view wrote, for "only this session's files". Run in the repository. A file's modification
+// time says when it was written; the ledger (vnh-agents/ledger.js: when each agent was working, in which folder) says who was active
+// then. One agent: it is that agent's. Several at once: the agents' own records break the tie (a Claude transcript's Write / Edit time and
+// shell command windows, agy's edit_file / write_file steps), and what stays undecided counts for all of them. Nobody working: a hand
+// edit, nobody's. Before the ledger began, the agents' records alone decide. Those records are read incrementally (a cache per file).
+// Prints {paths: [relative to the repository, still changed]}.
+const SESSION_PY = String.raw`import sys, os, re, json, glob, subprocess, sqlite3, datetime, hashlib, time
 home = os.path.expanduser("~")
 root = os.getcwd()
-sids = [a for a in sys.argv[1:] if re.fullmatch(r"[0-9a-f-]{36}", a)]
+LEDGER = os.environ.get("VNH_LEDGER_DIR") or home + "/.local/state/herdr-ledger"
+CACHE = os.environ.get("VNH_LEDGER_CACHE") or home + "/.cache/vnh-ledger"
+now = time.time()
+mine_ids = set()           # the agent(s) in view: session ids, and "t:<terminal>" for a terminal whose session is not known yet
+for a in sys.argv[1:]:
+    if a.startswith("s:") and re.fullmatch(r"[0-9a-f-]{36}", a[2:]): mine_ids.add(a[2:])
+    elif a.startswith("t:") and re.fullmatch(r"[A-Za-z0-9_-]+", a[2:]): mine_ids.add(a)
 WRITE = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+top = root.rstrip("/") + "/"
+rel = lambda q: q[len(top):] if isinstance(q, str) and q.startswith(top) else None
 
 def stamp(s):
     try: return datetime.datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
     except Exception: return None
 
+# ── what is changed now, and when each file was last written ───────────────────────────────────────────────────────────────
 changed = {}
 r = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], capture_output=True)
 for ent in r.stdout.split(b"\0"):
@@ -43,45 +53,95 @@ for ent in r.stdout.split(b"\0"):
     try: changed[p] = os.lstat(os.path.join(root, p)).st_mtime
     except OSError: changed[p] = None
 
-top = root.rstrip("/") + "/"
-rel = lambda q: q[len(top):] if isinstance(q, str) and q.startswith(top) else None
-mine = set()
-for sid in sids:
-    exact = {}          # relative path -> time of the session's last Write / Edit of it (None: unknown)
-    wins = []           # (from, to) of each of its shell commands
-    last = 0.0          # when the session last did anything: a file changed after that is not its
+# ── the ledger: when each agent was working (written by the Agents list, vnh-agents) ───────────────────────────────────────
+runs, open_by_term, t0 = [], {}, None
+try:
+    for line in open(LEDGER + "/runs.jsonl", "rb"):
+        try: e = json.loads(line)
+        except Exception: continue
+        t = e.get("t")
+        if not isinstance(t, (int, float)): continue
+        t = t / 1000.0
+        if t0 is None: t0 = t
+        term, ev = e.get("term"), e.get("ev")
+        if ev == "boot":                     # Herdr was restarted: whatever was running then was not seen to stop
+            for k, v in list(open_by_term.items()): runs.append((v[0], t, v[1], v[2])); open_by_term.pop(k)
+        elif ev == "start":
+            if term in open_by_term: v = open_by_term.pop(term); runs.append((v[0], t, v[1], v[2]))
+            open_by_term[term] = (t, e.get("sid") or ("t:" + str(term)), e.get("cwd") or "")
+        elif ev == "stop" and term in open_by_term:
+            v = open_by_term.pop(term)
+            runs.append((v[0], t, e.get("sid") or v[1], v[2]))
+except OSError:
+    pass
+for term, v in open_by_term.items(): runs.append((v[0], now + 5, v[1], v[2]))   # still working
+
+def related(cwd):
+    if not cwd: return False
+    c = cwd.rstrip("/") + "/"
+    return c.startswith(top) or (top.startswith(c) and c.count("/") >= 4)
+
+# ── what each agent's own record says (Claude transcripts, agy conversation files), read incrementally ──────────────────────
+os.makedirs(CACHE, exist_ok=True)
+evidence_cache = {}
+def evidence(sid):
+    """{'exact': {rel path: last Write/Edit time or None}, 'wins': [(from, to)], 'last': time of the last record}"""
+    if sid in evidence_cache: return evidence_cache[sid]
+    ev = {"exact": {}, "wins": [], "last": 0.0}
+    if not re.fullmatch(r"[0-9a-f-]{36}", sid or ""):
+        evidence_cache[sid] = ev; return ev
     base = glob.glob("%s/.claude/projects/*/%s.jsonl" % (home, sid)) + glob.glob("%s/.ccs/instances/*/projects/*/%s.jsonl" % (home, sid))
-    # The sub-agents of a session (the Agent tool) keep their own transcripts beside it: their edits are the session's too.
     for path in base + [x for b in base for x in glob.glob(b[:-6] + "/subagents/*.jsonl")]:
-        starts = {}
+        key = CACHE + "/" + hashlib.sha1(path.encode()).hexdigest() + ".json"
+        st = {"off": 0, "exact": {}, "wins": [], "starts": {}, "last": 0.0}
         try:
-            with open(path, "rb") as f:
-                for line in f:
-                    if b'"tool_use' not in line and b'"tool_result"' not in line: continue
-                    try: e = json.loads(line)
-                    except Exception: continue
-                    t = stamp(e.get("timestamp"))
-                    if t: last = max(last, t)
-                    c = (e.get("message") or {}).get("content")
-                    if not isinstance(c, list): continue
-                    for it in c:
-                        if not isinstance(it, dict): continue
-                        if it.get("type") == "tool_use":
-                            i = it.get("input") or {}
-                            if it.get("name") in WRITE:
-                                q = rel(i.get("file_path") or i.get("notebook_path"))
-                                if q: exact[q] = max(exact.get(q) or 0, t or 0) or None
-                            elif it.get("name") == "Bash" and t and not i.get("run_in_background"):
-                                starts[it.get("id")] = t
-                        elif it.get("type") == "tool_result":
-                            s0 = starts.pop(it.get("tool_use_id"), None)
-                            if s0 and t and t - s0 < 180: wins.append((s0 - 1.0, t + 1.5))
+            st = json.load(open(key))
         except Exception:
             pass
+        try:
+            size = os.path.getsize(path)
+            if st["off"] > size: st = {"off": 0, "exact": {}, "wins": [], "starts": {}, "last": 0.0}
+            if size > st["off"]:
+                with open(path, "rb") as f:
+                    f.seek(st["off"]); data = f.read()
+                end = data.rfind(b"\n")
+                if end >= 0:
+                    for line in data[:end + 1].split(b"\n"):
+                        if b'"tool_use' not in line and b'"tool_result"' not in line: continue
+                        try: e = json.loads(line)
+                        except Exception: continue
+                        t = stamp(e.get("timestamp"))
+                        if t: st["last"] = max(st["last"], t)
+                        c = (e.get("message") or {}).get("content")
+                        if not isinstance(c, list): continue
+                        for it in c:
+                            if not isinstance(it, dict): continue
+                            if it.get("type") == "tool_use":
+                                i = it.get("input") or {}
+                                if it.get("name") in WRITE:
+                                    q = i.get("file_path") or i.get("notebook_path")
+                                    if isinstance(q, str): st["exact"][q] = t or 0
+                                elif it.get("name") == "Bash" and t and not i.get("run_in_background"):
+                                    st["starts"][it.get("id")] = t
+                            elif it.get("type") == "tool_result":
+                                s0 = st["starts"].pop(it.get("tool_use_id"), None)
+                                if s0 and t and t - s0 < 180: st["wins"].append([s0 - 1.0, t + 1.5])
+                    st["off"] += end + 1
+                    st["wins"] = st["wins"][-3000:]
+                    tmp = key + ".tmp"
+                    with open(tmp, "w") as f: json.dump(st, f)
+                    os.replace(tmp, key)
+        except Exception:
+            pass
+        for q, t in st["exact"].items():
+            r_ = rel(q)
+            if r_: ev["exact"][r_] = max(ev["exact"].get(r_) or 0, t or 0) or None
+        ev["wins"] += [tuple(w) for w in st["wins"]]
+        ev["last"] = max(ev["last"], st["last"])
     db = "%s/.gemini/antigravity-cli/conversations/%s.db" % (home, sid)
     if os.path.exists(db):
         try:
-            last = max(last, os.path.getmtime(db) + 20)   # agy's steps carry no time: the file's own is the bound
+            ev["last"] = max(ev["last"], os.path.getmtime(db) + 20)
             con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=1)
             for (pl,) in con.execute("select step_payload from steps where step_type=132"):
                 b = bytes(pl or b"")
@@ -92,21 +152,45 @@ for sid in sids:
                     if m:
                         try: q = rel(json.loads(b'"' + m.group(1) + b'"'))
                         except Exception: q = None
-                        if q: exact.setdefault(q, None)
+                        if q: ev["exact"].setdefault(q, None)
                     break
         except Exception:
             pass
-    for p, m in changed.items():
-        if m is None:
-            if p in exact: mine.add(p)
-            continue
-        if last and m > last + 5: continue                      # changed after the session stopped: someone else's
-        if p in exact:
-            ts = exact[p]
-            if ts is None or m <= ts + 3: mine.add(p)           # not touched again since its last edit
-        elif any(a <= m <= b for a, b in wins):
-            mine.add(p)
-print(json.dumps({"paths": sorted(mine), "all": len(changed)}))
+    evidence_cache[sid] = ev
+    return ev
+
+def proof(sid, p, m):
+    """2: the agent's own record puts a write of this file at this time; 1: one of its shell commands was running; 0: nothing."""
+    ev = evidence(sid)
+    if p in ev["exact"]:
+        ts = ev["exact"][p]
+        if ts and abs(ts - m) <= 4: return 2
+        if ts is None and (not ev["last"] or m <= ev["last"] + 5): return 1     # agy: the path is in its steps, with no time
+    if any(a <= m <= b for a, b in ev["wins"]): return 1
+    return 0
+
+# ── who wrote each changed file ─────────────────────────────────────────────────────────────────────────────────────────────
+out, shared, covered = set(), 0, 0
+for p, m in changed.items():
+    if m is None:                                    # deleted: only the agents' own records can tell
+        if any(p in evidence(s)["exact"] for s in mine_ids if not s.startswith("t:")): out.add(p)
+        continue
+    cands = {}
+    for a, b, sid, cwd in runs:
+        if a - 2 <= m <= b + 2 and related(cwd): cands[sid] = max(cands.get(sid, 0), 1)
+    if t0 is not None and m >= t0 - 2:
+        covered += 1
+        if cands:
+            scored = {s: proof(s, p, m) for s in cands}
+            best = max(scored.values())
+            owners = [s for s, v in scored.items() if v == best] if best else list(cands)
+            if len(owners) > 1: shared += 1
+        else:                                        # nobody was seen working: a status lag, or a hand edit
+            owners = [s for s in mine_ids if not s.startswith("t:") and proof(s, p, m) >= 2]
+    else:                                            # before the ledger began: the agents' own records alone
+        owners = [s for s in mine_ids if not s.startswith("t:") and proof(s, p, m) >= 1 and (not evidence(s)["last"] or m <= evidence(s)["last"] + 5)]
+    if mine_ids.intersection(owners): out.add(p)
+print(json.dumps({"paths": sorted(out), "all": len(changed), "covered": covered, "shared": shared, "runs": len(runs)}))
 `;
 const CONTEXT_POLL_MS = 300;
 const STATUS_POLL_MS = 10000;
@@ -381,7 +465,7 @@ class BetterChanges extends View {
     if (key === this.sessionKey && now - (this.sessionAt ?? 0) < 6000) return;
     this.sessionKey = key; this.sessionAt = now; this.sessionBusy = true;
     const { root, context } = this;
-    exec("python3", ["-I", "-c", SESSION_PY, ...this.mine], { cwd: root, timeout: 30000 })
+    exec("python3", ["-I", "-c", SESSION_PY, ...this.mine.map((x) => `s:${x}`), ...(this.mineTerms ?? []).map((x) => `t:${x}`)], { cwd: root, timeout: 30000 })
       .then((r) => {
         if (r.code !== 0 || !this.isCurrent(context)) return;
         const out = JSON.parse(r.stdout.trim().split("\n").pop());

@@ -5,6 +5,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
+import { trackRuns } from "./ledger.js";
 import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, dismiss, prune, isWoken, wokeAt, fresh, repairSpaces, statusOf } from "./sleep.js";
 
 // VNH: the spaces sidebar's colors for theme color names (same table as the shipped spaces mod).
@@ -171,6 +172,7 @@ export default class Agents extends View {
   // Stamps agents whose state changed. Done and idle count as one: looking at a
   // finished agent turns done into idle, and looking isn't the agent doing anything.
   track(list, now) {
+    try { trackRuns(list); } catch {} // VNH: when each agent was working (ledger.js)
     let dirty = false;
     for (const a of list) {
       const s = a.status === "done" ? "idle" : a.status;
