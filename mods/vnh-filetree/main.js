@@ -388,6 +388,9 @@ export default class FileTree extends View {
     this.view = VIEWS.some(([v]) => v === prefs.view) ? prefs.view : "tree";
     try { this.history = JSON.parse(localStorage.getItem("history") ?? "[]"); } catch { this.history = []; }
     this.agoAt = 0;
+    // VNH: Recent and the follow-scroll belong to the agent you are looking at (its Claude session), not to every agent in the repo.
+    this.mine = null; this.mineKey = ""; this.mineAt = 0;
+    try { this.allAgents = localStorage.getItem("allAgents") === "1"; } catch { this.allAgents = false; }
     this.saved = new Map(); this.flashes = new Map(); this.bashStarts = new Map(); this.recent = [];
     this.sizes = new Map(); this.sizing = new Set(); this.visible = [];
     this.chip = null; this.branchFlash = null; this.width = 320; this.query = ""; this.hits = null; this.searchSeq = 0;
@@ -839,6 +842,7 @@ export default class FileTree extends View {
     const seen = new Set(), out = [], subs = this.subList();
     for (let i = this.history.length - 1; i >= 0; i--) {
       const h = this.history[i];
+      if (!this.allAgents && h.session && !this.isMine(h.session)) continue; // another agent's
       let owner = this, rel = relTo(this.root, h.abs);
       if (!rel) for (const S of subs) { const x = relTo(S.root, h.abs); if (x) { owner = S; rel = x; break; } }
       const key = owner === this ? rel : rel && keyOf(owner.rid, rel);
@@ -887,9 +891,9 @@ export default class FileTree extends View {
     this.seenAt = Math.max(...fresh.map((e) => e.at));
     const mode = this.config.activity, reads = mode === "reads and writes" || mode === "reads", writes = mode === "reads and writes" || mode === "writes";
     for (const e of fresh) {
-      if (e.kind === "read" && reads) this.flash(e.paths ?? [], "purple", cx, e.paths?.length > 1 ? SEARCH_REVEAL : READ_REVEAL);
-      else if (e.kind === "write" && writes) this.flash(e.paths ?? [], "orange", cx, READ_REVEAL);
-      else if (e.kind === "mention") this.reveal(e.paths ?? [], cx);
+      if (e.kind === "read" && reads) this.flash(e.paths ?? [], "purple", cx, e.paths?.length > 1 ? SEARCH_REVEAL : READ_REVEAL, e.session);
+      else if (e.kind === "write" && writes) this.flash(e.paths ?? [], "orange", cx, READ_REVEAL, e.session);
+      else if (e.kind === "mention") { if (this.isMine(e.session)) this.reveal(e.paths ?? [], cx); }
       else if (e.kind === "bash-start") this.bashStarts.set(e.id, e.at);
       else if (e.kind === "bash-end" && writes) {
         const start = this.bashStarts.get(e.id) ?? e.at - 5000;
@@ -901,7 +905,7 @@ export default class FileTree extends View {
             const rel = relTo(this.root, p);
             if (rel && rel !== ".git" && !rel.startsWith(".git/") && !this.isIgnored(rel)) paths.add(p);
           }
-          this.flash([...paths].slice(0, 60), "orange", cx, READ_REVEAL);
+          this.flash([...paths].slice(0, 60), "orange", cx, READ_REVEAL, e.session);
         });
       } else if (e.kind === "git") this.gitEvent(e, cx);
     }
@@ -925,23 +929,25 @@ export default class FileTree extends View {
     }
   }
 
-  flash(paths, tone, cx, limit) {
+  flash(paths, tone, cx, limit, session) {
     const now = Date.now(), inside = [];
+    // The tree follows (opens folders, scrolls) only for the agent in view; the others still light their files.
+    const follow = this.config.follow && this.isMine(session);
     for (const abs of paths) {
       const path = abs.replace(/\\/g, "/");
       this.flashes.set(path, { tone, at: now });
-      this.history.push({ abs: path, kind: KIND[tone] ?? "write", at: now });
+      this.history.push({ abs: path, kind: KIND[tone] ?? "write", at: now, session: session ?? null });
       const rel = relTo(this.root, abs);
       if (rel) inside.push(rel);
     }
     if (this.history.length > 120) this.history = this.history.slice(-80);
     try { localStorage.setItem("history", JSON.stringify(this.history)); } catch {}
     // VNH: what Claude touched in another root opens there too.
-    if (this.config.follow && !this.query && this.view === "tree") for (const S of this.subList()) {
+    if (follow && !this.query && this.view === "tree") for (const S of this.subList()) {
       const rels = paths.map((p) => relTo(S.root, p)).filter(Boolean).slice(0, limit);
       if (rels.length) { const last = rels[rels.length - 1]; S.open(rels.flatMap((rel) => ancestors(rel)), cx, () => { if (!inside.length) this.scrollTo = keyOf(S.rid, last); }); }
     }
-    if (!inside.length || !this.config.follow || this.hits || this.view !== "tree") { cx.notify(); return; }
+    if (!inside.length || !follow || this.hits || this.view !== "tree") { cx.notify(); return; }
     const shown = inside.slice(0, limit), last = shown[shown.length - 1];
     this.open(shown.flatMap((rel) => ancestors(rel)), cx, () => { this.scrollTo = last; });
   }
@@ -969,9 +975,32 @@ export default class FileTree extends View {
   }
 
   // Redraws only when a highlight changes state (bright → tinted → gone), not every second.
+  // The Claude session(s) of the agent in the focused pane (or, with a shell focused, of the agents of its tab), read from the
+  // status files the status line writes. null: unknown, so nothing is filtered.
+  async readMine() {
+    const f = focused();
+    if (!f?.tab) return;
+    const fp = f.pane ? panes().find((p) => p.pane === f.pane) : null;
+    const terms = fp?.status && fp.terminal ? [fp.terminal] : agents().filter((a) => a.tab === f.tab).map((a) => a.address);
+    const key = terms.join(",");
+    const now = Date.now();
+    if (key === this.mineKey && now - this.mineAt < 5000) return;
+    this.mineKey = key; this.mineAt = now;
+    const sessions = new Set();
+    for (const t of terms) {
+      const text = await readTextFile(`${home()}/.cache/herdr-status/${t}.json`).catch(() => null);
+      try { const id = JSON.parse(text ?? "{}").session; if (id) sessions.add(id); } catch {}
+    }
+    const next = sessions.size ? sessions : null;
+    if ((next?.size ?? 0) !== (this.mine?.size ?? 0) || [...(next ?? [])].some((x) => !this.mine?.has(x))) { this.mine = next; this.agoAt = 0; this.dirtyMine = true; }
+  }
+  // Does an event of `session` belong to the agent in view? Unknown on either side: yes.
+  isMine(session) { return !session || !this.mine || this.mine.has(session); }
+
   tick(cx) {
     const now = Date.now();
     let dirty = false;
+    this.readMine().then(() => { if (this.dirtyMine) { this.dirtyMine = false; cx.notify(); } }).catch(() => {});
     for (const [p, v] of this.flashes) {
       const age = now - v.at;
       if (age >= TINT_MS) { this.flashes.delete(p); dirty = true; }
@@ -1372,6 +1401,7 @@ export default class FileTree extends View {
       btn("ft-size", "Σ", this.showSize ? "Show dates" : "Show sizes", Boolean(this.showSize), () => { this.showSize = !this.showSize; this.savePrefs(); }),
       btn("ft-collapse", "⊟", "Collapse all", false, (cx) => this.collapseAll(cx)),
     ] : [
+      btn("ft-agents", this.allAgents ? "∗" : "◎", this.allAgents ? "Showing every agent: show only the one in view" : "Showing the agent in view: show every agent", !this.allAgents, () => { this.allAgents = !this.allAgents; try { localStorage.setItem("allAgents", this.allAgents ? "1" : "0"); } catch {} }),
       btn("ft-forget", "⊘", "Clear the list", false, () => { this.history = []; try { localStorage.setItem("history", "[]"); } catch {} }),
     ];
 
@@ -1392,7 +1422,7 @@ export default class FileTree extends View {
 
     const q = this.query.trim();
     const note = this.error || (!this.root ? "No folder"
-      : this.view === "recent" ? (rows.length ? null : q ? "No matches" : "Files Claude reads and writes here show up in this list")
+      : this.view === "recent" ? (rows.length ? null : q ? "No matches" : this.allAgents || !this.mine ? "Files Claude reads and writes here show up in this list" : "Nothing from this agent yet (∗ shows every agent)")
       : this.searching && !rows.length ? "Searching…" : this.hits ? (rows.length ? null : "No matches") : this.loading && !rows.length ? "Loading files…" : !rows.length ? "Empty folder" : null);
     return root
       .when(!this.subList().length, (el) => el.child(this.summary(t)))
