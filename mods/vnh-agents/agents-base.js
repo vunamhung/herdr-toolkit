@@ -9,10 +9,10 @@ import { trackRuns } from "./ledger.js";
 import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, dismiss, prune, isWoken, wokeAt, fresh, repairSpaces, statusOf } from "./sleep.js";
 
 // VNH: the "breathing" of a working agent. A `.loop("opacity")` repaints the whole window at the display's rate for as long as it
-// runs (about 20% of a core with one agent working, 5% without); this steps the opacity twice a second, and only the views that draw
+// runs (about 20% of a core with one agent working, 5% without); this blinks (bright, dim, each half a second), and only the views that draw
 // one are redrawn (ANIM is set while one is on screen, and a 500 ms timer notifies the view while it is).
 let ANIM = false;
-const breath = (from, to, period) => { ANIM = true; const k = (Math.floor(Date.now() / 500) * 500) % period / period; return from + (to - from) * (0.5 - 0.5 * Math.cos(2 * Math.PI * k)); };
+const breath = (from, to) => { ANIM = true; return Math.floor(Date.now() / 500) % 2 ? from : to; };
 
 // VNH: the spaces sidebar's colors for theme color names (same table as the shipped spaces mod).
 const VNH_MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -286,7 +286,7 @@ export default class Agents extends View {
   status(t, a, compact = false) {
     const color = t[a.status] ?? t.dim;
     // VNH: a dot that breathes (slow opacity loop) instead of a spinner, the size of the idle ring.
-    if (a.status === "working") return div().size(7).mx(3).flex_none().rounded(4).bg(t.working).opacity(breath(0.3, 1, 2000));
+    if (a.status === "working") return div().size(7).mx(3).flex_none().rounded(4).bg(t.working).opacity(breath(0.35, 1));
     if (a.status === "blocked" && compact) return div().size(14).flex_none().rounded(4).bg(t.blocked + "26").text_size(10.5).font_bold().text_color(t.blocked).flex().items_center().justify_center().child("!");
     if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
     // Woken and not looked at yet: a ring with a dot in it (the accent), between idle's empty ring and done's solid dot.
