@@ -76,9 +76,9 @@ export default class Prompts extends View {
     // VNH: a toggle in the header switches between the timeline of the agent in view and the list of this repository's conversations.
     let saved = null; try { saved = localStorage.getItem("vnh-timeline-mode"); } catch {}
     this.mode = saved === "convos" ? "convos" : "timeline";
-    this.convos = null; this.convosAt = 0; this.convosBusy = false; this.convosRoot = null; this.convoShown = 50; this.curSession = null; this.rootOf = new Map();
+    this.convos = null; this.convosAt = 0; this.convosBusy = false; this.convosRoot = null; this.convoShown = 50; this.curSession = null; this.rootOf = new Map(); this.spaceCwd = new Map();
     this.follow(cx);
-    cx.timer.every(2000, (cx) => { this.follow(cx); if (this.mode === "convos") this.loadConvos(cx); if (agents().find((x) => x.address === this.agent)?.status === "working") this.readLive(cx); else this.live = null; });
+    cx.timer.every(2000, (cx) => { this.follow(cx); this.viewCwd(); if (this.mode === "convos") this.loadConvos(cx); if (agents().find((x) => x.address === this.agent)?.status === "working") this.readLive(cx); else this.live = null; });
   }
 
   // The agent you're in (else the last one), its transcript, re-read when it grows.
@@ -134,10 +134,21 @@ export default class Prompts extends View {
 
   // This repository's conversations: the git top level of the folder of the agent in view (else of the focused terminal), read at most
   // every 30 s, and at once when the repository changes.
+  // The folder the list is about: that of the terminal in front of you; while a preview or this panel has the focus, the one you were
+  // last in within this space (else any agent of the space). Not "the last agent followed": that may be in another space.
+  viewCwd() {
+    const f = focused(), space = spaces().find((s) => s.active), ps = panes();
+    const own = f?.terminal ? ps.find((x) => x.terminal === f.terminal)?.cwd : null;
+    if (own && space) { this.spaceCwd.set(space.id, own); return own; }
+    if (space && this.spaceCwd.get(space.id)) return this.spaceCwd.get(space.id);
+    const tabs = new Set((space?.tabs ?? []).map((t) => t.id));
+    const inSpace = ps.filter((p) => p.terminal && tabs.has(p.tab));
+    return (inSpace.find((p) => p.status) ?? inSpace[0])?.cwd ?? null;
+  }
+
   loadConvos(cx, force = false) {
     if (this.convosBusy) return;
-    const f = focused();
-    const cwd = panes().find((x) => x.terminal === (this.agent ?? f?.terminal))?.cwd ?? panes().find((x) => x.terminal === f?.terminal)?.cwd ?? null;
+    const cwd = this.viewCwd();
     if (!cwd) return;
     this.convosBusy = true;
     cx.spawn(async (cx) => {
@@ -149,8 +160,9 @@ export default class Prompts extends View {
         if (root !== this.convosRoot) { this.convos = null; this.convoShown = 50; }
         this.convosRoot = root;
         // The conversation the agent in view is in, to mark it.
-        const st = this.agent ? await readTextFile(`${home()}/.cache/herdr-status/${this.agent}.json`).then((x) => JSON.parse(x ?? "null")).catch(() => null) : null;
-        this.curSession = st?.session ?? null;
+        const here = focused()?.terminal ?? null;
+        const st = here ? await readTextFile(`${home()}/.cache/herdr-status/${here}.json`).then((x) => JSON.parse(x ?? "null")).catch(() => null) : null;
+        this.curSession = st?.session ?? this.curSession; // kept while a preview has the focus
         const list = await loadConvos(root, (part) => { if (root === this.convosRoot) { this.convos = part; cx.notify(); } });
         if (root === this.convosRoot) { this.convos = list; this.convosAt = Date.now(); }
         cx.notify();
