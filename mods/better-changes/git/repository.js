@@ -106,6 +106,7 @@ export const gitMethods = {
     this.watched = null;
     this.resetCommits();
     this.resetPulls?.();
+    this.sessionSet = null; this.sessionKey = "";
     if (this.input) {
       this.message = "";
       this.input.set_value("");

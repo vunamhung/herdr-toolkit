@@ -20,6 +20,82 @@ import { diffMethods } from "./views/diff.js";
 import { paneHeaderMethods } from "./views/pane-header.js";
 import { pullsMethods } from "./views/pulls.js";
 
+// VNH: which of the changed files the agent session(s) in view wrote, for "only this session's files". Run in the repository:
+// the exact paths of the session's Write / Edit / NotebookEdit tool calls (its sub-agents' too: they keep their own transcripts), the
+// files changed while one of its shell commands ran (a script, sed, a formatter: the transcript times each one), and agy's edit_file /
+// write_file steps. Prints {paths: [relative to the repository, still changed]}.
+const SESSION_PY = String.raw`import sys, os, re, json, glob, subprocess, sqlite3, datetime
+home = os.path.expanduser("~")
+root = os.getcwd()
+sids = [a for a in sys.argv[1:] if re.fullmatch(r"[0-9a-f-]{36}", a)]
+WRITE = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+
+def stamp(s):
+    try: return datetime.datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except Exception: return None
+
+changed = {}
+r = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], capture_output=True)
+for ent in r.stdout.split(b"\0"):
+    if len(ent) < 4: continue
+    p = ent[3:].decode("utf8", "replace")
+    try: changed[p] = os.lstat(os.path.join(root, p)).st_mtime
+    except OSError: changed[p] = None
+
+exact, wins = set(), []
+for sid in sids:
+    base = glob.glob("%s/.claude/projects/*/%s.jsonl" % (home, sid)) + glob.glob("%s/.ccs/instances/*/projects/*/%s.jsonl" % (home, sid))
+    # The sub-agents of a session (the Agent tool) keep their own transcripts beside it: their edits are the session's too.
+    files = base + [x for b in base for x in glob.glob(b[:-6] + "/subagents/*.jsonl")]
+    for path in files:
+        starts = {}
+        try:
+            with open(path, "rb") as f:
+                for line in f:
+                    if b'"tool_use' not in line and b'"tool_result"' not in line: continue
+                    try: e = json.loads(line)
+                    except Exception: continue
+                    t = stamp(e.get("timestamp"))
+                    c = (e.get("message") or {}).get("content")
+                    if not isinstance(c, list): continue
+                    for it in c:
+                        if not isinstance(it, dict): continue
+                        if it.get("type") == "tool_use":
+                            i = it.get("input") or {}
+                            if it.get("name") in WRITE:
+                                q = i.get("file_path") or i.get("notebook_path")
+                                if isinstance(q, str): exact.add(q)
+                            elif it.get("name") == "Bash" and t and not i.get("run_in_background"):
+                                starts[it.get("id")] = t
+                        elif it.get("type") == "tool_result":
+                            s0 = starts.pop(it.get("tool_use_id"), None)
+                            if s0 and t and t - s0 < 180: wins.append((s0 - 1.0, t + 1.5))
+        except Exception:
+            pass
+    db = "%s/.gemini/antigravity-cli/conversations/%s.db" % (home, sid)
+    if os.path.exists(db):
+        try:
+            con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=1)
+            for (pl,) in con.execute("select step_payload from steps where step_type=132"):
+                b = bytes(pl or b"")
+                for tool in (b"edit_file", b"write_file"):
+                    i = b.find(tool + b"\x1a")
+                    if i < 0: continue
+                    m = re.search(rb'"Path":"((?:[^"\\]|\\.)*)"', b[i:i + 400000])
+                    if m:
+                        try: exact.add(json.loads(b'"' + m.group(1) + b'"'))
+                        except Exception: pass
+                    break
+        except Exception:
+            pass
+
+top = root.rstrip("/") + "/"
+mine = set(q[len(top):] for q in exact if isinstance(q, str) and q.startswith(top))
+for p, m in changed.items():
+    if p in mine: continue
+    if m is not None and any(a <= m <= b for a, b in wins): mine.add(p)
+print(json.dumps({"paths": sorted(p for p in mine if p in changed), "all": len(changed), "windows": len(wins), "exact": len(exact)}))
+`;
 const CONTEXT_POLL_MS = 300;
 const STATUS_POLL_MS = 10000;
 // Preferences a person may change in the installed mod.json under `settings`.
@@ -230,11 +306,29 @@ class BetterChanges extends View {
       const text = await readTextFile(`${home()}/.cache/herdr-status/${t}.json`).catch(() => null);
       try { const id = JSON.parse(text ?? "{}").session; if (id) sessions.push(id); } catch {}
     }
-    if (sessions.join() !== (this.mine ?? []).join()) { this.mine = sessions.length ? sessions : null; cx.notify(); }
+    if (sessions.join() !== (this.mine ?? []).join()) { this.mine = sessions.length ? sessions : null; this.sessionSet = null; this.sessionKey = ""; cx.notify(); }
+  }
+
+  // Asks SESSION_PY, at most every 6 s and when the session or the number of changed files changed.
+  readSessionFiles(cx) {
+    if (this.sessionBusy || !this.root || this.on || !this.mine) return;
+    const key = `${this.mine.join()}|${this.files.length}`, now = Date.now();
+    if (key === this.sessionKey && now - (this.sessionAt ?? 0) < 6000) return;
+    this.sessionKey = key; this.sessionAt = now; this.sessionBusy = true;
+    const { root, context } = this;
+    exec("python3", ["-I", "-c", SESSION_PY, ...this.mine], { cwd: root, timeout: 30000 })
+      .then((r) => {
+        if (r.code !== 0 || !this.isCurrent(context)) return;
+        const out = JSON.parse(r.stdout.trim().split("\n").pop());
+        this.sessionSet = new Set(out.paths);
+        cx.notify();
+      })
+      .catch(() => {})
+      .finally(() => { this.sessionBusy = false; });
   }
 
   follow(cx) {
-    if (this.mode === "sidebar" && this.sessionOnly && this.tab === "changes") this.readMine(cx).catch(() => {});
+    if (this.mode === "sidebar" && this.sessionOnly && this.tab === "changes") { this.readMine(cx).catch(() => {}); this.readSessionFiles(cx); }
     const style = shared("better-changes.diff-layout");
     if (style && style !== this.diffLayout) {
       this.diffLayout = style;

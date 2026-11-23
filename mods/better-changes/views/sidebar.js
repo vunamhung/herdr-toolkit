@@ -100,7 +100,7 @@ export const sidebarMethods = {
   // no agent is in view). Fed by the Files panel (vnh-filetree), which sees every Claude and agy write.
   sessionPaths() {
     if (!this.sessionOnly || !this.mine || !this.root) return null;
-    const all = shared("vnh.session-files") ?? {}, root = `${this.root.replace(/\/+$/, "")}/`, set = new Set();
+    const all = shared("vnh.session-files") ?? {}, root = `${this.root.replace(/\/+$/, "")}/`, set = new Set(this.sessionSet ?? []);
     for (const sid of this.mine) for (const abs of all[sid] ?? []) if (abs.startsWith(root)) set.add(abs.slice(root.length));
     return set;
   },
@@ -322,8 +322,8 @@ export const sidebarMethods = {
     const conflicts = files.filter((f) => f.conflict);
     const unstaged = files.filter((f) => f.unstaged && !f.conflict);
     const staged = files.filter((f) => f.staged);
-    const own = mine && this.committed?.total ? keep(this.committed.files) : null;
-    const committed = own ? (own.length ? { ...this.committed, files: own, total: own.length } : null) : this.committed?.total ? this.committed : null;
+    // Filtered by a session, the list is about what is still uncommitted: the Committed group (what the branch has over its remote) is left out.
+    const committed = mine ? null : this.committed?.total ? this.committed : null;
     if (mine) list.child(this.sessionChip(files.length));
     else if (this.sessionOnly) list.child(div().px(8).h(22).flex().items_center().text_size(TEXT.caption).text_color(theme().dim).child("Only this session's files: no agent in view, showing every file"));
     const nothing = !conflicts.length && !unstaged.length && !staged.length && !committed;
