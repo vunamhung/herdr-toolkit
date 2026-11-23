@@ -97,3 +97,12 @@ if back:
 term = os.environ.get("HC_TERMINAL_ID")
 if term:
     subprocess.call(["hc", "kill", term], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+# Herdr runs this inside `zsh -lic "$@"; exec zsh -li`: killing the terminal leaves that shell behind as an orphan, so end it too.
+try:
+    parent = os.getppid()
+    cmd = subprocess.run(["ps", "-o", "command=", "-p", str(parent)], capture_output=True, text=True).stdout
+    if parent > 1 and "zsh" in cmd and "-lic" in cmd:
+        os.kill(parent, 9)
+except Exception:
+    pass
