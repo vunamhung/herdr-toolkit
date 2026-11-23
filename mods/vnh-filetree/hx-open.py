@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # A file in Helix, in a tab of its own (the Files panel: a press on the blank after a name):
 #   hx-open.py <file> [tab to go back to] [Herdr's background colour, #rrggbb]
-# One Helix tab per space: it registers itself in ~/.cache/vnh-hx/registry.json, and the Files panel, finding it, writes the next file's path
-# to ~/.cache/vnh-hx/open-<terminal> and presses Alt-o in it (bound below to `:open` of that path) instead of starting another tab.
 # Esc in Helix's normal mode quits it (a copy of your ~/.config/helix/config.toml with `esc = ":quit"` under [keys.normal], unless you
 # bound esc yourself; a buffer with unsaved changes refuses to quit, as with :q). When Helix ends, the tab you came from is shown again
 # and this terminal (so this tab) is closed.
@@ -81,49 +79,12 @@ if m and tm and tm.group(1) != "vnh-herdr":
                 break
     except Exception:
         pass
-def add_key(txt, table, key, value):
-    """Binds `key` in [table] (dropping a one-line binding of it there), creating the table when it is missing."""
-    line = '"%s" = %s' % (key, value)
-    out, section, seen = [], "", False
-    for ln in txt.split("\n"):
-        m = re.match(r"^\[([^\]]+)\]\s*(#.*)?$", ln.strip())
-        if m:
-            section = m.group(1).strip()
-            out.append(ln)
-            if section == table:
-                out.append(line); seen = True
-            continue
-        if section == table and re.match(r'^"?%s"?\s*=' % re.escape(key), ln.strip()):
-            continue
-        out.append(ln)
-    txt = "\n".join(out)
-    return txt if seen else txt + "\n[%s]\n%s\n" % (table, line)
-
-term = os.environ.get("HC_TERMINAL_ID", "")
 cache = os.path.join(home, ".cache", "vnh-hx")
 os.makedirs(cache, exist_ok=True)
-req = os.path.join(cache, "open-" + (term or "x"))
-open(req, "w").close()
-for table in ("keys.normal", "keys.insert", "keys.select"):
-    text = add_key(text, table, "A-o", "':open \"%%sh{cat %s}\"'" % req)
-cfg = os.path.join(cache, "config-%s.toml" % (term or "x"))
+cfg = os.path.join(cache, "config.toml")
 with open(cfg, "w", encoding="utf-8") as f:
     f.write(text)
 
-import tempfile
-def registry(add):
-    try:
-        space = json.loads(subprocess.run(["hc", "get", term, "--json"], capture_output=True, text=True).stdout).get("labels", {}).get("herdr.space")
-        f = os.path.join(cache, "registry.json")
-        try: reg = json.load(open(f))
-        except Exception: reg = {}
-        if add and space: reg[space] = term
-        else: reg = {k: v for k, v in reg.items() if v != term}
-        tmp = f + ".%d" % os.getpid()
-        json.dump(reg, open(tmp, "w")); os.replace(tmp, f)
-    except Exception:
-        pass
-if term: registry(True)
 try:
     subprocess.call(["hx", "-c", cfg, path])
 except FileNotFoundError:
@@ -131,7 +92,6 @@ except FileNotFoundError:
     try: input()
     except EOFError: pass
 
-if term: registry(False)
 if back:
     subprocess.call(["herdr-app", "do", "tab.select", json.dumps({"id": back})], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 term = os.environ.get("HC_TERMINAL_ID")
