@@ -23,7 +23,8 @@ import { pullsMethods } from "./views/pulls.js";
 // VNH: which of the changed files the agent session(s) in view wrote, for "only this session's files". Run in the repository:
 // the exact paths of the session's Write / Edit / NotebookEdit tool calls (its sub-agents' too: they keep their own transcripts), the
 // files changed while one of its shell commands ran (a script, sed, a formatter: the transcript times each one), and agy's edit_file /
-// write_file steps. Prints {paths: [relative to the repository, still changed]}.
+// write_file steps. A file changed after the session's last activity (its last transcript record; agy's conversation file time) is not
+// its: another agent wrote it. Prints {paths: [relative to the repository, still changed]}.
 const SESSION_PY = String.raw`import sys, os, re, json, glob, subprocess, sqlite3, datetime
 home = os.path.expanduser("~")
 root = os.getcwd()
@@ -42,12 +43,16 @@ for ent in r.stdout.split(b"\0"):
     try: changed[p] = os.lstat(os.path.join(root, p)).st_mtime
     except OSError: changed[p] = None
 
-exact, wins = set(), []
+top = root.rstrip("/") + "/"
+rel = lambda q: q[len(top):] if isinstance(q, str) and q.startswith(top) else None
+mine = set()
 for sid in sids:
+    exact = {}          # relative path -> time of the session's last Write / Edit of it (None: unknown)
+    wins = []           # (from, to) of each of its shell commands
+    last = 0.0          # when the session last did anything: a file changed after that is not its
     base = glob.glob("%s/.claude/projects/*/%s.jsonl" % (home, sid)) + glob.glob("%s/.ccs/instances/*/projects/*/%s.jsonl" % (home, sid))
     # The sub-agents of a session (the Agent tool) keep their own transcripts beside it: their edits are the session's too.
-    files = base + [x for b in base for x in glob.glob(b[:-6] + "/subagents/*.jsonl")]
-    for path in files:
+    for path in base + [x for b in base for x in glob.glob(b[:-6] + "/subagents/*.jsonl")]:
         starts = {}
         try:
             with open(path, "rb") as f:
@@ -56,6 +61,7 @@ for sid in sids:
                     try: e = json.loads(line)
                     except Exception: continue
                     t = stamp(e.get("timestamp"))
+                    if t: last = max(last, t)
                     c = (e.get("message") or {}).get("content")
                     if not isinstance(c, list): continue
                     for it in c:
@@ -63,8 +69,8 @@ for sid in sids:
                         if it.get("type") == "tool_use":
                             i = it.get("input") or {}
                             if it.get("name") in WRITE:
-                                q = i.get("file_path") or i.get("notebook_path")
-                                if isinstance(q, str): exact.add(q)
+                                q = rel(i.get("file_path") or i.get("notebook_path"))
+                                if q: exact[q] = max(exact.get(q) or 0, t or 0) or None
                             elif it.get("name") == "Bash" and t and not i.get("run_in_background"):
                                 starts[it.get("id")] = t
                         elif it.get("type") == "tool_result":
@@ -75,6 +81,7 @@ for sid in sids:
     db = "%s/.gemini/antigravity-cli/conversations/%s.db" % (home, sid)
     if os.path.exists(db):
         try:
+            last = max(last, os.path.getmtime(db) + 20)   # agy's steps carry no time: the file's own is the bound
             con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=1)
             for (pl,) in con.execute("select step_payload from steps where step_type=132"):
                 b = bytes(pl or b"")
@@ -83,18 +90,23 @@ for sid in sids:
                     if i < 0: continue
                     m = re.search(rb'"Path":"((?:[^"\\]|\\.)*)"', b[i:i + 400000])
                     if m:
-                        try: exact.add(json.loads(b'"' + m.group(1) + b'"'))
-                        except Exception: pass
+                        try: q = rel(json.loads(b'"' + m.group(1) + b'"'))
+                        except Exception: q = None
+                        if q: exact.setdefault(q, None)
                     break
         except Exception:
             pass
-
-top = root.rstrip("/") + "/"
-mine = set(q[len(top):] for q in exact if isinstance(q, str) and q.startswith(top))
-for p, m in changed.items():
-    if p in mine: continue
-    if m is not None and any(a <= m <= b for a, b in wins): mine.add(p)
-print(json.dumps({"paths": sorted(p for p in mine if p in changed), "all": len(changed), "windows": len(wins), "exact": len(exact)}))
+    for p, m in changed.items():
+        if m is None:
+            if p in exact: mine.add(p)
+            continue
+        if last and m > last + 5: continue                      # changed after the session stopped: someone else's
+        if p in exact:
+            ts = exact[p]
+            if ts is None or m <= ts + 3: mine.add(p)           # not touched again since its last edit
+        elif any(a <= m <= b for a, b in wins):
+            mine.add(p)
+print(json.dumps({"paths": sorted(mine), "all": len(changed)}))
 `;
 const CONTEXT_POLL_MS = 300;
 const STATUS_POLL_MS = 10000;
