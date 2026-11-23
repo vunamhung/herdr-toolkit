@@ -12,7 +12,7 @@
 // (Claude Code's fullscreen mode) has none to scroll, so there the rail is empty (use `/tui default`).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, focused, panes, hc, run, exec, home, placement, checking } from "herdr";
+import { theme, focused, panes, hc, run, exec, readTextFile, home, placement, checking } from "herdr";
 
 const HISTORIES = [".claude/history.jsonl", ".gemini/antigravity-cli/history.jsonl", ".codex/history.jsonl"];
 const SHOWN = 14, LABEL = 230, EDGE = 20;
@@ -56,68 +56,104 @@ export default class Rail extends View {
   }
 
   async prompts(cwd) {
-    if (Date.now() - this.hist.at < 4000) return this.hist.list;
-    const out = [];
-    for (const rel of HISTORIES) {
-      const r = await exec("tail", ["-n", "600", `${home()}/${rel}`]).catch(() => null);
-      if (!r || r.code !== 0) continue;
-      for (const line of String(r.stdout ?? "").split("\n")) {
-        if (!line.trim()) continue;
-        let j; try { j = JSON.parse(line); } catch { continue; }
-        const text = norm(j.display ?? j.text ?? "");
-        const dir = j.workspace ?? j.project ?? null;
-        if (text.length < 6 || text.startsWith("/")) continue;
-        if (dir && cwd && dir !== cwd) continue;
-        out.push({ text, at: j.timestamp ?? (j.ts ? j.ts * 1000 : 0) });
+    if (Date.now() - this.hist.at >= 4000) {
+      const all = [];
+      for (const rel of HISTORIES) {
+        const path = `${home()}/${rel}`;
+        let raw = await readTextFile(path).catch(() => null);
+        if (raw == null) {
+          const r = await exec("tail", ["-n", "3000", path]).catch(() => null);
+          if (!r || r.code !== 0) continue;
+          raw = String(r.stdout ?? "");
+        }
+        for (const line of raw.split("\n")) {
+          if (!line.trim()) continue;
+          let j; try { j = JSON.parse(line); } catch { continue; }
+          const rawText = String(j.display ?? j.text ?? "");
+          const text = norm(rawText);
+          const rawLines = rawText.split(/\r?\n/).map(norm).filter(Boolean);
+          const firstLine = rawLines[0] ?? text;
+          const nextLine = rawLines[1] ?? "";
+          const dir = j.workspace ?? j.project ?? null;
+          if (text.length < 6 || text.startsWith("/")) continue;
+          all.push({
+            text,
+            key: (firstLine.length >= 6 ? firstLine : text).slice(0, 30),
+            next: firstLine.length < 25 && nextLine ? nextLine.slice(0, 16) : "",
+            exact: !nextLine && firstLine.length < 30,
+            dir,
+            at: j.timestamp ?? (j.ts ? j.ts * 1000 : 0),
+          });
+        }
       }
+      all.sort((a, b) => a.at - b.at);
+      this.hist = { at: Date.now(), list: all };
     }
-    out.sort((a, b) => a.at - b.at);
-    this.hist = { at: Date.now(), list: out };
-    return out;
+    return cwd ? this.hist.list.filter((p) => !p.dir || p.dir === cwd) : this.hist.list;
   }
 
   async build(term, total, cx) {
     this.busy = true;
     try {
       const pane = panes().find((x) => x.terminal === term);
-      const [r, list] = await Promise.all([hc(["read", term, "--lines", String(Math.max(total, 50)), "--json"]), this.prompts(pane?.cwd ?? null)]);
+      const [r, g, list] = await Promise.all([
+        hc(["read", term, "--lines", String(Math.max(total, 50)), "--json"]),
+        hc(["get", term, "--json"]).catch(() => null),
+        this.prompts(pane?.cwd ?? null),
+      ]);
       if (r?.code !== 0) return;
       let text; try { text = JSON.parse(r.stdout).text ?? ""; } catch { return; }
+      let best = 0;
+      if (g?.code === 0) { try { best = Number(JSON.parse(g.stdout).cols) || 0; } catch {} }
       const lines = text.split("\n"), widths = lines.map((l) => cells(l));
-      // the column count whose wrapped height best matches the terminal's row count
-      let best = 80, bestDiff = Infinity;
-      for (let cols = 30; cols <= 400; cols++) {
-        let sum = 0; for (const w of widths) sum += rowsOf(w, cols);
-        const d = Math.abs(sum - total); if (d < bestDiff) { bestDiff = d; best = cols; }
+      if (!best) {
+        // fallback: the column count whose wrapped height best matches the terminal's row count
+        best = 80; let bestDiff = Infinity;
+        for (let cols = 30; cols <= 400; cols++) {
+          let sum = 0; for (const w of widths) sum += rowsOf(w, cols);
+          const d = Math.abs(sum - total); if (d < bestDiff) { bestDiff = d; best = cols; }
+        }
       }
       const start = []; let acc = 0;
       for (const w of widths) { start.push(acc); acc += rowsOf(w, best); }
-      const offsetFix = Math.max(0, total - acc); // blank screen rows `hc read` trims at the end
+      const offsetFix = Math.max(0, total - acc);
       const norms = lines.map((l) => norm(l));
       const found = []; let from = 0;
       for (const p of list) {
-        const key = p.text.slice(0, 30);
+        const key = p.key;
         let hit = -1;
         for (let i = from; i < norms.length; i++) {
           const m = norms[i];
           const k = m.indexOf(key);
-          if (k >= 0 && k <= 4 && /^[^\p{L}\p{N}]*$/u.test(m.slice(0, k))) { hit = i; break; }
+          if (k < 0 || k > 4 || !/^[^\p{L}\p{N}]*$/u.test(m.slice(0, k))) continue;
+          if (p.exact && m.slice(k) !== key) continue;
+          if (p.next && !norms.slice(i + 1, i + 3).some((l) => l.includes(p.next))) continue;
+          hit = i; break;
         }
-        if (hit >= 0) { found.push({ row: start[hit], text: p.text }); from = hit + 1; }
+        if (hit >= 0) { found.push({ row: offsetFix + start[hit], text: p.text }); from = hit + 1; }
       }
+      if (this.term !== term) return;
       this.items = found; this.built = { term, total };
     } finally { this.busy = false; cx.notify(); }
   }
 
-  jump(item) {
+  jump(item, cx) {
     if (!this.term) return;
-    const target = Math.max(0, item.row - 1);
-    run("terminal.scroll", { terminal: this.term, lines: target - this.offset });
+    const s = panes().find((x) => x.terminal === this.term)?.scroll ?? null;
+    const curOffset = s ? s.offset : this.offset;
+    const maxOffset = s ? Math.max(0, s.total - s.len) : Math.max(0, this.total - this.len);
+    const target = Math.max(0, Math.min(maxOffset, item.row - 1));
+    const delta = Math.round(target - curOffset);
+    this.scrolledAt = Date.now();
+    if (delta !== 0) {
+      run("terminal.scroll", { terminal: this.term, lines: delta });
+      this.offset = target;
+    }
+    cx?.notify();
   }
 
   render() {
     const t = theme(), pl = placement(), open = Boolean(pl?.hovered);
-    const live = true;
     const all = this.items;
     if (!all.length || !(open || Date.now() - this.scrolledAt < 2500)) return div(); // nothing to show: a floating block that renders nothing isn't drawn at all
     // the window of prompts around where you are: the last SHOWN, or those around the viewport
@@ -126,10 +162,11 @@ export default class Rail extends View {
     const rows = all.slice(first, first + SHOWN).map((it, k) => {
       const idx = first + k, on = idx === cur;
       return h_flex().id(`rail-${idx}`).h(22).w(LABEL + EDGE).items_center().justify_end().cursor_pointer()
-        .on_click(() => this.jump(it))
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => this.jump(it, cx))
         .child(div().flex_1().min_w(0).truncate().text_right().pr(8).text_size(11.5).text_color(on ? t.foreground : t.muted).child(it.text))
         .child(h_flex().w(EDGE).h(22).flex_none().items_center().justify_center()
-          .child(div().h(2).w(on ? 12 : 8).rounded(1).bg(on ? t.accent : t.dim).opacity(live ? 1 : 0.35)));
+          .child(div().h(2).w(on ? 12 : 8).rounded(1).bg(on ? t.accent : t.dim)));
     });
     return v_flex().w(LABEL + EDGE).py(2).children(rows);
   }

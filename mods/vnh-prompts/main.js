@@ -22,6 +22,7 @@ let PY = null;
 const python = (args) => (PY ??= exec("python3", ["-c", "1"]).then((r) => (r?.code === 0 ? "python3" : "python"), () => "python"))
   .then((p) => exec(p, args));
 
+const PAGE = 40;
 const READER = () => `${appHome()}/mods/vnh-prompts/prompts.py`;
 const pad = (n) => String(n).padStart(2, "0");
 
@@ -67,6 +68,8 @@ export default class Prompts extends View {
     this.open = null; // the index read in full
     this.at = 0; // the keyboard's row (newest first)
     this.note = "Open an agent to see its prompts";
+    this.shown = PAGE; // how many cards are drawn (newest first); a long session has hundreds, and drawing them all ran past the render time limit
+    this.memo = new Map(); // per prompt: its text and reply as plain words, worked out once
     this.follow(cx);
     cx.timer.every(2000, (cx) => { this.follow(cx); if (agents().find((x) => x.address === this.agent)?.status === "working") this.readLive(cx); else this.live = null; });
   }
@@ -75,7 +78,7 @@ export default class Prompts extends View {
   follow(cx) {
     const f = focused();
     const here = f?.agent ?? (f?.terminal && agents().some((a) => a.address === f.terminal) ? f.terminal : null);
-    if (here && here !== this.agent) { this.agent = here; this.transcript = null; this.size = null; this.open = null; this.at = 0; this.prompts = []; cx.notify(); }
+    if (here && here !== this.agent) { this.agent = here; this.transcript = null; this.size = null; this.open = null; this.at = 0; this.prompts = []; this.shown = PAGE; cx.notify(); }
     if (!this.agent || this.busy) return;
     this.busy = true;
     cx.spawn(async (cx) => {
@@ -102,7 +105,7 @@ export default class Prompts extends View {
         try { got = JSON.parse(r?.stdout ?? ""); } catch {}
         const list = got?.prompts;
         if (!Array.isArray(list)) return;
-        this.prompts = list.reverse();
+        this.prompts = list.reverse().map((p) => this.decorate(p));
         this.context = got.context ?? 0;
         this.transcript = got.path ?? path;
         this.size = got.size ?? null;
@@ -113,6 +116,20 @@ export default class Prompts extends View {
         this.busy = false;
       }
     });
+  }
+
+  // `plain(text)` and the reply's summary cost a few regular expressions over text that can be long; they are worked out once per prompt
+  // (again only when its reply grew), not on every draw.
+  decorate(p) {
+    const key = `${p.at}|${(p.text ?? "").length}|${(p.reply ?? "").length}`;
+    let m = this.memo.get(key);
+    if (!m) {
+      m = { pt: plain(p.text), sm: summary(p), also: (p.also ?? []).map((x) => plain(x.text)) };
+      if (this.memo.size > 3000) this.memo.clear();
+      this.memo.set(key, m);
+    }
+    p.pt = m.pt; p.sm = m.sm; p.alsoPlain = m.also;
+    return p;
   }
 
   // The working agent's own counter, from the bottom of its screen: Claude Code's
@@ -135,11 +152,11 @@ export default class Prompts extends View {
 
   render(cx) {
     const t = theme();
-    const list = this.prompts;
+    const list = this.prompts, view = list.slice(0, this.shown);
     const working = agents().find((x) => x.address === this.agent)?.status === "working";
     const item = (p, i) => {
       const on = this.open === i, picked = this.at === i, live = i === 0 && working;
-      const last = i === list.length - 1;
+      const last = i === view.length - 1 && list.length <= this.shown;
       // Plain words, joined by dots: done at, time worked, tokens, files, commands.
       const facts = [
         live ? "working" : p.done ? `done ${hhmm(p.done)}` : "",
@@ -160,10 +177,10 @@ export default class Prompts extends View {
           .child(h_flex().gap(6).text_size(10.5).text_color(t.dim)
             .child(div().child(`#${list.length - i}`)).child(div().child(when(p.at))).child(div().flex_1()))
           .child(div().text_size(12.5).line_height("17px").text_color(t.foreground)
-            .when(!on, (el) => el.truncate().child(plain(p.text))).when(on, (el) => el.whitespace_normal().child(p.text)))
+            .when(!on, (el) => el.truncate().child(p.pt)).when(on, (el) => el.whitespace_normal().child(p.text)))
           // Messages you sent while it worked on this one.
           .when(p.also?.length > 0 && !on, (el) => el.child(div().text_size(11).text_color(t.dim).truncate()
-            .child(`+ ${p.also.length} more message${p.also.length > 1 ? "s" : ""}: ${p.also.map((m) => plain(m.text)).join(" · ")}`)))
+            .child(`+ ${p.also.length} more message${p.also.length > 1 ? "s" : ""}: ${(p.alsoPlain ?? []).join(" · ")}`)))
           .when(p.also?.length > 0 && on, (el) => el.child(v_flex().gap(3).pl(8).border_l(2).border_color(t.border)
             .children(p.also.map((m) => h_flex().gap(6).items_start().text_size(12).line_height("16px")
               .child(div().flex_none().text_size(10.5).text_color(t.dim).pt(1).child(hhmm(m.at)))
@@ -171,7 +188,7 @@ export default class Prompts extends View {
           .when(facts.length > 0, (el) => el.child(div().text_size(11).text_color(t.dim).truncate()
             .when(live, (el) => el.child(h_flex().gap(0).child(div().text_color(t.working).child(facts[0])).child(div().child(` · ${facts.slice(1).join(" · ")}`))))
             .when(!live, (el) => el.child(facts.join(" · ")))))
-          .when(!on && Boolean(p.reply), (el) => el.child(div().text_size(11.5).line_height("16px").text_color(t.muted).truncate().child(summary(p))))
+          .when(!on && Boolean(p.reply), (el) => el.child(div().text_size(11.5).line_height("16px").text_color(t.muted).truncate().child(p.sm)))
           // Read in full: the reply as Markdown, then what it changed.
           .when(on, (el) => el.child(v_flex().mt(4).pt(6).gap(6).border_t_1().border_color(t.border)
             .child(p.reply ? TextView.markdown(`reply-${list.length - i}`, p.reply).selectable(true).text_size(12.5) : div().text_size(12).text_color(t.dim).child(live ? "Working…" : "(no reply text)"))
@@ -183,7 +200,7 @@ export default class Prompts extends View {
       .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .on_key_down((e, cx) => {
         if (!list.length) return;
-        if (e.key === "down") this.at = Math.min(list.length - 1, this.at + 1);
+        if (e.key === "down") { this.at = Math.min(list.length - 1, this.at + 1); if (this.at >= this.shown - 1) this.shown += PAGE; }
         else if (e.key === "up") this.at = Math.max(0, this.at - 1);
         else if (e.key === "enter") this.open = this.open === this.at ? null : this.at;
         else if (e.key === "escape") this.open = null;
@@ -202,6 +219,11 @@ export default class Prompts extends View {
             this.context ? `context ${count(this.context)}` : ""].filter(Boolean).join(" · ")))))
       .when(Boolean(this.note), (el) => el.child(div().px(14).py(10).text_size(12).text_color(t.dim).child(this.note)))
       .child(v_flex().id("prompts-scroll").flex_1().min_h(0).overflow_y_scrollbar().pl(8).pr(8).pt(6).pb(8)
-        .children(list.map(item)));
+        .children(view.map(item))
+        // The older ones, a page at a time.
+        .when(list.length > this.shown, (el) => el.child(div().id("prompts-more").h(32).flex_none().mx(8).mb(6).flex().items_center().justify_center().rounded(8).cursor_pointer()
+          .text_size(12).text_color(t.muted).hover((x) => x.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => { this.shown += PAGE; cx.notify(); })
+          .child(`Show ${Math.min(PAGE, list.length - this.shown)} older · ${list.length - this.shown} not shown`))));
   }
 }
