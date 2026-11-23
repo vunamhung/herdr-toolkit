@@ -356,7 +356,7 @@ export default class Tabs extends View {
       // icon is a moon and all its text is gray.
       const nap = covers.has(c.id) ? sleepers.find(r => r.cover === covers.get(c.id) || r.tab === c.id) ?? null : null;
       const name = nap?.title ? nap.title : label(c, lead);
-      // VNH: the preview of a conversation (vnh-convo, opened from the Timeline) is marked: an eye, the accent colour, a PREVIEW pill, the
+      // VNH: the preview of a conversation (vnh-convo, opened from the Timeline) is marked: an eye, the accent colour, the
       // title in italics: a glance tells it from the tabs that run something.
       const preview = allPanes.some(p => p.tab === c.id && p.mod === "vnh-convo");
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
@@ -378,8 +378,7 @@ export default class Tabs extends View {
           const icon = program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14);
           return el.child(c.working_since != null ? icon.loop("opacity", { from: 0.35, to: 1, period: 1800 }) : icon);
         })
-        .when(preview, el => el.child(div().flex_none().px(5).h(15).flex().items_center().rounded(4).bg(t.accent + "33").text_size(9).font_semibold().text_color(t.accent).child("PREVIEW")))
-        .child(div().max_w(preview ? 140 : 170).truncate().when(preview, el => el.italic()).child(c.zoomed ? `${name} Z` : name))
+        .child(div().max_w(170).truncate().when(preview, el => el.italic()).child(c.zoomed ? `${name} Z` : name))
         // VNH: no working spinner here; the Agents list in the sidebar is the one that shows it.
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
         .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
