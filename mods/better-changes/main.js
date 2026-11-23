@@ -276,6 +276,7 @@ class BetterChanges extends View {
     this.menuOpen = false;
     this.menuFocus = cx.focus_handle();
     this.viewMenuFocus = cx.focus_handle(); // VNH: the view dropdown (renderViewMenu)
+    this.sectionFocus = cx.focus_handle(); // VNH: the section dropdown at the top left of the panel
     // VNH: the diff tab takes the keyboard so Esc closes it (renderDiff).
     // Focus can't change during render: a timer takes it when the tab shows (opened or selected again).
     if (this.mode === "diff") {

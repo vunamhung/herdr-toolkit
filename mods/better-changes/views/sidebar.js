@@ -13,7 +13,6 @@ import {
   Panel,
   PanelHeader,
   HeaderTab,
-  RailButton,
   IconButton,
   TextButton,
   GroupHeader,
@@ -134,55 +133,87 @@ export const sidebarMethods = {
     if (this.mode === "panel-key") return div();
     if (this.mode === "pane-header") return this.renderPaneHeader();
     if (this.mode === "diff") return this.renderDiff();
-    // VNH: a vertical rail on the left switches the section (Changes, Commits, PRs, Stashes); the header names it and holds its actions.
-    return Panel({ id: "better-changes" }).child(
-      v_flex().flex_1().min_h(0).relative()
-        .child(this.renderRail())
-        .child(
-          v_flex().flex_1().h_full().min_w(0).min_h(0)
-            .child(this.renderHeader())
-            .child(
-              this.tab === "commit"
-                ? this.selectedCommit
-                  ? this.renderCommit()
-                  : this.renderHistory()
-                : this.tab === "pr"
-                  ? this.renderPulls()
-                  : this.tab === "stash"
-                    ? this.renderStashes()
-                    : this.renderChanges(),
-            ),
-        ),
-    );
+    return Panel({ id: "better-changes" })
+      .child(this.renderHeader())
+      .child(
+        this.tab === "commit"
+          ? this.selectedCommit
+            ? this.renderCommit()
+            : this.renderHistory()
+          : this.tab === "pr"
+            ? this.renderPulls()
+            : this.tab === "stash"
+              ? this.renderStashes()
+              : this.renderChanges(),
+      );
   },
 
-  // VNH: the rail. Counts: what is changed, what is not pushed, the open pull requests, the stashes.
-  renderRail() {
-    const t = theme();
+  // VNH: the section switch: a dropdown at the top left of the header that opens as soon as the pointer is on it (or on a click) and
+  // closes when it leaves. Each section: icon, name, its count; the one shown has a check.
+  sections() {
     const unpushed = this.committed?.unpushed?.size || 0, stashes = this.stashes?.length || 0;
     const files = this.sessionOnly && this.sessionSet ? this.sessionSet.size : this.total || 0;
-    const items = [
-      { id: "changes", icon: "diff", label: this.sessionOnly ? "Changes · this session's files" : "Changes", count: files, tone: "accent" },
-      { id: "commit", icon: "commit", label: unpushed ? `Commits · ${unpushed} not pushed` : "Commits", count: unpushed, tone: "accent" },
-      ...(this.forge?.() || this.tab === "pr" ? [{ id: "pr", icon: "pr-open", label: "Pull requests", count: this.prs?.length || 0, tone: "dim" }] : []),
-      ...(stashes || this.tab === "stash" ? [{ id: "stash", icon: "archive", label: `Stashes · ${stashes}`, count: stashes, tone: "dim" }] : []),
+    return [
+      { id: "changes", icon: "diff", label: "Changes", count: files, hot: true },
+      { id: "commit", icon: "commit", label: "Commits", count: unpushed, hot: true, note: unpushed ? "not pushed" : "" },
+      ...(this.forge?.() || this.tab === "pr" ? [{ id: "pr", icon: "pr-open", label: "Pull requests", count: this.prs?.length || 0 }] : []),
+      ...(stashes || this.tab === "stash" ? [{ id: "stash", icon: "archive", label: "Stashes", count: stashes }] : []),
     ];
-    // Floats over the left edge, centred, beside the content (nothing is reserved for it); faint until the pointer is on it.
-    return v_flex().id("rail").absolute().left(3).top("42%").gap(2).p(2).items_center().rounded(10).bg(t.popover).border_1().border_color(t.border)
-      .opacity(0.55).hover((s) => s.opacity(1)).role("tab_list")
-      .children(items.map((i) => RailButton({ id: `rail-${i.id}`, icon: i.icon, label: i.label, count: i.count, tone: i.tone, active: this.tab === i.id, onClick: (cx) => this.setTab(i.id, cx) })));
+  },
+
+  // Pointer on the trigger or on the menu: open now; on neither for a moment: close (the gap between them doesn't flicker it).
+  sectionHover(which, on, cx) {
+    this.secHover = { ...(this.secHover ?? {}), [which]: on };
+    if (on) { if (!this.sectionOpen) { this.sectionOpen = true; cx.notify(); } return; }
+    cx.timer.after(160, (cx) => {
+      if (this.secHover?.t || this.secHover?.m || !this.sectionOpen) return;
+      this.sectionOpen = false;
+      cx.notify();
+    });
+  },
+
+  renderSectionMenu() {
+    const t = theme();
+    const list = this.sections(), cur = list.find((s) => s.id === this.tab) ?? list[0];
+    const trigger = h_flex().id("section-trigger").h(28).flex_none().pl(6).pr(5).gap(6).items_center().rounded(7).cursor_pointer()
+      .bg(this.sectionOpen ? t.hover : t.background).hover((s) => s.bg(t.hover))
+      .on_hover((h, cx) => this.sectionHover("t", h, cx))
+      .child(Icon(cur.icon, 15).text_color(t.foreground))
+      .child(div().font_semibold().text_size(TEXT.menu).text_color(t.foreground).child(cur.label))
+      .when(cur.count > 0 && cur.hot, (el) => el.child(div().h(15).min_w(15).px(4).flex().items_center().justify_center().rounded(8).bg(t.accent).text_size(9.5).font_semibold().text_color(t.background).child(String(cur.count))))
+      .child(Icon("chevron-down", 11).text_color(t.dim));
+    const rows = list.map((s) =>
+      h_flex().id(`section-${s.id}`).h(30).flex_none().px(8).gap(9).items_center().rounded(7).cursor_pointer()
+        .text_size(TEXT.menu).text_color(s.id === this.tab ? t.foreground : t.muted)
+        .bg(s.id === this.tab ? t.selected : t.popover).hover((x) => x.bg(t.hover).text_color(t.foreground))
+        .on_click((_e, cx) => { this.sectionOpen = false; this.setTab(s.id, cx); })
+        .child(Icon(s.icon, 15))
+        .child(div().flex_1().child(s.label))
+        .when(s.count > 0, (el) => el.child(div().h(15).min_w(15).px(4).flex().items_center().justify_center().rounded(8)
+          .bg(s.hot ? t.accent : t.hover).text_size(9.5).font_semibold().text_color(s.hot ? t.background : t.muted).child(String(s.count)))));
+    return Menu({
+      id: "section",
+      open: this.sectionOpen,
+      focus: this.sectionFocus,
+      onOpenChange: (open, cx) => { this.sectionOpen = open; cx.notify(); },
+      onHover: (h, cx) => this.sectionHover("m", h, cx),
+      trigger,
+      width: 190,
+      anchor: "top_left",
+      children: rows,
+    });
   },
 
   renderHeader() {
     const t = theme();
-    const title = { changes: "Changes", commit: "Commits", pr: "Pull requests", stash: "Stashes" }[this.tab] ?? "Changes";
     const forge = this.forge?.();
     const sub = this.tab === "changes" || this.tab === "commit" ? this.branch : this.tab === "pr" ? forge?.repo ?? forge?.project : null;
     return PanelHeader()
       .px(12)
       .child(
         h_flex().flex_1().min_w(0).gap(8).items_center()
-          .child(div().flex_none().font_semibold().text_size(TEXT.menu).text_color(t.foreground).child(title))
+          .ml(-4)
+          .child(this.renderSectionMenu())
           .when(Boolean(sub), (el) => el.child(div().min_w(0).truncate().text_size(TEXT.small).text_color(t.dim).child(String(sub)))),
       )
       // VNH: a toggle between the flat list and the tree (its icon is the current view's); the rest of the view options

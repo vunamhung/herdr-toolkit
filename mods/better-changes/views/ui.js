@@ -116,40 +116,6 @@ function Badge(text) {
     .child(String(text));
 }
 
-// VNH: one button of the floating rail that switches the panel's section: a small icon, a tiny count on its corner, a tint when it is the
-// section shown. `tone`: the count's colour ("accent" for what needs attention, else dim).
-export function RailButton({ id, icon, label, count, tone = "dim", active, onClick }) {
-  const t = theme();
-  const text = count ? (count > 99 ? "99+" : String(count)) : null;
-  return div()
-    .id(id)
-    .relative()
-    .size(24)
-    .flex_none()
-    .flex()
-    .items_center()
-    .justify_center()
-    .rounded(7)
-    .bg(active ? t.selected : t.popover)
-    .text_color(active ? t.foreground : t.muted)
-    .cursor_pointer()
-    .hover((s) => s.bg(active ? t.selected : t.hover).text_color(t.foreground))
-    .role("tab")
-    .aria_selected(Boolean(active))
-    .accessibility_label(label)
-    .tooltip(label)
-    .on_click((_e, cx) => onClick(cx))
-    .child(Icon(icon, 14))
-    .when(Boolean(text), (el) =>
-      el.child(
-        div().absolute().top(-3).right(-3).h(12).min_w(12).px(2).flex().items_center().justify_center().rounded(6)
-          .bg(tone === "accent" ? t.accent : t.raised).border_1().border_color(t.popover).text_size(8.5).font_semibold()
-          .text_color(tone === "accent" ? t.background : t.muted)
-          .child(text),
-      ),
-    );
-}
-
 // A panel title that doubles as a tab, the same pill as Herdr's tab bar.
 export function HeaderTab({ id, label, count, active, onClick }) {
   const t = theme();
@@ -434,6 +400,7 @@ export function Menu({
   children,
   width = 200,
   anchor = "top_right",
+  onHover, // VNH: (hovered, cx): lets a menu that opens on hover stay open while the pointer is on it
 }) {
   const t = theme();
   const body = v_flex()
@@ -447,6 +414,7 @@ export function Menu({
     .bg(t.popover)
     .text_color(t.foreground)
     .track_focus(focus)
+    .when(Boolean(onHover), (el) => el.on_hover((h, cx) => onHover(h, cx)))
     .on_key_down((event, cx) => {
       if (event.key !== "escape") return;
       cx.stop_propagation();
