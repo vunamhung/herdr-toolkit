@@ -62,13 +62,14 @@ export default class Pane extends View {
     const p = this.me();
     if (!p) return div();
     // VNH: readable titles for our mod panes (Herdr shows a mod pane's folder name otherwise).
-    const MOD_TITLES = { "vnh-markdown": "Markdown Viewer" };
+    const MOD_TITLES = { "vnh-markdown": "Markdown Viewer", "vnh-convo": "Conversation preview" };
     // VNH: the cover of a sleeping agent (vnh-agents/sleep.js) keeps the header the agent had: its name and folder, with a
     // moon for its icon and gray text.
     const nap = p.mod === "vnh-cover" ? (shared("vnh.asleep") ?? []).find((r) => r.cover === p.pane) ?? null : null;
     const name = nap ? ({ claude: "Claude Code", agy: "Antigravity", codex: "Codex" }[nap.agent] ?? "Agent")
       : (p.mod && MOD_TITLES[p.mod]) || ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
-    const pic = nap ? svg("mods/vnh-agents/moon.svg").size(14).flex_none().text_color(t.dim) : icon(p.program, 14, t.dim);
+    const preview = p.mod === "vnh-convo"; // the preview of a conversation: an eye and the accent colour
+    const pic = preview ? svg("mods/vnh-pane/eye.svg").size(14).flex_none().text_color(t.accent) : nap ? svg("mods/vnh-agents/moon.svg").size(14).flex_none().text_color(t.dim) : icon(p.program, 14, t.dim);
     const st = p.status;
     const pane = p.pane;
     const bottom = paneFrame(layout())?.header?.position === "bottom";
@@ -86,7 +87,7 @@ export default class Pane extends View {
       .on_hover((hovered, cx) => { this.hovered = hovered; cx.notify(); })
       .on_click(() => run("pane.focus", { pane }))
       .when(Boolean(pic), (el) => el.child(pic))
-      .child(div().flex_none().truncate().max_w(260).font_medium().text_color(nap ? t.dim : t.foreground).child(name))
+      .child(div().flex_none().truncate().max_w(260).font_medium().text_color(nap ? t.dim : preview ? t.accent : t.foreground).child(name))
       .child(div().flex_1().truncate().text_color(t.dim).child(folder(nap?.cwd ?? p.cwd)))
       // VNH: no working spinner here; the Agents list in the sidebar is the one that shows it.
       .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")))

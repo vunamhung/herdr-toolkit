@@ -356,10 +356,13 @@ export default class Tabs extends View {
       // icon is a moon and all its text is gray.
       const nap = covers.has(c.id) ? sleepers.find(r => r.cover === covers.get(c.id) || r.tab === c.id) ?? null : null;
       const name = nap?.title ? nap.title : label(c, lead);
+      // VNH: the preview of a conversation (vnh-convo, opened from the Timeline) is marked: an eye, the accent colour, a PREVIEW pill, the
+      // title in italics: a glance tells it from the tabs that run something.
+      const preview = allPanes.some(p => p.tab === c.id && p.mod === "vnh-convo");
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         // A rename or status dot on this or an earlier tab can push the active one out.
         .when(i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
-        .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(nap ? t.dim : c.active ? t.foreground : t.muted)
+        .border(1).border_color(preview ? t.accent + (c.active ? "99" : "55") : c.active ? t.border : t.chrome).bg(preview ? t.accent + (c.active ? "26" : "14") : c.active ? t.raised : t.chrome).text_color(nap ? t.dim : c.active ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
         .on_mouse_up("left", () => {
@@ -370,11 +373,13 @@ export default class Tabs extends View {
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
         // VNH: while an agent in this tab works its icon breathes (the same slow opacity loop as the space tiles).
         .when(Boolean(nap), el => el.child(svg("mods/vnh-agents/moon.svg").size(14).text_color(t.dim)))
-        .when(Boolean(program?.icon) && !nap, el => {
+        .when(preview, el => el.child(svg("mods/vnh-tabs/eye.svg").size(14).text_color(t.accent)))
+        .when(Boolean(program?.icon) && !nap && !preview, el => {
           const icon = program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14);
           return el.child(c.working_since != null ? icon.loop("opacity", { from: 0.35, to: 1, period: 1800 }) : icon);
         })
-        .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
+        .when(preview, el => el.child(div().flex_none().px(5).h(15).flex().items_center().rounded(4).bg(t.accent + "33").text_size(9).font_semibold().text_color(t.accent).child("PREVIEW")))
+        .child(div().max_w(preview ? 140 : 170).truncate().when(preview, el => el.italic()).child(c.zoomed ? `${name} Z` : name))
         // VNH: no working spinner here; the Agents list in the sidebar is the one that shows it.
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
         .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
