@@ -23,6 +23,16 @@ function openInHelix(abs, on, root) {
   run("tab.new", { space: space.id, folder: root || abs.slice(0, abs.lastIndexOf("/")) || "/", name: abs.split("/").pop().slice(0, 40),
     argv: ["sh", "-lc", 'exec python3 -I "$1" "$2" "$3" "$4"', "hx", `${appHome()}/mods/vnh-filetree/hx-open.py`, abs, back, String(theme().background ?? "")] });
 }
+// VNH: a double press on a file opens it in Neovim, in a tab of its own started in the project's root (nvim-open.py: when nvim ends the tab
+// closes and the one you came from is shown again).
+function openInNvim(abs, on, root) {
+  if (on) { notify({ title: "Neovim opens the files of this computer only", level: "info", timeout: 3000 }); return; }
+  const space = spaces().find((s) => s.active);
+  if (!space || !abs) return;
+  const back = space.tabs.find((t) => t.active)?.id ?? "";
+  run("tab.new", { space: space.id, folder: root || abs.slice(0, abs.lastIndexOf("/")) || "/", name: abs.split("/").pop().slice(0, 40),
+    argv: ["sh", "-lc", 'exec python3 -I "$1" "$2" "$3"', "nvim", `${appHome()}/mods/vnh-filetree/nvim-open.py`, abs, back] });
+}
 // VNH: Markdown is previewed from inside Helix (Space m, see hx-open.py), which opens it as a rendered tab (vnh-markdown).
 const MARKDOWN = /\.(md|markdown|mdx)$/i;
 // VNH: the space's Markdown tab, reused for every preview: ask it to switch (shared
@@ -665,11 +675,17 @@ export default class FileTree extends View {
     if (!r) return;
     const x = this.downX; this.downX = null;
     const abs = join(R.root, k.rel);
-    if (x !== null && x !== undefined && !r.e?.dir && this.onEye(r, x)) { openInHelix(abs, R.on ?? null, R.root); cx.notify(); return; }
     const now = Date.now(), double = this.lastPress?.rel === key && now - this.lastPress.at < 450;
     this.lastPress = double ? null : { rel: key, at: now };
+    if (!r.e?.dir) {
+      if (double) { this.hxPending = null; openInNvim(abs, R.on ?? null, R.root); cx.notify(); return; }
+      if (x !== null && x !== undefined && this.onEye(r, x)) {
+        const token = (this.hxPending = {});
+        cx.timer.after(420, () => { if (this.hxPending === token) { this.hxPending = null; openInHelix(abs, R.on ?? null, R.root); } });
+        cx.notify(); return;
+      }
+    }
     if (r.e.dir) { if (r.flat || R.hits) { this.clearSearch(cx); this.setView("tree", cx); R.open([...ancestors(k.rel), k.rel], cx, () => { this.scrollTo = key; }); } else R.toggle(k.rel, cx); }
-    else if (double) this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx);
     cx.notify();
   }
 
@@ -1219,14 +1235,21 @@ export default class FileTree extends View {
     const r = this.rows().find((x) => x.rel === rel);
     if (!r) return;
     const x = this.downX; this.downX = null;
-    if (x !== null && x !== undefined && !r.e?.dir && this.onEye(r, x)) { this.cursor = rel; openInHelix(join(this.root, rel), this.on, this.root); cx.notify(); return; }
     const now = Date.now(), double = this.lastPress?.rel === rel && now - this.lastPress.at < 450;
     this.lastPress = double ? null : { rel, at: now };
+    if (!r.e?.dir) {
+      // A double press: Neovim. One press on the blank after the name: Helix, but only once no second press follows (else both would open).
+      if (double) { this.hxPending = null; this.cursor = rel; openInNvim(join(this.root, rel), this.on, this.root); cx.notify(); return; }
+      if (x !== null && x !== undefined && this.onEye(r, x)) {
+        const token = (this.hxPending = {}); this.cursor = rel;
+        cx.timer.after(420, () => { if (this.hxPending === token) { this.hxPending = null; openInHelix(join(this.root, rel), this.on, this.root); } });
+        cx.notify(); return;
+      }
+    }
     this.handle.focus();
     this.cursor = rel;
     if (r.flat && r.e.dir) this.revealInTree(rel, cx);
     else if (r.e.dir) { if (this.hits) this.jump(cx); else if (!double) this.toggle(rel, cx); }
-    else if (double) this.openFile(rel, cx);
     cx.notify();
   }
 
