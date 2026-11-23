@@ -23,7 +23,7 @@ import { pullsMethods } from "./views/pulls.js";
 // VNH: which of the changed files the agent(s) in view wrote, for "only this session's files". Run in the repository. A file's modification
 // time says when it was written; the ledger (vnh-agents/ledger.js: when each agent was working, in which folder) says who was active
 // then. One agent: it is that agent's. Several at once: the agents' own records break the tie (a Claude transcript's Write / Edit time and
-// shell command windows, agy's edit_file / write_file steps), and what stays undecided counts for all of them. Nobody working: a hand
+// shell command windows, agy's edit_file / write_file / run_command steps, each with the time its tool began and finished), and what stays undecided counts for all of them. Nobody working: a hand
 // edit, nobody's. Before the ledger began, the agents' records alone decide. Those records are read incrementally (a cache per file).
 // Prints {paths: [relative to the repository, still changed]}.
 const SESSION_PY = String.raw`import sys, os, re, json, glob, subprocess, sqlite3, datetime, hashlib, time
@@ -87,7 +87,7 @@ evidence_cache = {}
 def evidence(sid):
     """{'exact': {rel path: last Write/Edit time or None}, 'wins': [(from, to)], 'last': time of the last record}"""
     if sid in evidence_cache: return evidence_cache[sid]
-    ev = {"exact": {}, "wins": [], "last": 0.0}
+    ev = {"exact": {}, "xwins": {}, "wins": [], "last": 0.0}
     if not re.fullmatch(r"[0-9a-f-]{36}", sid or ""):
         evidence_cache[sid] = ev; return ev
     base = glob.glob("%s/.claude/projects/*/%s.jsonl" % (home, sid)) + glob.glob("%s/.ccs/instances/*/projects/*/%s.jsonl" % (home, sid))
@@ -143,7 +143,12 @@ def evidence(sid):
         try:
             ev["last"] = max(ev["last"], os.path.getmtime(db) + 20)
             con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=1)
-            for (pl,) in con.execute("select step_payload from steps where step_type=132"):
+            steps = con.execute("select idx, metadata, step_type, step_payload from steps order by idx").fetchall()
+            for idx, md, stype, pl in con.execute("select idx, metadata, step_type, step_payload from steps where step_type=132 order by idx"):
+                created, began, finished = step_times(md)
+                if not began: continue
+                lo = began - 1.5
+                hi = (finished if finished else min(now, began + 300)) + 1.5     # not finished yet: running now
                 b = bytes(pl or b"")
                 for tool in (b"edit_file", b"write_file"):
                     i = b.find(tool + b"\x1a")
@@ -152,28 +157,56 @@ def evidence(sid):
                     if m:
                         try: q = rel(json.loads(b'"' + m.group(1) + b'"'))
                         except Exception: q = None
-                        if q: ev["exact"].setdefault(q, None)
+                        if q: ev["xwins"].setdefault(q, []).append((lo, hi))
                     break
+                else:
+                    if b.find(b"run_command\x1a") >= 0: ev["wins"].append((lo, hi))
         except Exception:
             pass
     evidence_cache[sid] = ev
     return ev
 
+def _varint(b, i):
+    n = sh = 0
+    while True:
+        c = b[i]; i += 1; n |= (c & 0x7f) << sh; sh += 7
+        if not c & 0x80: return n, i
+
+def step_times(md):
+    """agy: the metadata of a step is a protobuf with timestamps {seconds, nanos}: field 1 when the model produced it, 7 and 32 when its
+    tool began to run (after the tools before it), 8 when it finished. -> (created, began, finished), each None when absent."""
+    got = {}
+    try:
+        b = bytes(md); i = 0
+        while i < len(b):
+            tag, i = _varint(b, i); f, w = tag >> 3, tag & 7
+            if w == 0: _, i = _varint(b, i)
+            elif w == 2:
+                l, i = _varint(b, i); sub = b[i:i + l]; i += l
+                if f in (1, 7, 8, 32) and sub[:1] == b"\x08":
+                    v, _ = _varint(sub, 1)
+                    if 1.5e9 < v < 4e9: got[f] = float(v)
+            elif w == 1: i += 8
+            elif w == 5: i += 4
+            else: break
+    except Exception:
+        pass
+    return got.get(1), got.get(32) or got.get(7) or got.get(1), got.get(8)
+
 def proof(sid, p, m):
     """2: the agent's own record puts a write of this file at this time; 1: one of its shell commands was running; 0: nothing."""
     ev = evidence(sid)
-    if p in ev["exact"]:
-        ts = ev["exact"][p]
-        if ts and abs(ts - m) <= 4: return 2
-        if ts is None and (not ev["last"] or m <= ev["last"] + 5): return 1     # agy: the path is in its steps, with no time
-    if any(a <= m <= b for a, b in ev["wins"]): return 1
+    ts = ev["exact"].get(p)
+    if ts and abs(ts - m) <= 4: return 2                                        # Claude: the Write / Edit was logged at that moment
+    if any(a <= m <= b for a, b in ev["xwins"].get(p, ())): return 2            # agy: the edit_file / write_file step of this path was running
+    if any(a <= m <= b for a, b in ev["wins"]): return 1                        # a shell command of the agent was running
     return 0
 
 # ── who wrote each changed file ─────────────────────────────────────────────────────────────────────────────────────────────
 out, shared, covered = set(), 0, 0
 for p, m in changed.items():
     if m is None:                                    # deleted: only the agents' own records can tell
-        if any(p in evidence(s)["exact"] for s in mine_ids if not s.startswith("t:")): out.add(p)
+        if any(p in evidence(s)["exact"] or p in evidence(s)["xwins"] for s in mine_ids if not s.startswith("t:")): out.add(p)
         continue
     cands = {}
     for a, b, sid, cwd in runs:
