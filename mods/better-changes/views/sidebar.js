@@ -2,7 +2,7 @@
 // The sidebar: its tabs, options menu, file groups and commit views.
 import { div } from "gpui-kit";
 import { v_flex, h_flex, v_resizable, resizable_panel } from "gpui-base";
-import { theme, shared, setShared, exec, agents, spaces, notify, openOverlay } from "herdr";
+import { theme, shared, setShared, exec, agents, spaces, notify, openOverlay, home } from "herdr";
 import { fileTree, timeAgo } from "../git/model.js";
 import {
   TEXT,
@@ -324,7 +324,7 @@ export const sidebarMethods = {
     const staged = files.filter((f) => f.staged);
     // Filtered by a session, the list is about what is still uncommitted: the Committed group (what the branch has over its remote) is left out.
     const committed = mine ? null : this.committed?.total ? this.committed : null;
-    if (mine) list.child(this.sessionChip(files.length));
+    if (mine) list.child(this.sessionChip(files.length, files.map((f) => f.path)));
     else if (this.sessionOnly) list.child(div().px(8).h(22).flex().items_center().text_size(TEXT.caption).text_color(theme().dim).child("Only this session's files: no agent in view, showing every file"));
     const nothing = !conflicts.length && !unstaged.length && !staged.length && !committed;
     // VNH: split view staging, as Fork's: working changes above, the staging area below.
@@ -350,14 +350,40 @@ export const sidebarMethods = {
     return v_flex().id("changes").flex_1().min_h(0).child(list).child(this.renderCommitBox());
   },
 
+  // VNH: tells the agent in view to commit the files it wrote (the list is in the message).
+  async askAgentCommit(paths, cx) {
+    const terminal = (this.mineTerms ?? [])[0];
+    if (!terminal || !paths.length || this.askingAgent) return;
+    this.askingAgent = true;
+    const shown = paths.slice(0, 200), more = paths.length - shown.length;
+    const text = [
+      "Hãy commit các file bạn vừa sửa trong session này. Chỉ đúng những file sau (đường dẫn tính từ gốc repo " + this.root + "), đừng đụng file nào khác và đừng dùng git add -A hay git add .:",
+      ...shown.map((p) => `- ${p}`),
+      ...(more > 0 ? [`- … và ${more} file nữa (xem git status)`] : []),
+      "Stage đúng các file này bằng git add -- <file>, viết commit message theo Conventional Commits mô tả đúng thay đổi (nếu chúng thuộc các nhóm khác nhau thì chia thành nhiều commit), không push. Nếu có file trong danh sách mà thực ra không phải bạn sửa thì bỏ qua và nói cho tôi biết.",
+    ].join("\n");
+    try {
+      const r = await exec("sh", ["-c", 'exec "$HOME/.local/bin/hc" send "$@"', "hc", terminal, text], { timeout: 20000 });
+      if (r.code !== 0) notify({ title: "Couldn't reach the agent", body: String(r.stderr || r.stdout).trim().split("\n")[0].slice(0, 160), level: "error", timeout: 6000 });
+      else notify({ title: "Asked the agent to commit", body: `${paths.length} file${paths.length === 1 ? "" : "s"}`, level: "success", timeout: 3000 });
+    } catch (e) {
+      notify({ title: "Couldn't reach the agent", body: String(e?.message ?? e).slice(0, 160), level: "error", timeout: 6000 });
+    } finally {
+      this.askingAgent = false;
+    }
+  },
+
   // VNH: says the list is filtered, and turns it off with a click.
-  sessionChip(shown) {
+  sessionChip(shown, paths) {
     const t = theme(), total = this.files.length;
+    // One click tells the agent to commit exactly these files (hc send: pasted into its terminal and submitted).
+    const askable = paths.length > 0 && (this.mineTerms ?? []).length === 1 && !this.on;
     return h_flex().id("session-chip").flex_none().h(26).px(8).mb(4).gap(6).items_center().rounded(6).cursor_pointer()
       .bg(t.hover).text_size(TEXT.caption).text_color(t.muted).tooltip("Show every changed file")
       .on_click((_e, cx) => this.setSessionOnly(false, cx))
       .child(Icon("check", 12).text_color(t.accent))
       .child(div().flex_1().min_w(0).truncate().child(`Only this session's files · ${shown} of ${total}`))
+      .when(askable, (el) => el.child(TextButton({ id: "session-commit", icon: "commit", label: "Ask agent to commit", onClick: (cx) => this.askAgentCommit(paths, cx) })))
       .child(Icon("close", 12).text_color(t.dim));
   },
 

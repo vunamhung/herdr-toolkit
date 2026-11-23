@@ -298,6 +298,7 @@ class BetterChanges extends View {
     if (!f?.tab) return;
     const fp = f.pane ? panes().find((p) => p.pane === f.pane) : null;
     const terms = fp?.status && fp.terminal ? [fp.terminal] : agents().filter((a) => a.tab === f.tab).map((a) => a.address);
+    this.mineTerms = terms;
     const key = terms.join(","), now = Date.now();
     if (key === this.mineKey && now - this.mineAt < 4000) return;
     this.mineKey = key; this.mineAt = now;
