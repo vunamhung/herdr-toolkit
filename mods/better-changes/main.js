@@ -306,7 +306,9 @@ class BetterChanges extends View {
       const text = await readTextFile(`${home()}/.cache/herdr-status/${t}.json`).catch(() => null);
       try { const id = JSON.parse(text ?? "{}").session; if (id) sessions.push(id); } catch {}
     }
-    if (sessions.join() !== (this.mine ?? []).join()) { this.mine = sessions.length ? sessions : null; this.sessionSet = null; this.sessionKey = ""; cx.notify(); }
+    // An agent is in view but has no session yet (just started): it has written nothing, so the list is empty. No agent at all: no filter.
+    const next = sessions.length ? sessions : terms.length ? [] : null;
+    if (next?.join() !== this.mine?.join() || Boolean(next) !== Boolean(this.mine)) { this.mine = next; this.sessionSet = null; this.sessionKey = ""; cx.notify(); }
   }
 
   // Asks SESSION_PY, at most every 6 s and when the session or the number of changed files changed.

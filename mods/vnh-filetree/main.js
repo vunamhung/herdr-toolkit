@@ -1060,7 +1060,7 @@ export default class FileTree extends View {
       const text = await readTextFile(`${home()}/.cache/herdr-status/${t}.json`).catch(() => null);
       try { const id = JSON.parse(text ?? "{}").session; if (id) sessions.add(id); } catch {}
     }
-    const next = sessions.size ? sessions : null;
+    const next = sessions.size ? sessions : terms.length ? new Set() : null; // an agent without a session yet has nothing
     if ((next?.size ?? 0) !== (this.mine?.size ?? 0) || [...(next ?? [])].some((x) => !this.mine?.has(x))) { this.mine = next; this.agoAt = 0; this.dirtyMine = true; }
   }
   // Does an event of `session` belong to the agent in view? Unknown on either side: yes.
