@@ -78,7 +78,7 @@ export default class Tabs extends View {
         if (c === "timeline") this.toggleTimeline();
         else if (c === "insights") this.toggleInsights();
         else if (c === "insights-close") this.closeInsights();
-        else if (c === "files" || c === "changes" || c === "graph") this.togglePanel(c);
+        else if (c === "files" || c === "changes" || c === "graph" || c === "scripts") this.togglePanel(c);
         // "vnh-tabs.git-push" (cmd-\): push the work folder's branch and its tags, no dialog.
         else if (c === "git-push") this.gitPush();
         else if (c === "git-pull") this.gitPull();
@@ -397,7 +397,7 @@ export default class Tabs extends View {
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
     // VNH: the git-graph panel shows when the layout's panel holds it (Herdr's panel settings don't know it).
-    const enabled = [...(shared("workspace.panels") ?? ["files", "changes"]), ...(body?.children?.some(c => c.id === "graph") ? ["graph"] : [])];
+    const enabled = [...(shared("workspace.panels") ?? ["files", "changes"]), ...(body?.children?.some(c => c.id === "graph") ? ["graph"] : []), ...(body?.children?.some(c => c.id === "scripts") ? ["scripts"] : [])];
     if (this.insights && !panes().some((p) => p.mod === "insights")) this.restoreInsights(false);
     this.syncTimeline(find(root, "timeline"), panel);
     this.syncWidths(panel, find(root, "timeline"));
@@ -431,6 +431,7 @@ export default class Tabs extends View {
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
+      .when(enabled.includes("scripts"), el => el.child(panelButton("scripts", "Scripts", "mods/vnh-scripts/scripts.svg")))
       .when(enabled.includes("graph"), el => el.child(panelButton("graph", "Git", "mods/git-graph/icons/graph.svg")))
       .when(Boolean(timeline), el => el.child(timelineButton()))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/vnh-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))

@@ -226,6 +226,13 @@
                                   }
                                 }
                               }
+                            },
+                            {
+                              "id": "scripts",
+                              "type": "block",
+                              "content": {
+                                "mod": "vnh-scripts"
+                              }
                             }
                           ],
                           "active": "files"
