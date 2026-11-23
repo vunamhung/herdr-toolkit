@@ -427,6 +427,11 @@ function sendToAgent(cx, abs) {
   cx.timer.after(600, (cx) => { if (before !== undefined) cx.write_to_clipboard(before); });
 }
 
+// VNH: a stepped blink (twice a second) instead of `.loop("opacity")`, which repaints the whole window at the display's rate while it is on
+// screen. ANIM is set while one is drawn, and a 500 ms timer redraws this view only then.
+let ANIM = false;
+const breath = (from, to) => { ANIM = true; return Math.floor(Date.now() / 500) % 2 ? from : to; };
+
 export default class FileTree extends View {
   init(_props, cx) {
     this.menu = props()?.menu ?? null;
@@ -476,6 +481,7 @@ export default class FileTree extends View {
     // "filetree.focus": the Markdown tab hands the keyboard back here when it closes.
     cx.spawn(async (cx) => { for (;;) { if (String(await nextCommand()).replace(/^filetree\./, "") === "focus") this.handle?.focus(); cx.notify(); } });
     cx.timer.every(1000, (cx) => this.tick(cx));
+    cx.timer.every(500, (cx) => { if (ANIM) { ANIM = false; cx.notify(); } });
     cx.timer.every(2000, (cx) => this.pollAgy(cx)); // VNH: agy's reads and writes
   }
 
@@ -1341,7 +1347,7 @@ export default class FileTree extends View {
   flatRow(r, t, R, now, key) {
     const { rel, e } = r, tone = tones(t), selected = rel === this.cursor;
     const fl = this.flashOf(rel, true, now), lit = fl ? tone[fl.tone] : null;
-    const pulse = (el) => el.loop("opacity", { from: 0.35, to: 1, period: 900 });
+    const pulse = (el) => el.opacity(breath(0.35, 1));
     const h = r.recent, color = h.kind === "read" ? tone.purple : h.kind === "commit" ? tone.green : tone.orange;
     return this.dragged(h_flex(), rel, Boolean(e?.dir)).id(`ft-${key ?? rel}`).h(ROW).flex_none().pl(8).pr(10).gap(7).items_center().rounded(R).cursor_pointer()
       .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
@@ -1368,7 +1374,7 @@ export default class FileTree extends View {
       ? (e.dir ? (this.sizes.has(rel) ? formatSize(this.sizes.get(rel)) : "…") : formatSize(e.size))
       : (!e.dir && !loc && this.width > 250 ? stamp(e.mtime) : "");
     const selected = rel === this.cursor;
-    const pulse = (el) => el.loop("opacity", { from: 0.35, to: 1, period: 900 });
+    const pulse = (el) => el.opacity(breath(0.35, 1));
     return this.dragged(h_flex(), rel, e.dir).id(`ft-${key ?? rel}`).h(ROW).flex_none().pl(6 + depth * 14).pr(10).gap(6).items_center().rounded(R).cursor_pointer()
       .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
       .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
@@ -1404,7 +1410,7 @@ export default class FileTree extends View {
     return v_flex().flex_none().px(10).pt(9).pb(8).gap(6)
       .child(h_flex().gap(6).items_center().text_size(12)
         .child(svg(ICON("git-branch")).size(12).flex_none().text_color(lit ?? t.foreground))
-        .child(div().min_w(0).truncate().font_medium().text_color(lit ?? t.foreground).when(Boolean(lit), (el) => el.loop("opacity", { from: 0.4, to: 1, period: 900 })).child(b?.head ?? "…"))
+        .child(div().min_w(0).truncate().font_medium().text_color(lit ?? t.foreground).when(Boolean(lit), (el) => el.opacity(breath(0.4, 1))).child(b?.head ?? "…"))
         .when(Boolean(b?.ahead), (el) => el.child(div().flex_none().text_color(tone.teal).child(`↑${b.ahead}`)))
         .when(Boolean(b?.behind), (el) => el.child(div().flex_none().text_color(tone.blue).child(`↓${b.behind}`)))
         .child(div().flex_1())
@@ -1430,7 +1436,7 @@ export default class FileTree extends View {
         return !this.cursor ? "" : !k ? this.cursor : R ? (k.head ? R.root : `${baseOf(R.root)}/${k.rel}`) : "";
       })()))
       .when(Boolean(c), (el) => el.child(h_flex().flex_none().gap(4).items_center().text_color(color)
-        .child(div().when(c.state === "running", (d) => d.font_semibold().loop("opacity", { from: 0.4, to: 1, period: 1000 })).child(c.state === "running" ? `${c.label}…` : c.state === "done" ? `✓ ${c.label}` : c.label))
+        .child(div().when(c.state === "running", (d) => d.font_semibold().opacity(breath(0.4, 1))).child(c.state === "running" ? `${c.label}…` : c.state === "done" ? `✓ ${c.label}` : c.label))
         .when(Boolean(hash), (d) => d.child(div().text_color(t.dim).child(hash)))));
   }
 
