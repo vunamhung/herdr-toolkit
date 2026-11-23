@@ -12,7 +12,17 @@ import { spaces, panes, agents, focused, exec, readTextFile, writeTextFile, watc
 
 const NAME = "vnh-filetree"; // VNH clone of filetree (the hook bridge stays in mods/filetree)
 const ICON = (name) => `mods/${NAME}/${name}.svg`;
-// VNH: Markdown opens rendered in its own tab (vnh-markdown): the eye in a preview, or Space.
+// VNH: a file in Helix, in a tab of its own: a press on the blank after a file's name (see onEye). hx-open.py starts it so that Esc quits
+// Helix, shows the tab you came from again and closes this one.
+function openInHelix(abs, on) {
+  if (on) { notify({ title: "Helix opens the files of this computer only", level: "info", timeout: 3000 }); return; }
+  const space = spaces().find((s) => s.active);
+  if (!space || !abs) return;
+  const back = space.tabs.find((t) => t.active)?.id ?? "";
+  run("tab.new", { space: space.id, folder: abs.slice(0, abs.lastIndexOf("/")) || "/", name: abs.split("/").pop().slice(0, 40),
+    argv: ["sh", "-lc", 'exec python3 -I "$1" "$2" "$3"', "hx", `${appHome()}/mods/vnh-filetree/hx-open.py`, abs, back] });
+}
+// VNH: Markdown opens rendered in its own tab (vnh-markdown): Space (or the button of its preview).
 const MARKDOWN = /\.(md|markdown|mdx)$/i;
 // VNH: the space's Markdown tab, reused for every preview: ask it to switch (shared
 // "vnh.markdown.open", read by that pane's copy) and show it; open one only when there is none.
@@ -649,7 +659,7 @@ export default class FileTree extends View {
     if (!r) return;
     const x = this.downX; this.downX = null;
     const abs = join(R.root, k.rel);
-    if (x !== null && x !== undefined && !r.e?.dir && MARKDOWN.test(k.rel) && this.onEye(r, x)) { openMarkdownTab(abs, null); cx.notify(); return; }
+    if (x !== null && x !== undefined && !r.e?.dir && this.onEye(r, x)) { openInHelix(abs, R.on ?? null); cx.notify(); return; }
     const now = Date.now(), double = this.lastPress?.rel === key && now - this.lastPress.at < 450;
     this.lastPress = double ? null : { rel: key, at: now };
     if (r.e.dir) { if (r.flat || R.hits) { this.clearSearch(cx); this.setView("tree", cx); R.open([...ancestors(k.rel), k.rel], cx, () => { this.scrollTo = key; }); } else R.toggle(k.rel, cx); }
@@ -1192,7 +1202,7 @@ export default class FileTree extends View {
     const r = this.rows().find((x) => x.rel === rel);
     if (!r) return;
     const x = this.downX; this.downX = null;
-    if (x !== null && x !== undefined && !r.e?.dir && MARKDOWN.test(rel) && this.onEye(r, x)) { this.cursor = rel; this.openMarkdown(rel); cx.notify(); return; }
+    if (x !== null && x !== undefined && !r.e?.dir && this.onEye(r, x)) { this.cursor = rel; openInHelix(join(this.root, rel), this.on); cx.notify(); return; }
     const now = Date.now(), double = this.lastPress?.rel === rel && now - this.lastPress.at < 450;
     this.lastPress = double ? null : { rel, at: now };
     this.handle.focus();
@@ -1324,12 +1334,8 @@ export default class FileTree extends View {
       .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
       .child(e.dir ? svg(ICON(`chevron-${open ? "down" : "right"}`)).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
       .child(image(fileIcon(rel, e.dir, open, settings().dark !== false)).size(16).flex_none().when(Boolean(fl?.bright), pulse))
-      .child(div().when(!(!e.dir && MARKDOWN.test(rel)), (el) => el.flex_1()).min_w(0).truncate().text_color(nameColor).when(selected, (el) => el.font_medium())
+      .child(div().flex_1().min_w(0).truncate().text_color(nameColor).when(selected, (el) => el.font_medium())
         .when(status === "D" && !e.dir, (el) => el.line_through()).when(Boolean(fl?.bright), pulse).child(e.name + (e.link ? " ↪" : "")))
-      // VNH: an eye right after a Markdown file's name; a press on it (see eyeHit) opens the rendered tab.
-      .when(!e.dir && MARKDOWN.test(rel), (el) => el.child(div().flex_none().size(16).flex().items_center().justify_center().rounded(4)
-        .text_color(t.dim).opacity(0.55).hover((st) => st.opacity(1).text_color(t.foreground).bg(t.hover))
-        .child(svg(ICON("eye")).size(13))).child(div().flex_1().min_w(32)))
       .when(Boolean(meta), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(meta)))
       .when(Boolean(loc?.[0]), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi2).child(`+${loc[0]}`)))
       .when(Boolean(loc?.[1]), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi1).child(`−${loc[1]}`)))
