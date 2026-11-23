@@ -21,7 +21,7 @@ function openInHelix(abs, on, root) {
   if (!space || !abs) return;
   const back = space.tabs.find((t) => t.active)?.id ?? "";
   run("tab.new", { space: space.id, folder: root || abs.slice(0, abs.lastIndexOf("/")) || "/", name: abs.split("/").pop().slice(0, 40),
-    argv: ["sh", "-lc", 'exec python3 -I "$1" "$2" "$3"', "hx", `${appHome()}/mods/vnh-filetree/hx-open.py`, abs, back] });
+    argv: ["sh", "-lc", 'exec python3 -I "$1" "$2" "$3" "$4"', "hx", `${appHome()}/mods/vnh-filetree/hx-open.py`, abs, back, String(theme().background ?? "")] });
 }
 // VNH: Markdown is previewed from inside Helix (Space m, see hx-open.py), which opens it as a rendered tab (vnh-markdown).
 const MARKDOWN = /\.(md|markdown|mdx)$/i;

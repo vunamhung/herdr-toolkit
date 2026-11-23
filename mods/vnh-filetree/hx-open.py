@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # A file in Helix, in a tab of its own (the Files panel: a press on the blank after a name):
-#   hx-open.py <file> [tab to go back to]
+#   hx-open.py <file> [tab to go back to] [Herdr's background colour, #rrggbb]
 # Esc in Helix's normal mode quits it (a copy of your ~/.config/helix/config.toml with `esc = ":quit"` under [keys.normal], unless you
 # bound esc yourself; a buffer with unsaved changes refuses to quit, as with :q). When Helix ends, the tab you came from is shown again
 # and this terminal (so this tab) is closed.
@@ -8,6 +8,7 @@ import json, os, re, subprocess, sys
 
 path = sys.argv[1]
 back = sys.argv[2] if len(sys.argv) > 2 else ""
+bg = sys.argv[3] if len(sys.argv) > 3 else ""
 home = os.path.expanduser("~")
 cfg_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
 src = os.path.join(cfg_home, "helix", "config.toml")
@@ -45,6 +46,39 @@ if not re.search(r"^\s*m\s*=", text, re.M) or not re.search(r"^\s*\[keys\.normal
         text = re.sub(r"^(\s*\[keys\.normal\.space\]\s*)$", lambda m: m.group(1) + "\n" + bind, text, count=1, flags=re.M)
     else:
         text += "\n[keys.normal.space]\n" + bind + "\n"
+# Helix's background is Herdr's: your theme (theme = "..." in the config) is copied as `vnh-herdr` with every `bg` that was the theme's
+# main background replaced by Herdr's, so only that colour changes (the file is written next to your themes and rewritten at each start).
+def toml_style(v):
+    if isinstance(v, str): return '"%s"' % v.replace("\\", "\\\\").replace('"', '\\"')
+    if isinstance(v, list): return "[" + ", ".join(toml_style(x) for x in v) + "]"
+    if isinstance(v, dict): return "{ " + ", ".join("%s = %s" % (k, toml_style(x)) for k, x in v.items()) + " }"
+    return str(v)
+
+m = re.match(r"^#?([0-9a-fA-F]{6})", bg or "")
+tm = re.search(r'^\s*theme\s*=\s*"([^"]+)"', text, re.M)
+if m and tm and tm.group(1) != "vnh-herdr":
+    try:
+        import tomllib
+        name = tm.group(1)
+        for d in (os.path.join(cfg_home, "helix", "themes"), os.path.join(cfg_home, "helix", "runtime", "themes"), os.path.join(home, ".local", "share", "helix", "runtime", "themes")):
+            f = os.path.join(d, name + ".toml")
+            if os.path.exists(f):
+                theme = tomllib.load(open(f, "rb"))
+                pal = theme.get("palette", {})
+                col = lambda c: pal.get(c, c) if isinstance(c, str) else c
+                base = col((theme.get("ui.background") or {}).get("bg"))
+                if base:
+                    lines = ['inherits = "%s"' % name]
+                    for key, val in theme.items():
+                        if isinstance(val, dict) and key != "palette" and val.get("bg") is not None and col(val["bg"]) == base:
+                            lines.append('"%s" = %s' % (key, toml_style({**val, "bg": "#" + m.group(1)})))
+                    tdir = os.path.join(cfg_home, "helix", "themes")
+                    os.makedirs(tdir, exist_ok=True)
+                    open(os.path.join(tdir, "vnh-herdr.toml"), "w", encoding="utf-8").write("\n".join(lines) + "\n")
+                    text = text.replace(tm.group(0), tm.group(0).split("=")[0] + '= "vnh-herdr"', 1)
+                break
+    except Exception:
+        pass
 cache = os.path.join(home, ".cache", "vnh-hx")
 os.makedirs(cache, exist_ok=True)
 cfg = os.path.join(cache, "config.toml")
