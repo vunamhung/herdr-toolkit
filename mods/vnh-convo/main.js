@@ -125,9 +125,9 @@ export default class Convo extends View {
     const t = theme(), d = this.doc, turns = this.turns, view = (turns ?? []).slice(0, this.shown);
     const card = (p, i) => {
       const n = turns.length - i;
-      return v_flex().id(`turn-${n}`).flex_none().gap(6).py(10).border_b(1).border_color(t.border)
-        .child(h_flex().gap(8).text_size(10.5).text_color(t.dim).child(div().child(`#${n}`)).child(div().child(when(p.at))))
-        .child(div().text_size(13).text_color(t.foreground).whitespace_normal().child(p.text))
+      return v_flex().id(`turn-${n}`).flex_none().gap(3).py(7).border_b(1).border_color(t.border)
+        .child(h_flex().gap(8).text_size(10).text_color(t.dim).child(div().child(`#${n}`)).child(div().child(when(p.at))))
+        .child(div().text_size(12.5).line_height("18px").text_color(t.foreground).whitespace_normal().child(p.text))
         .when(Boolean(p.reply), (el) => el.child(v_flex().pl(10).border_l(2).border_color(t.border)
           .child(TextView.markdown(`reply-${d.id}-${n}`, p.reply.length > 20000 ? `${p.reply.slice(0, 20000)}…` : p.reply).text_size(12.5))));
     };
@@ -150,7 +150,7 @@ export default class Convo extends View {
           .on_click((_e, cx) => { cx.stop_propagation(); this.resume(); })
           .child("Resume")))
       .child(div().id("convo-scroll").flex_1().min_h(0).overflow_y_scrollbar()
-        .child(v_flex().w_full().max_w(880).mx_auto().px(28).py(12).text_size(13).font_family(FONT)
+        .child(v_flex().w_full().max_w(880).mx_auto().px(22).py(6).text_size(13).font_family(FONT)
           .when(turns === null, (el) => el.child(div().text_color(t.dim).py(10).child("Loading…")))
           .when(Boolean(this.note), (el) => el.child(div().text_color(t.dim).text_size(12).py(6).child(this.note)))
           .children(view.map(card))

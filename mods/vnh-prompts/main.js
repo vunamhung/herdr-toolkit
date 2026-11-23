@@ -249,19 +249,20 @@ export default class Prompts extends View {
     const rows = (list ?? []).slice(0, this.convoShown).map((s, i) => {
       const agent = s.agent ?? "claude", cur = Boolean(this.curSession) && s.id === this.curSession;
       const title = (s.title || s.prompt || s.id).replace(/\s+/g, " ").trim();
-      return h_flex().id(`convo-${s.id}`).flex_none().px(10).py(7).gap(9).items_center().rounded(8).cursor_pointer().hover((x) => x.bg(t.hover))
+      // One line each: the icon, the title, then how old and how many prompts, so twice as many fit.
+      const meta = [ago(s.m), s.n ? `${s.n} prompt${s.n > 1 ? "s" : ""}` : "", s.branch ?? ""].filter(Boolean).join(" · ");
+      return h_flex().id(`convo-${s.id}`).flex_none().h(28).px(8).gap(8).items_center().rounded(6).cursor_pointer().hover((x) => x.bg(t.hover))
+        .tooltip(`${title} · ${meta}`)
         .on_click((_e, cx) => { this.openPreview(s); cx.notify(); })
-        .child(image(AGENT_ICON[agent] ?? AGENT_ICON.claude).size(14).flex_none())
-        .child(v_flex().flex_1().min_w(0).gap(1)
-          .child(div().truncate().text_size(12.5).text_color(t.foreground).when(cur, (el) => el.font_semibold()).child(title))
-          .child(div().truncate().text_size(11).text_color(t.dim)
-            .child([ago(s.m), s.n ? `${s.n} prompt${s.n > 1 ? "s" : ""}` : "", s.branch ?? ""].filter(Boolean).join(" · "))))
-        .when(cur, (el) => el.child(div().size(7).flex_none().rounded(4).bg(t.accent).tooltip("The conversation you are in")))
-        .child(div().id(`resume-${s.id}`).size(24).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim)
+        .child(image(AGENT_ICON[agent] ?? AGENT_ICON.claude).size(13).flex_none())
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).when(cur, (el) => el.font_semibold()).child(title))
+        .when(cur, (el) => el.child(div().size(6).flex_none().rounded(3).bg(t.accent)))
+        .child(div().flex_none().text_size(10.5).text_color(t.dim).child(`${ago(s.m)}${s.n ? ` · ${s.n}` : ""}`))
+        .child(div().id(`resume-${s.id}`).size(20).flex_none().flex().items_center().justify_center().rounded(5).text_color(t.dim)
           .hover((x) => x.bg(t.raised).text_color(t.accent)).tooltip("Resume this conversation")
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { cx.stop_propagation(); this.resumeConvo(s); })
-          .child(svg(ICON("play")).size(11).flex_none()));
+          .child(svg(ICON("play")).size(10).flex_none()));
     });
     return v_flex().id("over9k-prompts").size_full().min_h(0).rounded(10).overflow_hidden()
       .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
@@ -272,7 +273,7 @@ export default class Prompts extends View {
         .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(root ? root.split("/").pop() : "")))
       .when(list === null, (el) => el.child(div().px(14).py(10).text_size(12).text_color(t.dim).child("Reading the conversations…")))
       .when(list !== null && list.length === 0, (el) => el.child(div().px(14).py(10).text_size(12).text_color(t.dim).child(root ? "No conversations in this repository yet" : "Open an agent in a repository to see its conversations")))
-      .child(v_flex().id("convos-scroll").flex_1().min_h(0).overflow_y_scrollbar().px(6).pt(6).pb(8).gap(1)
+      .child(v_flex().id("convos-scroll").flex_1().min_h(0).overflow_y_scrollbar().px(4).pt(4).pb(6).gap(0)
         .children(rows)
         .when((list?.length ?? 0) > this.convoShown, (el) => el.child(div().id("convos-more").h(32).flex_none().mx(4).flex().items_center().justify_center().rounded(8).cursor_pointer()
           .text_size(12).text_color(t.muted).hover((x) => x.bg(t.hover).text_color(t.foreground))
