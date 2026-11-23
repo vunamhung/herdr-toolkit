@@ -116,6 +116,41 @@ function Badge(text) {
     .child(String(text));
 }
 
+// VNH: one button of the vertical rail that switches the panel's section: an icon, a count pill on its corner, a bar on the edge when it
+// is the section shown. `tone`: the count's colour ("accent" for what needs attention, else dim).
+export function RailButton({ id, icon, label, count, tone = "dim", active, onClick }) {
+  const t = theme();
+  const text = count ? (count > 99 ? "99+" : String(count)) : null;
+  return div()
+    .id(id)
+    .relative()
+    .size(36)
+    .flex_none()
+    .flex()
+    .items_center()
+    .justify_center()
+    .rounded(10)
+    .bg(active ? t.raised : t.background)
+    .text_color(active ? t.foreground : t.muted)
+    .cursor_pointer()
+    .hover((s) => s.bg(active ? t.raised : t.hover).text_color(t.foreground))
+    .role("tab")
+    .aria_selected(Boolean(active))
+    .accessibility_label(label)
+    .tooltip(label)
+    .on_click((_e, cx) => onClick(cx))
+    .when(active, (el) => el.child(div().absolute().left(-4).top(9).w(3).h(18).rounded(2).bg(t.accent)))
+    .child(Icon(icon, 17))
+    .when(Boolean(text), (el) =>
+      el.child(
+        div().absolute().top(1).right(0).h(14).min_w(14).px(3).flex().items_center().justify_center().rounded(7)
+          .bg(tone === "accent" ? t.accent : t.hover).text_size(9.5).font_semibold()
+          .text_color(tone === "accent" ? t.background : t.muted)
+          .child(text),
+      ),
+    );
+}
+
 // A panel title that doubles as a tab, the same pill as Herdr's tab bar.
 export function HeaderTab({ id, label, count, active, onClick }) {
   const t = theme();

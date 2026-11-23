@@ -13,6 +13,7 @@ import {
   Panel,
   PanelHeader,
   HeaderTab,
+  RailButton,
   IconButton,
   TextButton,
   GroupHeader,
@@ -133,70 +134,54 @@ export const sidebarMethods = {
     if (this.mode === "panel-key") return div();
     if (this.mode === "pane-header") return this.renderPaneHeader();
     if (this.mode === "diff") return this.renderDiff();
-    return Panel({ id: "better-changes" })
-      .child(this.renderHeader())
-      .child(
-        this.tab === "commit"
-          ? this.selectedCommit
-            ? this.renderCommit()
-            : this.renderHistory()
-          : this.tab === "pr"
-            ? this.renderPulls()
-            : this.tab === "stash"
-              ? this.renderStashes()
-              : this.renderChanges(),
-      );
+    // VNH: a vertical rail on the left switches the section (Changes, Commits, PRs, Stashes); the header names it and holds its actions.
+    return Panel({ id: "better-changes" }).child(
+      h_flex().flex_1().min_h(0)
+        .child(this.renderRail())
+        .child(
+          v_flex().flex_1().h_full().min_w(0).min_h(0)
+            .child(this.renderHeader())
+            .child(
+              this.tab === "commit"
+                ? this.selectedCommit
+                  ? this.renderCommit()
+                  : this.renderHistory()
+                : this.tab === "pr"
+                  ? this.renderPulls()
+                  : this.tab === "stash"
+                    ? this.renderStashes()
+                    : this.renderChanges(),
+            ),
+        ),
+    );
+  },
+
+  // VNH: the rail. Counts: what is changed, what is not pushed, the open pull requests, the stashes.
+  renderRail() {
+    const t = theme();
+    const unpushed = this.committed?.unpushed?.size || 0, stashes = this.stashes?.length || 0;
+    const files = this.sessionOnly && this.sessionSet ? this.sessionSet.size : this.total || 0;
+    const items = [
+      { id: "changes", icon: "diff", label: this.sessionOnly ? "Changes · this session's files" : "Changes", count: files, tone: "accent" },
+      { id: "commit", icon: "commit", label: unpushed ? `Commits · ${unpushed} not pushed` : "Commits", count: unpushed, tone: "accent" },
+      ...(this.forge?.() || this.tab === "pr" ? [{ id: "pr", icon: "pr-open", label: "Pull requests", count: this.prs?.length || 0, tone: "dim" }] : []),
+      ...(stashes || this.tab === "stash" ? [{ id: "stash", icon: "archive", label: `Stashes · ${stashes}`, count: stashes, tone: "dim" }] : []),
+    ];
+    return v_flex().id("rail").w(44).h_full().flex_none().items_center().gap(4).py(8).border_r(1).border_color(t.border).role("tab_list")
+      .children(items.map((i) => RailButton({ id: `rail-${i.id}`, icon: i.icon, label: i.label, count: i.count, tone: i.tone, active: this.tab === i.id, onClick: (cx) => this.setTab(i.id, cx) })));
   },
 
   renderHeader() {
-    const unpushed = this.committed?.unpushed.size;
+    const t = theme();
+    const title = { changes: "Changes", commit: "Commits", pr: "Pull requests", stash: "Stashes" }[this.tab] ?? "Changes";
+    const forge = this.forge?.();
+    const sub = this.tab === "changes" || this.tab === "commit" ? this.branch : this.tab === "pr" ? forge?.repo ?? forge?.project : null;
     return PanelHeader()
+      .px(12)
       .child(
-        h_flex()
-          .flex_1()
-          .min_w(0)
-          .ml(-8) // Lines the pills up with the list rows below.
-          .gap(4)
-          .items_center()
-          .role("tab_list")
-          .child(
-            HeaderTab({
-              id: "tab-changes",
-              label: "Changes",
-              count: this.total || null,
-              active: this.tab === "changes",
-              onClick: (cx) => this.setTab("changes", cx),
-            }),
-          )
-          .child(
-            HeaderTab({
-              id: "tab-commit",
-              label: "Commits",
-              count: unpushed,
-              active: this.tab === "commit",
-              onClick: (cx) => this.setTab("commit", cx),
-            }),
-          )
-          // VNH: the pull requests of a GitHub repository.
-          .when(Boolean(this.forge?.()) || this.tab === "pr", (el) => el.child(
-            HeaderTab({
-              id: "tab-pr",
-              label: "PRs",
-              count: this.prs?.length || null,
-              active: this.tab === "pr",
-              onClick: (cx) => this.setTab("pr", cx),
-            }),
-          ))
-          // VNH: the stashes, once there are any.
-          .when((this.stashes?.length ?? 0) > 0 || this.tab === "stash", (el) => el.child(
-            HeaderTab({
-              id: "tab-stash",
-              label: "Stashes",
-              count: this.stashes?.length || null,
-              active: this.tab === "stash",
-              onClick: (cx) => this.setTab("stash", cx),
-            }),
-          )),
+        h_flex().flex_1().min_w(0).gap(8).items_center()
+          .child(div().flex_none().font_semibold().text_size(TEXT.menu).text_color(t.foreground).child(title))
+          .when(Boolean(sub), (el) => el.child(div().min_w(0).truncate().text_size(TEXT.small).text_color(t.dim).child(String(sub)))),
       )
       // VNH: a toggle between the flat list and the tree (its icon is the current view's); the rest of the view options
       // (columns, diff layout, staging) are in the ⋮ menu.
