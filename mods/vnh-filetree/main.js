@@ -131,6 +131,40 @@ function alpha(color, a) {
 const tones = (t) => ({ purple: t.ansi5, orange: t.ansi3, green: t.ansi2, teal: t.ansi6, blue: t.ansi4, red: t.ansi1, cyan: t.ansi14 ?? t.ansi6, yellow: t.ansi11 ?? t.ansi3 });
 const gitColor = (t, s) => (!s ? null : s === "D" || s === "U" ? t.ansi1 : s === "?" || s === "A" || s === "C" ? t.ansi2 : s === "R" ? t.ansi4 : t.ansi11 ?? t.ansi3);
 const KIND = { purple: "read", orange: "write", green: "commit" };
+// VNH: Antigravity (agy) has no tool hooks, but it records every step of a conversation in a SQLite file named after the session.
+// This reads the steps after the last one seen (read_file, edit_file, write_file: their "Path") and prints one JSON line each.
+const AGY_PY = String.raw`
+import sqlite3, sys, os, re, json
+base = os.path.expanduser("~/.gemini/antigravity-cli/conversations")
+for arg in sys.argv[1:]:
+    sid, _, last = arg.rpartition(":")
+    if not re.fullmatch(r"[0-9a-f-]{36}", sid): continue
+    try:
+        last = int(last)
+        db = sqlite3.connect("file:%s/%s.db?mode=ro" % (base, sid), uri=True, timeout=1)
+        rows = db.execute("select idx, status, step_payload from steps where step_type=132 and idx>? order by idx", (last,)).fetchall()
+        top = db.execute("select max(idx) from steps").fetchone()[0]
+    except Exception:
+        continue
+    if last < 0:
+        print(json.dumps({"session": sid, "max": top if top is not None else -1})); continue
+    new = last
+    for idx, status, pl in rows:
+        if status != 3: break
+        new = idx
+        b = bytes(pl or b"")
+        for tool, kind in ((b"read_file", "read"), (b"edit_file", "write"), (b"write_file", "write")):
+            i = b.find(tool + b"\x1a")
+            if i < 0: continue
+            m = re.search(rb'"Path":"((?:[^"\\]|\\.)*)"', b[i:i + 400000])
+            if m:
+                try: path = json.loads(b'"' + m.group(1) + b'"')
+                except Exception: break
+                if path.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", path):
+                    print(json.dumps({"session": sid, "kind": kind, "path": path}))
+            break
+    print(json.dumps({"session": sid, "max": new}))
+`;
 const VIEWS = [["tree", "Tree", "folder"], ["recent", "Recent", "clock"]];
 function ago(ms) {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
@@ -390,6 +424,7 @@ export default class FileTree extends View {
     this.agoAt = 0;
     // VNH: Recent and the follow-scroll belong to the agent you are looking at (its Claude session), not to every agent in the repo.
     this.mine = null; this.mineKey = ""; this.mineAt = 0;
+    this.agyLast = new Map(); this.agyBusy = false;
     try { this.allAgents = localStorage.getItem("allAgents") === "1"; } catch { this.allAgents = false; }
     this.saved = new Map(); this.flashes = new Map(); this.bashStarts = new Map(); this.recent = [];
     this.sizes = new Map(); this.sizing = new Set(); this.visible = [];
@@ -416,6 +451,31 @@ export default class FileTree extends View {
     // "filetree.focus": the Markdown tab hands the keyboard back here when it closes.
     cx.spawn(async (cx) => { for (;;) { if (String(await nextCommand()).replace(/^filetree\./, "") === "focus") this.handle?.focus(); cx.notify(); } });
     cx.timer.every(1000, (cx) => this.tick(cx));
+    cx.timer.every(2000, (cx) => this.pollAgy(cx)); // VNH: agy's reads and writes
+  }
+
+  // agy's reads and writes, from its conversation files (see AGY_PY): lit in the tree and listed in Recent like Claude's, per session.
+  async pollAgy(cx) {
+    if (this.agyBusy) return;
+    this.agyBusy = true;
+    try {
+      const sessions = new Set();
+      for (const a of agents()) {
+        const text = await readTextFile(`${home()}/.cache/herdr-status/${a.address}.json`).catch(() => null);
+        try { const j = JSON.parse(text ?? "{}"); if (j.provider === "agy" && j.session) sessions.add(j.session); } catch {}
+      }
+      for (const sid of [...this.agyLast.keys()]) if (!sessions.has(sid)) this.agyLast.delete(sid);
+      if (!sessions.size) return;
+      const r = await exec("python3", ["-I", "-c", AGY_PY, ...[...sessions].map((sid) => `${sid}:${this.agyLast.get(sid) ?? -1}`)]).catch(() => null);
+      if (!r || r.code !== 0) return;
+      const mode = this.config.activity, reads = mode === "reads and writes" || mode === "reads", writes = mode === "reads and writes" || mode === "writes";
+      for (const line of r.stdout.split("\n")) {
+        let e; try { e = JSON.parse(line); } catch { continue; }
+        if (e.max != null) this.agyLast.set(e.session, e.max);
+        else if (e.kind === "read" && reads) this.flash([e.path], "purple", cx, READ_REVEAL, e.session);
+        else if (e.kind === "write" && writes) this.flash([e.path], "orange", cx, READ_REVEAL, e.session);
+      }
+    } finally { this.agyBusy = false; }
   }
 
   // VNH: on screen? Only while the layout's side panel shows this block; anywhere else always.
