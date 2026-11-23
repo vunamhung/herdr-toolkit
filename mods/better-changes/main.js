@@ -10,7 +10,7 @@
 // but the token colours: syntax.js colours a diff's code, and Better Files has the same file.
 import { View } from "gpui-kit";
 import { TextareaState } from "gpui-base";
-import { props, shared, setShared, nextCommand, layout, run, notify, closeOverlay, exec, home, focused, panes, agents, readTextFile } from "herdr";
+import { props, shared, setShared, nextCommand, layout, run, notify, closeOverlay, exec, home, focused, panes, agents, readTextFile, window } from "herdr";
 import { loadSettings, duration } from "./settings.js";
 import { followFileIcons } from "./file-icons.js";
 import { panelCommands } from "./panel.js";
@@ -511,6 +511,8 @@ class BetterChanges extends View {
   }
 
   follow(cx) {
+    // Herdr in the background: a look every 2.4 s instead of every 300 ms.
+    if (window()?.active === false && ((this.bgTick = (this.bgTick ?? 0) + 1) % 8)) return;
     if (this.mode === "sidebar") {
       const tab = focused()?.tab; // the Changes panel itself has no tab: it keeps the last one
       if (tab && tab !== this.uiKey) this.applyUi(tab, cx);

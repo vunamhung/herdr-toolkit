@@ -1,6 +1,12 @@
 // Derived from Herdr's `tabs` 0.1.16 (Apache-2.0, Herdr, https://github.com/ogulcancelik/herdr); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
+
+// VNH: the "breathing" of a working agent. A `.loop("opacity")` repaints the whole window at the display's rate for as long as it
+// runs (about 20% of a core with one agent working, 5% without); this steps the opacity twice a second, and only the views that draw
+// one are redrawn (ANIM is set while one is on screen, and a 500 ms timer notifies the view while it is).
+let ANIM = false;
+const breath = (from, to, period) => { ANIM = true; const k = (Math.floor(Date.now() / 500) * 500) % period / period; return from + (to - from) * (0.5 - 0.5 * Math.cos(2 * Math.PI * k)); };
 import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, focused, checking, exec, notify, readTextFile, home } from "herdr";
 
 function find(node, id) {
@@ -58,6 +64,7 @@ export default class Tabs extends View {
     this.pressed = null;
     this.scroll = ScrollHandle.new();
     if (!checking()) cx.timer.every(2000, () => this.readTitles());
+    if (!checking()) cx.timer.every(500, (cx) => { if (ANIM) { ANIM = false; cx.notify(); } });
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
@@ -376,7 +383,7 @@ export default class Tabs extends View {
         .when(preview, el => el.child(svg("mods/vnh-tabs/eye.svg").size(14).text_color(t.accent)))
         .when(Boolean(program?.icon) && !nap && !preview, el => {
           const icon = program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14);
-          return el.child(c.working_since != null ? icon.loop("opacity", { from: 0.35, to: 1, period: 1800 }) : icon);
+          return el.child(c.working_since != null ? icon.opacity(breath(0.35, 1, 2000)) : icon);
         })
         .child(div().max_w(170).truncate().when(preview, el => el.italic()).child(c.zoomed ? `${name} Z` : name))
         // VNH: no working spinner here; the Agents list in the sidebar is the one that shows it.

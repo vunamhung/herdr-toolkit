@@ -87,15 +87,24 @@ export default class Prompts extends View {
     const here = f?.agent ?? (f?.terminal && agents().some((a) => a.address === f.terminal) ? f.terminal : null);
     if (here && here !== this.agent) { this.agent = here; this.transcript = null; this.size = null; this.open = null; this.at = 0; this.prompts = []; this.shown = PAGE; cx.notify(); }
     if (!this.agent || this.busy) return;
+    // The reader (python) runs while the agent works (every 2 s, as the transcript grows) and otherwise only every 30 s: an idle
+    // agent's transcript doesn't change.
+    const working = agents().find((x) => x.address === this.agent)?.status === "working";
+    const justStopped = this.wasWorking && !working; // the turn that just ended is read at once
+    this.wasWorking = working;
+    if (this.transcript && !justStopped && Date.now() - (this.readAt ?? 0) < (working ? 2000 : 30000)) return;
+    this.readAt = Date.now();
     this.busy = true;
     cx.spawn(async (cx) => {
       try {
         let info = await readTextFile(`${home()}/.cache/over9k/agents/${this.agent}.json`).catch(() => null);
         // On its own (no sidebar keeps those files): run claude-info.py here.
+        if (!info && this.infoCache?.agent === this.agent && Date.now() - this.infoCache.at < 60000) info = this.infoCache.info; // not run again for a minute
         if (!info) {
           const own = `${appHome()}/mods/vnh-prompts/claude-info.py`;
           const r = await python(["-I", (await readTextFile(own).catch(() => null)) != null ? own : `${appHome()}/mods/over9k/claude-info.py`]).catch(() => null);
           try { info = JSON.stringify(JSON.parse(r?.stdout || "{}")[this.agent] ?? null); } catch {}
+          this.infoCache = { agent: this.agent, info, at: Date.now() };
         }
         let path = null;
         try { path = info && JSON.parse(info)?.transcript; } catch {}
@@ -223,8 +232,8 @@ export default class Prompts extends View {
       const r = await hc(["read", at]).catch(() => null);
       const lines = (r?.stdout ?? "").split("\n").filter((l) => /\(\s*(?:\d+h\s*)?(?:\d+m\s*)?\d+s\s*·\s*↓\s*[\d.]+k?\s*tokens/.test(l));
       const m = /\(\s*(?:(\d+)h\s*)?(?:(\d+)m\s*)?(\d+)s\s*·\s*↓\s*([\d.]+)(k?)\s*tokens/.exec(lines.pop() ?? "");
-      this.live = at === this.agent && m ? { secs: (+(m[1] ?? 0)) * 3600 + (+(m[2] ?? 0)) * 60 + +m[3], tokens: Math.round(parseFloat(m[4]) * (m[5] ? 1000 : 1)) } : null;
-      cx.notify();
+      const live = at === this.agent && m ? { secs: (+(m[1] ?? 0)) * 3600 + (+(m[2] ?? 0)) * 60 + +m[3], tokens: Math.round(parseFloat(m[4]) * (m[5] ? 1000 : 1)) } : null;
+      if (JSON.stringify(live) !== JSON.stringify(this.live)) { this.live = live; cx.notify(); }
     });
   }
 

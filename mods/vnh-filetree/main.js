@@ -474,11 +474,16 @@ export default class FileTree extends View {
     if (this.agyBusy) return;
     this.agyBusy = true;
     try {
-      const sessions = new Set();
+      // Only agents that are working write files: their status files are read, and python started, for those (and for 10 s after one
+      // stops, to catch its last writes). An idle agent costs nothing.
+      const sessions = new Set(), now = Date.now();
+      this.agyHot ??= new Map();
       for (const a of agents()) {
+        if (a.status !== "working") continue;
         const text = await readTextFile(`${home()}/.cache/herdr-status/${a.address}.json`).catch(() => null);
-        try { const j = JSON.parse(text ?? "{}"); if (j.provider === "agy" && j.session) sessions.add(j.session); } catch {}
+        try { const j = JSON.parse(text ?? "{}"); if (j.provider === "agy" && j.session) this.agyHot.set(j.session, now); } catch {}
       }
+      for (const [sid, at] of this.agyHot) { if (now - at < 10000) sessions.add(sid); else this.agyHot.delete(sid); }
       for (const sid of [...this.agyLast.keys()]) if (!sessions.has(sid)) this.agyLast.delete(sid);
       if (!sessions.size) return;
       const r = await exec("python3", ["-I", "-c", AGY_PY, ...[...sessions].map((sid) => `${sid}:${this.agyLast.get(sid) ?? -1}`)]).catch(() => null);
@@ -777,6 +782,8 @@ export default class FileTree extends View {
     for (const abs of paths) {
       const rel = relTo(this.root, abs);
       if (rel === null) continue;
+      // What builds and dev servers rewrite all day (node_modules, dist, .next…) doesn't move this panel: no refresh for it.
+      if (rel !== ".git" && !rel.startsWith(".git/") && rel.split("/").some((seg) => seg !== ".git" && PRUNE.includes(seg))) continue;
       if (rel === ".git" || rel.startsWith(".git/")) {
         // VNH: only what moves git status (index, HEAD, refs, a merge or rebase). fsmonitor's
         // cookies, objects and logs change on every git call anyone makes, and refreshing on
@@ -788,7 +795,16 @@ export default class FileTree extends View {
       for (const d of [...ancestors(rel), ""]) this.sizes.delete(d);
     }
     if (structural && !this.query) this.index = null;
-    if (structural || gitState) this.refresh(cx);
+    if (structural || gitState) this.scheduleRefresh(cx, gitState);
+  }
+
+  // A burst of file events (an agent writing, a build) is one refresh, and at most one every 4 s (1.5 s after a git change): each refresh
+  // reads the folders and runs git status, which is the heaviest thing this panel does.
+  scheduleRefresh(cx, urgent) {
+    if (this.refreshPending) return;
+    this.refreshPending = true;
+    const gap = urgent ? 1500 : 4000, wait = Math.max(300, gap - (Date.now() - (this.lastRefreshAt ?? 0)));
+    cx.timer.after(wait, (cx) => { this.refreshPending = false; this.lastRefreshAt = Date.now(); this.refresh(cx); });
   }
 
   toggle(path, cx) {

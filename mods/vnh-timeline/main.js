@@ -12,7 +12,7 @@
 // (Claude Code's fullscreen mode) has none to scroll, so there the rail is empty (use `/tui default`).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, focused, panes, hc, run, exec, readTextFile, home, placement, checking } from "herdr";
+import { theme, focused, panes, hc, run, exec, readTextFile, home, placement, checking, window } from "herdr";
 
 const HISTORIES = [".claude/history.jsonl", ".gemini/antigravity-cli/history.jsonl", ".codex/history.jsonl"];
 const SHOWN = 14, LABEL = 230, EDGE = 20;
@@ -39,6 +39,8 @@ export default class Rail extends View {
   }
 
   tick(cx) {
+    // Herdr in the background: a look every 3.2 s instead of every 400 ms.
+    if (window()?.active === false && ((this.bgTick = (this.bgTick ?? 0) + 1) % 8)) return;
     const f = focused(), term = f?.terminal ?? null;
     const p = term ? panes().find((x) => x.terminal === term) : null;
     const s = p?.scroll ?? null;

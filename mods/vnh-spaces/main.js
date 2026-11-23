@@ -6,6 +6,12 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
+
+// VNH: the "breathing" of a working agent. A `.loop("opacity")` repaints the whole window at the display's rate for as long as it
+// runs (about 20% of a core with one agent working, 5% without); this steps the opacity twice a second, and only the views that draw
+// one are redrawn (ANIM is set while one is on screen, and a 500 ms timer notifies the view while it is).
+let ANIM = false;
+const breath = (from, to, period) => { ANIM = true; const k = (Math.floor(Date.now() / 500) * 500) % period / period; return from + (to - from) * (0.5 - 0.5 * Math.cos(2 * Math.PI * k)); };
 import { spaces, machines, agents, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 
 function find(node, id) {
@@ -98,6 +104,7 @@ export default class Spaces extends View {
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
     cx.timer.every(250, (cx) => this.checkNew(cx));
+    cx.timer.every(500, (cx) => { if (ANIM) { ANIM = false; cx.notify(); } });
   }
 
   // VNH: a worktree space whose folder was deleted (an agent removed the worktree) is closed with its agents, once its folder has
@@ -121,6 +128,8 @@ export default class Spaces extends View {
   }
 
   checkNew(cx) {
+    // Herdr in the background: a look every 2 s instead of every 250 ms.
+    if (window()?.active === false && ((this.bgTick = (this.bgTick ?? 0) + 1) % 8)) return;
     const now = Date.now();
     this.reap();
     const sp = spaces();
@@ -593,12 +602,12 @@ export default class Spaces extends View {
               ? div().relative().size(13).flex_none()
                 .child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim))
                 .child(svg("mods/workspace-chrome/branch.svg").size(13).absolute().top(0).left(0).text_color(t.working ?? t.accent)
-                  .loop("opacity", { from: 0.1, to: 1, period: 1800 }))
+                  .opacity(breath(0.1, 1, 2000)))
               : svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
           // VNH: a space with an agent working breathes, like the working dot in the Agents list
           // (same slow opacity loop). `working_since` is set on a tab while one of its agents works.
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff")
-            .when(w.tabs.some(tb => tb.working_since != null), tile => tile.loop("opacity", { from: 0.35, to: 1, period: 1800 }))
+            .when(w.tabs.some(tb => tb.working_since != null), tile => tile.opacity(breath(0.35, 1, 2000)))
             .child([...w.name][0]?.toUpperCase() ?? "?")))
           .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).child(w.name))
           .child(g ? this.gitTail(g, tree, w.name, t).id(`git-${w.id}`).tooltip(this.gitTip(g)) : gone ? div().flex_1().text_right().text_size(11).text_color(t.dim).child("folder deleted") : div().flex_1()),
