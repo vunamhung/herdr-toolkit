@@ -281,7 +281,9 @@ export default class ChangesMenu extends View {
     };
     const stashFiles = (cx) => this.runOps("Stash", () => this.git(["stash", "push", "--include-untracked", "-m", `${name} ${new Date().toISOString().slice(0, 16).replace("T", " ")}`, "--", ...paths]), cx, "Stashed: see the Stashes tab");
     const ours = (side) => (cx) => this.runOps(side === "ours" ? "Accept ours" : "Accept theirs", async () => { await this.git(["checkout", `--${side}`, "--", ...paths]); await this.git(["add", "--", ...paths]); }, cx, side === "ours" ? "Kept our side" : "Took their side");
-    const ignore = (cx) => this.runOps("Ignore", () => this.sh('cd "$1"; shift; for p in "$@"; do printf "%s\\n" "/$p" >> .gitignore; done', paths), cx, "Added to .gitignore");
+    // A folder is ignored as the folder ("/dir/"), not file by file; an entry already there is not added twice.
+    const ignoreLines = isFolder && this.a().dir && this.a().dir !== "." ? [`/${this.a().dir}/`] : paths.map((p) => `/${p}`);
+    const ignore = (cx) => this.runOps("Ignore", () => this.sh('cd "$1"; shift; [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ] && echo >> .gitignore; for p in "$@"; do grep -qxF -- "$p" .gitignore 2>/dev/null || printf "%s\\n" "$p" >> .gitignore; done', ignoreLines), cx, "Added to .gitignore");
     const historyOf = () => { run("tab.new", { folder: this.a().root, name: `history ${name}`.slice(0, 40), argv: ["sh", "-lc", `git log --follow --stat --color=always -- ${JSON.stringify(isFolder ? this.a().dir : path)} | less -R`] }); this.close(); };
     const blameOf = () => { run("tab.new", { folder: this.a().root, name: `blame ${name}`.slice(0, 40), argv: ["sh", "-lc", `git blame --color-lines -- ${JSON.stringify(path)} | less -R`] }); this.close(); };
     const paths_ = [
