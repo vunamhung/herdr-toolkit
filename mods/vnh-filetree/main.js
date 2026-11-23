@@ -12,14 +12,15 @@ import { spaces, panes, agents, focused, exec, readTextFile, writeTextFile, watc
 
 const NAME = "vnh-filetree"; // VNH clone of filetree (the hook bridge stays in mods/filetree)
 const ICON = (name) => `mods/${NAME}/${name}.svg`;
-// VNH: a file in Helix, in a tab of its own: Space on a file, or a press on the blank after its name (see onEye). hx-open.py starts it so that Esc quits
+// VNH: a file in Helix, in a tab of its own, started in the project's root (not in the file's folder: the tab's folder is what the other
+// panels follow): Space on a file, or a press on the blank after its name (see onEye). hx-open.py starts it so that Esc quits
 // Helix, shows the tab you came from again and closes this one.
-function openInHelix(abs, on) {
+function openInHelix(abs, on, root) {
   if (on) { notify({ title: "Helix opens the files of this computer only", level: "info", timeout: 3000 }); return; }
   const space = spaces().find((s) => s.active);
   if (!space || !abs) return;
   const back = space.tabs.find((t) => t.active)?.id ?? "";
-  run("tab.new", { space: space.id, folder: abs.slice(0, abs.lastIndexOf("/")) || "/", name: abs.split("/").pop().slice(0, 40),
+  run("tab.new", { space: space.id, folder: root || abs.slice(0, abs.lastIndexOf("/")) || "/", name: abs.split("/").pop().slice(0, 40),
     argv: ["sh", "-lc", 'exec python3 -I "$1" "$2" "$3"', "hx", `${appHome()}/mods/vnh-filetree/hx-open.py`, abs, back] });
 }
 // VNH: Markdown is previewed from inside Helix (Space m, see hx-open.py), which opens it as a rendered tab (vnh-markdown).
@@ -659,7 +660,7 @@ export default class FileTree extends View {
     if (!r) return;
     const x = this.downX; this.downX = null;
     const abs = join(R.root, k.rel);
-    if (x !== null && x !== undefined && !r.e?.dir && this.onEye(r, x)) { openInHelix(abs, R.on ?? null); cx.notify(); return; }
+    if (x !== null && x !== undefined && !r.e?.dir && this.onEye(r, x)) { openInHelix(abs, R.on ?? null, R.root); cx.notify(); return; }
     const now = Date.now(), double = this.lastPress?.rel === key && now - this.lastPress.at < 450;
     this.lastPress = double ? null : { rel: key, at: now };
     if (r.e.dir) { if (r.flat || R.hits) { this.clearSearch(cx); this.setView("tree", cx); R.open([...ancestors(k.rel), k.rel], cx, () => { this.scrollTo = key; }); } else R.toggle(k.rel, cx); }
@@ -681,7 +682,7 @@ export default class FileTree extends View {
     if ((kk === "right" || kk === "l") && cur.e.dir && !cur.open) R.toggle(k.rel, cx);
     else if (kk === "left" || kk === "h") { if (cur.e.dir && cur.open) R.toggle(k.rel, cx); else this.cursor = dirOf(k.rel) ? keyOf(k.rid, dirOf(k.rel)) : headKey(k.rid); this.scrollTo = this.cursor; }
     else if (kk === "enter") { if (cur.e.dir) R.toggle(k.rel, cx); else this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx); }
-    else if (kk === "space") { if (cur.e.dir) R.toggle(k.rel, cx); else openInHelix(abs, R.on ?? null); }
+    else if (kk === "space") { if (cur.e.dir) R.toggle(k.rel, cx); else openInHelix(abs, R.on ?? null, R.root); }
     else if (kk === "p" && !cur.e.dir) this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx);
     else if (kk === "y") copy(cx, shift ? abs : k.rel);
     else if (kk === "a") sendToAgent(cx, abs);
@@ -1202,7 +1203,7 @@ export default class FileTree extends View {
     const r = this.rows().find((x) => x.rel === rel);
     if (!r) return;
     const x = this.downX; this.downX = null;
-    if (x !== null && x !== undefined && !r.e?.dir && this.onEye(r, x)) { this.cursor = rel; openInHelix(join(this.root, rel), this.on); cx.notify(); return; }
+    if (x !== null && x !== undefined && !r.e?.dir && this.onEye(r, x)) { this.cursor = rel; openInHelix(join(this.root, rel), this.on, this.root); cx.notify(); return; }
     const now = Date.now(), double = this.lastPress?.rel === rel && now - this.lastPress.at < 450;
     this.lastPress = double ? null : { rel, at: now };
     this.handle.focus();
@@ -1240,7 +1241,7 @@ export default class FileTree extends View {
     if (this.file) {
       if (k === "escape" || k === "left" || k === "h") this.closePreview();
       else if (k === "o" && !this.on) openExternal(this.fileAbs ?? join(this.root, this.file)).catch(() => {});
-      else if (k === "space") openInHelix(this.fileAbs ?? join(this.root, this.file), this.on);
+      else if (k === "space") openInHelix(this.fileAbs ?? join(this.root, this.file), this.on, this.root);
       else return;
       cx.stop_propagation(); cx.notify(); return;
     }
@@ -1268,7 +1269,7 @@ export default class FileTree extends View {
     else if ((k === "right" || k === "l") && cur.e.dir && !cur.open) this.toggle(cur.rel, cx);
     else if (k === "left" || k === "h") { if (cur.e.dir && cur.open && !this.hits) this.toggle(cur.rel, cx); else if (dirOf(cur.rel) || cur.depth) { this.cursor = dirOf(cur.rel); this.scrollTo = this.cursor; } }
     else if (k === "enter") { if (this.hits) this.jump(cx); else if (cur.e.dir) this.toggle(cur.rel, cx); else this.openFile(cur.rel, cx); }
-    else if (k === "space") { if (cur.e.dir) this.toggle(cur.rel, cx); else openInHelix(join(this.root, cur.rel), this.on); }
+    else if (k === "space") { if (cur.e.dir) this.toggle(cur.rel, cx); else openInHelix(join(this.root, cur.rel), this.on, this.root); }
     else if (k === "p" && !cur.e.dir) this.show(cur.rel, cx);
     else if (k === "y") copy(cx, shift ? join(this.root, cur.rel) : cur.rel);
     else if (k === "a") sendToAgent(cx, join(this.root, cur.rel));
