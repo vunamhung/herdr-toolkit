@@ -330,8 +330,8 @@ export const sidebarMethods = {
     // VNH: split view staging, as Fork's: working changes above, the staging area below.
     if (this.staging === "split" && !nothing) return this.renderSplitStaging(list, conflicts, unstaged, staged, committed);
     if (nothing)
-      // "Loading" only until the repository was read once: the 10 s poll sets `loading` each time, and the text flickered between the two.
-      list.child(Message(!this.root ? "Loading changes…" : mine ? "None of this session's files has changes" : "No changes"));
+      // No "Loading changes…" line: only what the list says (it is empty until the repository is read, then it is right).
+      list.child(Message(mine ? "None of this session's files has changes" : "No changes"));
     this.groupsDrawn = 0;
     this.addGroup(list, "conflict", "Conflicts", conflicts);
     this.addGroup(list, "staged", "Staged", staged);
