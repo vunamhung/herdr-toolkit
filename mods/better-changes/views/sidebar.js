@@ -199,6 +199,15 @@ export const sidebarMethods = {
       // (columns, diff layout, staging) are in the ⋮ menu.
       .when(this.tab === "changes", (el) => el.child(
         IconButton({
+          id: "session-toggle",
+          icon: "filter",
+          label: this.sessionOnly ? "Only this session's files: show every file" : "Show only this session's files",
+          active: this.sessionOnly,
+          onClick: (cx) => this.setSessionOnly(!this.sessionOnly, cx),
+        }),
+      ))
+      .when(this.tab === "changes", (el) => el.child(
+        IconButton({
           id: "view-toggle",
           icon: (VIEWS.find((v) => v.id === this.view) ?? VIEWS[0]).icon,
           label: this.view === "tree" ? "Tree view: switch to the flat list" : "Flat list: switch to the tree view",
@@ -258,8 +267,6 @@ export const sidebarMethods = {
       MenuDivider(),
       option("inline", "diff-inline", "Inline diff", this.diffLayout === "inline", (cx) => this.setDiffLayout("inline", cx)),
       option("split", "diff-split", "Side by side diff", this.diffLayout === "split", (cx) => this.setDiffLayout("split", cx)),
-      MenuDivider(),
-      option("session-only", "check", "Only this session's files", this.sessionOnly, (cx) => this.setSessionOnly(!this.sessionOnly, cx)),
       MenuDivider(),
       option("fluid-staging", "staging-fluid", "Fluid staging", this.staging !== "split", (cx) => this.setStaging("fluid", cx)),
       option("split-staging", "staging-split", "Split view staging", this.staging === "split", (cx) => this.setStaging("split", cx)),

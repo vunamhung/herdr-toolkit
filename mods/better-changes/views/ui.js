@@ -149,6 +149,7 @@ export function IconButton({
   small = false,
   disabled = false,
   spinning = false,
+  active = false, // VNH: a toggle that is on
 }) {
   const t = theme();
   const size = small ? SIZE.iconSmall : SIZE.icon;
@@ -160,7 +161,8 @@ export function IconButton({
     .items_center()
     .justify_center()
     .rounded(small ? RADIUS.small : RADIUS.control)
-    .text_color(t.dim)
+    .text_color(active ? t.foreground : t.dim)
+    .when(active, (el) => el.bg(t.selected))
     .accessibility_label(label)
     .tooltip(label)
     .when(!disabled, (el) => el.hover((s) => s.bg(t.hover).text_color(t.foreground)))
