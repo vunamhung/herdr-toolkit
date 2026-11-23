@@ -12,7 +12,7 @@ import { spaces, panes, agents, focused, exec, readTextFile, writeTextFile, watc
 
 const NAME = "vnh-filetree"; // VNH clone of filetree (the hook bridge stays in mods/filetree)
 const ICON = (name) => `mods/${NAME}/${name}.svg`;
-// VNH: a file in Helix, in a tab of its own: a press on the blank after a file's name (see onEye). hx-open.py starts it so that Esc quits
+// VNH: a file in Helix, in a tab of its own: Space on a file, or a press on the blank after its name (see onEye). hx-open.py starts it so that Esc quits
 // Helix, shows the tab you came from again and closes this one.
 function openInHelix(abs, on) {
   if (on) { notify({ title: "Helix opens the files of this computer only", level: "info", timeout: 3000 }); return; }
@@ -22,7 +22,7 @@ function openInHelix(abs, on) {
   run("tab.new", { space: space.id, folder: abs.slice(0, abs.lastIndexOf("/")) || "/", name: abs.split("/").pop().slice(0, 40),
     argv: ["sh", "-lc", 'exec python3 -I "$1" "$2" "$3"', "hx", `${appHome()}/mods/vnh-filetree/hx-open.py`, abs, back] });
 }
-// VNH: Markdown opens rendered in its own tab (vnh-markdown): Space (or the button of its preview).
+// VNH: Markdown is previewed from inside Helix (Space m, see hx-open.py), which opens it as a rendered tab (vnh-markdown).
 const MARKDOWN = /\.(md|markdown|mdx)$/i;
 // VNH: the space's Markdown tab, reused for every preview: ask it to switch (shared
 // "vnh.markdown.open", read by that pane's copy) and show it; open one only when there is none.
@@ -681,7 +681,7 @@ export default class FileTree extends View {
     if ((kk === "right" || kk === "l") && cur.e.dir && !cur.open) R.toggle(k.rel, cx);
     else if (kk === "left" || kk === "h") { if (cur.e.dir && cur.open) R.toggle(k.rel, cx); else this.cursor = dirOf(k.rel) ? keyOf(k.rid, dirOf(k.rel)) : headKey(k.rid); this.scrollTo = this.cursor; }
     else if (kk === "enter") { if (cur.e.dir) R.toggle(k.rel, cx); else this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx); }
-    else if (kk === "space") { if (cur.e.dir) R.toggle(k.rel, cx); else if (MARKDOWN.test(k.rel)) openMarkdownTab(abs, null); else this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx); }
+    else if (kk === "space") { if (cur.e.dir) R.toggle(k.rel, cx); else openInHelix(abs, R.on ?? null); }
     else if (kk === "p" && !cur.e.dir) this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx);
     else if (kk === "y") copy(cx, shift ? abs : k.rel);
     else if (kk === "a") sendToAgent(cx, abs);
@@ -1240,7 +1240,7 @@ export default class FileTree extends View {
     if (this.file) {
       if (k === "escape" || k === "left" || k === "h") this.closePreview();
       else if (k === "o" && !this.on) openExternal(this.fileAbs ?? join(this.root, this.file)).catch(() => {});
-      else if (k === "space" && MARKDOWN.test(this.file)) this.openMarkdown(this.file);
+      else if (k === "space") openInHelix(this.fileAbs ?? join(this.root, this.file), this.on);
       else return;
       cx.stop_propagation(); cx.notify(); return;
     }
@@ -1268,7 +1268,7 @@ export default class FileTree extends View {
     else if ((k === "right" || k === "l") && cur.e.dir && !cur.open) this.toggle(cur.rel, cx);
     else if (k === "left" || k === "h") { if (cur.e.dir && cur.open && !this.hits) this.toggle(cur.rel, cx); else if (dirOf(cur.rel) || cur.depth) { this.cursor = dirOf(cur.rel); this.scrollTo = this.cursor; } }
     else if (k === "enter") { if (this.hits) this.jump(cx); else if (cur.e.dir) this.toggle(cur.rel, cx); else this.openFile(cur.rel, cx); }
-    else if (k === "space") { if (cur.e.dir) this.toggle(cur.rel, cx); else if (MARKDOWN.test(cur.rel)) this.openMarkdown(cur.rel); else this.show(cur.rel, cx); }
+    else if (k === "space") { if (cur.e.dir) this.toggle(cur.rel, cx); else openInHelix(join(this.root, cur.rel), this.on); }
     else if (k === "p" && !cur.e.dir) this.show(cur.rel, cx);
     else if (k === "y") copy(cx, shift ? join(this.root, cur.rel) : cur.rel);
     else if (k === "a") sendToAgent(cx, join(this.root, cur.rel));
@@ -1456,7 +1456,6 @@ export default class FileTree extends View {
       .when(Boolean(this.file), (el) => el.child(image(fileIcon(this.file, false, false, settings().dark !== false)).size(14).flex_none()))
       .child(div().flex_1().min_w(0).truncate().font_medium().text_color(this.file ? t.foreground : t.muted).child(title))
       .when(Boolean(this.file), (el) => el
-        .when(MARKDOWN.test(this.file ?? ""), (el) => el.child(btn("ft-md-open", svg(ICON("eye")).size(13), "Open rendered in a new tab (Space)", false, () => this.openMarkdown(this.file))))
         .when(!this.on, (el) => el.child(btn("ft-ext", "↗", "Open in default app (o)", false, () => openExternal(this.fileAbs ?? join(this.root, this.file)).catch(() => {}))))
         .child(btn("ft-copy", "⧉", "Copy path", false, (cx) => copy(cx, this.file)))
         .child(btn("ft-send", "@", "Send to agent", false, (cx) => sendToAgent(cx, this.fileAbs ?? join(this.root, this.file)))))

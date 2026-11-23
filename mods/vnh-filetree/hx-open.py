@@ -37,6 +37,14 @@ for line in text.split("\n"):
 text = "\n".join(out)
 if not seen:
     text += '\n[keys.normal]\nesc = ":quit"\n'
+# Space m: the rendered Markdown of the open file in a tab of Herdr (hx-md.py), unless you bound space m yourself.
+md = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hx-md.py")
+bind = "m = '" + ":sh python3 -I " + md + ' "%{buffer_name}"' + "'"
+if not re.search(r"^\s*m\s*=", text, re.M) or not re.search(r"^\s*\[keys\.normal\.space\]", text, re.M):
+    if re.search(r"^\s*\[keys\.normal\.space\]\s*$", text, re.M):
+        text = re.sub(r"^(\s*\[keys\.normal\.space\]\s*)$", lambda m: m.group(1) + "\n" + bind, text, count=1, flags=re.M)
+    else:
+        text += "\n[keys.normal.space]\n" + bind + "\n"
 cache = os.path.join(home, ".cache", "vnh-hx")
 os.makedirs(cache, exist_ok=True)
 cfg = os.path.join(cache, "config.toml")
