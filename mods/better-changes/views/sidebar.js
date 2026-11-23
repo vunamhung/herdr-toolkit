@@ -136,7 +136,7 @@ export const sidebarMethods = {
     if (this.mode === "diff") return this.renderDiff();
     // VNH: a vertical rail on the left switches the section (Changes, Commits, PRs, Stashes); the header names it and holds its actions.
     return Panel({ id: "better-changes" }).child(
-      h_flex().flex_1().min_h(0)
+      v_flex().flex_1().min_h(0).relative()
         .child(this.renderRail())
         .child(
           v_flex().flex_1().h_full().min_w(0).min_h(0)
@@ -167,7 +167,9 @@ export const sidebarMethods = {
       ...(this.forge?.() || this.tab === "pr" ? [{ id: "pr", icon: "pr-open", label: "Pull requests", count: this.prs?.length || 0, tone: "dim" }] : []),
       ...(stashes || this.tab === "stash" ? [{ id: "stash", icon: "archive", label: `Stashes · ${stashes}`, count: stashes, tone: "dim" }] : []),
     ];
-    return v_flex().id("rail").w(44).h_full().flex_none().items_center().gap(4).py(8).border_r(1).border_color(t.border).role("tab_list")
+    // Floats over the left edge, centred, beside the content (nothing is reserved for it); faint until the pointer is on it.
+    return v_flex().id("rail").absolute().left(3).top("42%").gap(2).p(2).items_center().rounded(10).bg(t.popover).border_1().border_color(t.border)
+      .opacity(0.55).hover((s) => s.opacity(1)).role("tab_list")
       .children(items.map((i) => RailButton({ id: `rail-${i.id}`, icon: i.icon, label: i.label, count: i.count, tone: i.tone, active: this.tab === i.id, onClick: (cx) => this.setTab(i.id, cx) })));
   },
 
