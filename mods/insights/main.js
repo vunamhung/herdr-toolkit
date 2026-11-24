@@ -1545,7 +1545,7 @@ export default class Insights extends View {
     const on = Boolean(tab) && panes().some((pane) => pane.mod === "insights" && pane.tab === tab);
     return h_flex().size_full().pr(4).items_center()
       .bg(t.chrome).border_b(1).border_color(t.border)
-      .child(h_flex().id("insights-open").h(26).px(8).gap(5).flex_none()
+      .child(h_flex().id("insights-open").h(26).px(4).gap(5).flex_none()
         .items_center().rounded(6).text_size(12).bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
         .hover((style) => style.bg(t.hover).text_color(t.foreground))
         .on_mouse_down("left", (_event, cx) => cx.stop_propagation())

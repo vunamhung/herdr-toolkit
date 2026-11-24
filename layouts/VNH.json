@@ -141,7 +141,7 @@
                   "id": "insights-toolbar-button",
                   "type": "block",
                   "size": {
-                    "px": 34
+                    "px": 26
                   },
                   "content": {
                     "mod": "insights",
