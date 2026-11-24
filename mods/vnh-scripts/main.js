@@ -6,7 +6,7 @@
 // Cost: while the panel is on screen and a job runs, one `hc ls` and one `hc read` per running job every 1.5 s; nothing otherwise.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, v_resizable, resizable_panel, ScrollHandle } from "gpui-base";
-import { theme, hc, exec, nextCommand, home, focused, panes, spaces, readTextFile, shared, setShared, window, layout, checking } from "herdr";
+import { theme, hc, exec, nextCommand, home, writeTextFile, focused, panes, spaces, readTextFile, shared, setShared, window, layout, checking } from "herdr";
 
 const FONT = "PragmataPro";
 const JOBS = "vnh.scripts.jobs";
@@ -70,7 +70,13 @@ export default class Scripts extends View {
     if (checking()) return;
     this.refresh(cx);
     cx.timer.every(2000, (cx) => { if (window()?.active !== false && this.shownNow()) this.refresh(cx); });
-    cx.timer.every(1500, (cx) => { if (window()?.active !== false && this.shownNow()) this.poll(cx); });
+    // Looks at the jobs every 0.5 s during the first 10 s of one (its first lines), every 1.5 s after.
+    cx.timer.every(500, (cx) => {
+      const now = Date.now();
+      if (now - (this.lastPoll ?? 0) < (now < (this.burst ?? 0) ? 450 : 1450)) return;
+      if (window()?.active !== false && this.shownNow()) { this.lastPoll = now; this.poll(cx); }
+    });
+    this.loginPath(cx);
     // "vnh-scripts.run-<script>", "stop-", "restart-", "remove-": the same as the buttons (for a key binding).
     cx.spawn(async (cx) => {
       for (;;) {
@@ -138,6 +144,22 @@ export default class Scripts extends View {
     this.git = rows.length ? { rows, authors } : null;
   }
 
+  // The PATH a login shell gives (nvm, pnpm, homebrew), asked once and kept for a day: a job then starts under a plain `sh` with it,
+  // not under `zsh -lic` (reading the whole zshrc costs about 0.8 s on every start).
+  async loginPath(cx) {
+    const file = `${home()}/.cache/vnh-scripts/path.txt`;
+    const old = await readTextFile(file).catch(() => null);
+    let saved = null; try { saved = JSON.parse(old ?? "null"); } catch {}
+    if (saved?.path && Date.now() - saved.at < 86400000) { this.path = saved.path; return; }
+    const r = await exec("/bin/zsh", ["-lic", "print -r -- $PATH"], { timeout: 15000 }).catch(() => null);
+    const path = String(r?.stdout ?? "").trim().split("\n").pop();
+    if (r?.code === 0 && path.includes("/")) {
+      this.path = path;
+      await exec("mkdir", ["-p", `${home()}/.cache/vnh-scripts`]).catch(() => {});
+      await writeTextFile(file, JSON.stringify({ path, at: Date.now() })).catch(() => {});
+    }
+  }
+
   // The jobs of this folder, in the order they were started: { name, addr, cmd }.
   all() { const v = shared(JOBS); return Array.isArray(v) ? v : []; }
   jobs() { return this.all().filter((j) => j.root === this.root); }
@@ -178,12 +200,15 @@ export default class Scripts extends View {
     if (old) { await hc(["rm", old.addr]).catch(() => {}); delete this.live[old.addr]; }
     const cmd = `${this.pm} run ${name}`;
     const log = `${home()}/.cache/vnh-scripts/${slug(root)}__${slug(name)}.log`;
-    const r = await hc(["run", "--bg", "--no-parent", "--outlive-parent", "--label", "vnh.scripts=1", "--cwd", root, "--json", "--",
-      "/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q "$0" /bin/zsh -lic "$1"', log, cmd]).catch(() => null);
+    // With the login PATH known: plain sh (fast). Without it yet: the login shell, as before.
+    const inner = this.path ? ["/usr/bin/env", `PATH=${this.path}`, "/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q "$0" /bin/sh -c "$1"']
+      : ["/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q "$0" /bin/zsh -lic "$1"'];
+    const r = await hc(["run", "--bg", "--no-parent", "--outlive-parent", "--label", "vnh.scripts=1", "--cwd", root, "--json", "--", ...inner, log, cmd]).catch(() => null);
     let addr = null; try { addr = JSON.parse(r?.stdout ?? "{}").address ?? null; } catch {}
     if (!addr) return;
     this.save((all) => [...all.filter((j) => !(j.root === root && j.name === name)), { root, name, addr, cmd, log }]);
     this.live[addr] = { state: "running", code: null, raw: "", lines: [] };
+    this.burst = Date.now() + 10000; this.lastPoll = 0;
     this.scrolls[addr] ??= ScrollHandle.new();
     this.sel[root] = name; delete this.still[addr];
     cx.notify();
