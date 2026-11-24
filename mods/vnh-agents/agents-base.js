@@ -78,6 +78,9 @@ const sortOf = () => SORTS.find((s) => s.id === shared("agents.sort")) ?? SORTS[
 const SECTION = { 4: "Needs you", 3: "Done", 2: "Working", 1: "Idle" };
 const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
 
+// The logo of each agent that can sleep (the same pictures as the tab switcher's rows).
+const LOGO = { claude: "icons/claude.svg", agy: "icons/antigravity.svg", codex: "icons/codex.svg" };
+
 function duration(ms) {
   const m = Math.floor(ms / 60000);
   if (m < 1) return "<1m";
@@ -544,10 +547,11 @@ export default class Agents extends View {
         return h_flex().id(`z-${r.id}`).relative().px(8).h(30).flex_none().rounded(8).items_center().gap(9).cursor_pointer()
           .hover((s) => s.bg(t.hover))
           .on_hover((on, cx) => { if (on) this.hovered = `z:${r.id}`; else if (this.hovered === `z:${r.id}`) this.hovered = null; cx.notify(); })
-          .child(div().flex_none().opacity(0.45).child(svg("mods/vnh-agents/moon.svg").size(15).text_color(t.muted)))
+          // The same layout as an awake row: the agent's logo (dimmed), the names (in italics), the time, then the state (the moon).
+          .child(div().flex_none().opacity(0.5).child(LOGO[r.agent] ? image(LOGO[r.agent]).w(16).h(16).flex_none() : div().size(16)))
           .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-            .child(div().min_w(0).max_w(120).truncate().text_color(t.dim).child(r.spaceName || "?"))
-            .when(Boolean(r.title), (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).opacity(0.7).child(`\u00b7 ${r.title}`))))
+            .child(div().min_w(0).max_w(120).truncate().italic().text_color(t.dim).child(r.spaceName || "?"))
+            .when(Boolean(r.title), (el) => el.child(div().flex_1().min_w(0).truncate().italic().text_color(t.dim).opacity(0.7).child(`\u00b7 ${r.title}`))))
           // The whole row is the click target: a layer over all of it (the x below sits above the layer), since the texts under it
           // took the click and only the moon passed it on.
           .child(div().id(`zw-${r.id}`).absolute().top(0).left(0).right(0).bottom(0).cursor_pointer().tooltip("Wake it: resumes the conversation")
@@ -556,7 +560,8 @@ export default class Agents extends View {
             .hover((s) => s.bg(t.hover).text_color(t.foreground))
             .on_click((_e, cx) => { cx.stop_propagation(); dismiss(r); this.hovered = null; cx.notify(); })
             .child(svg("mods/pane/close.svg").size(12))))
-          .when(!hot, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - r.at))));
+          .when(!hot, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - r.at))))
+          .child(div().flex_none().w(14).flex().items_center().justify_center().child(svg("mods/vnh-agents/moon.svg").size(13).text_color(t.dim)));
       })];
     };
     const rows = collapsed
