@@ -7,6 +7,13 @@ import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { theme, shared, run, spaces, props, closeOverlay } from "herdr";
 
 const ROWS = 16;                         // "space" mode: lines shown (group headers count), scrolled around the highlight
+function duration(ms) {
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "<1m";
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+}
 const DOT = { working: "#e0a63a", blocked: "#d9649a", done: "#3fae6a", idle: null };
 
 export default class TabSwitch extends View {
@@ -55,6 +62,7 @@ export default class TabSwitch extends View {
         .when(menu, (el) => el.cursor_pointer().hover((x) => x.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => { cx.stop_propagation(); this.pick(c); }))
         .child(c.icon ? image(c.icon).size(16).flex_none() : div().size(16).flex_none())      // the agent's logo (the program's own icon)
         .child(div().flex_1().min_w(0).truncate().when(on, (el) => el.font_semibold()).when(c.preview, (el) => el.italic()).child(c.name))
+        .when(Boolean(c.since), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(`${c.status === "working" || c.status === "blocked" ? "" : "idle "}${duration(Date.now() - c.since)}`)))
         .when(Boolean(dot), (el) => el.child(div().size(7).rounded(4).bg(dot).flex_none()))
         .when(c.now, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("now")));
     };

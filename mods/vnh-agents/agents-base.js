@@ -99,6 +99,7 @@ export default class Agents extends View {
     // Each agent's last state and when it changed (ms), kept across restarts.
     try { this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}"); } catch { this.changed = {}; }
     if (!this.changed || typeof this.changed !== "object" || Array.isArray(this.changed)) this.changed = {};
+    try { setShared("vnh.agentSince", Object.fromEntries(Object.entries(this.changed).map(([k, c]) => [k, { s: c.s, at: c.at }]))); } catch {}   // VNH: for the tab switcher (see track())
     try { this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]"); } catch { this.pendingPins = []; }
     if (!Array.isArray(this.pendingPins)) this.pendingPins = [];
     if (!this.pendingPins.length) localStorage.removeItem("pins");
@@ -190,6 +191,8 @@ export default class Agents extends View {
       dirty = true;
     }
     if (!dirty) return;
+    // VNH: when each agent last changed state, for the tab switcher (vnh-tabswitch shows "idle 5m"): shared, as localStorage is this mod's own.
+    try { setShared("vnh.agentSince", Object.fromEntries(Object.entries(this.changed).map(([k, c]) => [k, { s: c.s, at: c.at }]))); } catch {}
     // Gone and old: the list alone is empty right after a start.
     const listed = new Set(list.map((a) => a.address));
     for (const [k, c] of Object.entries(this.changed)) if (!listed.has(k) && now - c.at > 30 * 86400000) delete this.changed[k];
