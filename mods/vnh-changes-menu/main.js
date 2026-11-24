@@ -50,12 +50,21 @@ export default class ChangesMenu extends View {
   init(_props, cx) {
     this.ask = props()?.ask ?? null; // "rollback" | "delete" once chosen: the question before it runs
     this.busy = false;
+    // The question's main button is the default: the popup has the keyboard, so Enter presses it (Esc closes).
+    this.handle = cx.focus_handle();
+    cx.timer.after(50, () => this.handle.focus());
     // A pull request's quick action ("Fix with agent", "Review with agent") runs at once and closes.
     const auto = props()?.kind === "pr" ? props()?.auto : null;
     if (auto) { this.busy = true; cx.timer.after(40, (cx) => typeIntoAgent(cx, agentText(auto, props()), () => this.close())); }
   }
 
   a() { return props() ?? {}; }
+  enter(e, cx, go) {
+    const m = e.modifiers ?? {};
+    if (e.key !== "enter" || m.control || m.alt || m.platform || m.shift) return;
+    cx.stop_propagation();
+    if (!this.busy) go(cx);
+  }
   typeIntoAgent(cx, text, done) { typeIntoAgent(cx, text, done); }
   close() { closeOverlay(props()?.overlay); }
 
@@ -190,15 +199,16 @@ export default class ChangesMenu extends View {
       .child(svg(ICON(icon)).size(14).flex_none().text_color(enabled ? t.muted : t.dim))
       .child(div().flex_1().child(label));
     if (this.ask === "drop") {
-      return v_flex().id("cm-ask").w_full().p(10).gap(10).bg(t.popover).text_size(13)
+      return v_flex().id("cm-ask").track_focus(this.handle).on_key_down((e, cx) => this.enter(e, cx, (cx) => this.runOps("Drop", () => this.git(["stash", "drop", ref]), cx, "Stash dropped")))
+        .w_full().p(10).gap(10).bg(t.popover).text_size(13)
         .child(div().text_color(t.foreground).child(`Drop ${ref}?`))
         .child(div().text_size(11.5).text_color(t.dim).child(`${String(message).slice(0, 80)} — it is gone for good.`))
         .child(h_flex().gap(8).justify_end()
           .child(div().id("cm-cancel").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().text_color(t.muted).hover((s) => s.bg(t.hover)).on_click(() => this.close()).child("Cancel"))
-          .child(div().id("cm-go").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().bg(t.blocked + "33").text_color(t.blocked).hover((s) => s.bg(t.blocked + "4d"))
+          .child(div().id("cm-go").h(28).px(12).border_1().border_color(t.foreground + "55").flex().items_center().rounded(7).cursor_pointer().bg(t.blocked + "33").text_color(t.blocked).hover((s) => s.bg(t.blocked + "4d"))
             .on_click((_e, cx) => { if (!this.busy) this.runOps("Drop", () => this.git(["stash", "drop", ref]), cx, "Stash dropped"); }).child("Drop")));
     }
-    return v_flex().id("cm").w_full().p(5).gap(1).bg(t.popover)
+    return v_flex().id("cm").track_focus(this.handle).w_full().p(5).gap(1).bg(t.popover)
       .child(item("apply", "plus", "Apply (keep the stash)", true, (cx) => this.runOps("Apply", () => this.git(["stash", "apply", "--index", ref]), cx, "Stash applied")))
       .child(item("pop", "undo", "Pop (apply and remove)", true, (cx) => this.runOps("Pop", () => this.git(["stash", "pop", "--index", ref]), cx, "Stash popped")))
       .child(item("drop", "trash", "Drop…", true, (cx) => { this.ask = "drop"; cx.notify(); }))
@@ -216,12 +226,13 @@ export default class ChangesMenu extends View {
     if (this.ask === "branch" || this.ask === "worktree") return promptView(this, t);
     const q = this.ask ? commitAsk(this) : null;
     if (q) {
-      return v_flex().id("cm-ask").w_full().p(10).gap(10).bg(t.popover).text_size(13)
+      return v_flex().id("cm-ask").track_focus(this.handle).on_key_down((e, cx) => this.enter(e, cx, q.go))
+        .w_full().p(10).gap(10).bg(t.popover).text_size(13)
         .child(div().text_color(t.foreground).child(q.title))
         .child(div().text_size(11.5).text_color(t.dim).child(q.note))
         .child(h_flex().gap(8).justify_end()
           .child(div().id("cm-cancel").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().text_color(t.muted).hover((s) => s.bg(t.hover)).on_click(() => this.close()).child("Cancel"))
-          .child(div().id("cm-go").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().bg((q.danger ? t.blocked : t.accent) + "33").text_color(q.danger ? t.blocked : t.foreground)
+          .child(div().id("cm-go").h(28).px(12).border_1().border_color(t.foreground + "55").flex().items_center().rounded(7).cursor_pointer().bg((q.danger ? t.blocked : t.accent) + "33").text_color(q.danger ? t.blocked : t.foreground)
             .hover((s) => s.bg((q.danger ? t.blocked : t.accent) + "4d")).on_click((_e, cx) => { if (!this.busy) q.go(cx); }).child("Do it")));
     }
     return v_flex().id("cm").w_full().p(5).gap(1).bg(t.popover).children(commitItems(this, t, item, line));
@@ -237,12 +248,13 @@ export default class ChangesMenu extends View {
     const q = this.ask ? prAsk(this) : null;
     if (this.busy && this.a().auto) return v_flex().id("cm-auto").w_full().p(12).bg(t.popover).text_size(13).text_color(t.muted).child("Sending to the agent…");
     if (q) {
-      return v_flex().id("cm-ask").w_full().p(10).gap(10).bg(t.popover).text_size(13)
+      return v_flex().id("cm-ask").track_focus(this.handle).on_key_down((e, cx) => this.enter(e, cx, q.go))
+        .w_full().p(10).gap(10).bg(t.popover).text_size(13)
         .child(div().text_color(t.foreground).whitespace_normal().child(q.title))
         .child(div().text_size(11.5).text_color(t.dim).whitespace_normal().child(q.note))
         .child(h_flex().gap(8).justify_end()
           .child(div().id("cm-cancel").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().text_color(t.muted).hover((s) => s.bg(t.hover)).on_click(() => this.close()).child("Cancel"))
-          .child(div().id("cm-go").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().bg((q.danger ? t.blocked : t.accent) + "33").text_color(q.danger ? t.blocked : t.foreground)
+          .child(div().id("cm-go").h(28).px(12).border_1().border_color(t.foreground + "55").flex().items_center().rounded(7).cursor_pointer().bg((q.danger ? t.blocked : t.accent) + "33").text_color(q.danger ? t.blocked : t.foreground)
             .hover((s) => s.bg((q.danger ? t.blocked : t.accent) + "4d")).on_click((_e, cx) => { if (!this.busy) q.go(cx); }).child(this.busy ? "Working…" : "Do it")));
     }
     return v_flex().id("cm").w_full().p(5).gap(1).bg(t.popover).children(prItems(this, t, item, line));
@@ -302,13 +314,14 @@ export default class ChangesMenu extends View {
       const note = rb
         ? (on ? "This can't be undone (another machine)." : "What it discards is saved; the notice afterwards undoes it.")
         : (on ? "This can't be undone (another machine)." : "You can put it back from the Trash.");
-      return v_flex().id("cm-ask").w_full().p(10).gap(10).bg(t.popover).text_size(13)
+      return v_flex().id("cm-ask").track_focus(this.handle).on_key_down((e, cx) => this.enter(e, cx, (cx) => (rb ? this.rollback(cx) : this.remove(cx))))
+        .w_full().p(10).gap(10).bg(t.popover).text_size(13)
         .child(div().text_color(t.foreground).child(text))
         .child(div().text_size(11.5).text_color(t.dim).child(note))
         .child(h_flex().gap(8).justify_end()
           .child(div().id("cm-cancel").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().text_color(t.muted)
             .hover((s) => s.bg(t.hover)).on_click(() => this.close()).child("Cancel"))
-          .child(div().id("cm-go").h(28).px(12).flex().items_center().rounded(7).cursor_pointer().bg(t.blocked + "33").text_color(t.blocked)
+          .child(div().id("cm-go").h(28).px(12).border_1().border_color(t.foreground + "55").flex().items_center().rounded(7).cursor_pointer().bg(t.blocked + "33").text_color(t.blocked)
             .hover((s) => s.bg(t.blocked + "4d")).on_click((_e, cx) => { if (this.busy) return; rb ? this.rollback(cx) : this.remove(cx); }).child(rb ? "Rollback" : on ? "Delete" : "Move to the Trash")));
     }
     return v_flex().id("cm").w_full().p(5).gap(1).bg(t.popover)

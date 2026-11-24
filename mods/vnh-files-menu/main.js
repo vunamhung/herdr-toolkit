@@ -105,6 +105,7 @@ export default class FilesMenu extends View {
     const t = theme(), p = this.p, name = base(p.path ?? ""), local = !p.on;
     const box = v_flex().id("files-menu").track_focus(this.handle).w_full().p(4).gap(1).bg(t.popover).text_size(13)
       .on_key_down((e, cx) => {
+        if (e.key === "enter" && this.mode === "trash") { cx.stop_propagation(); this.trash(cx); return; }   // the question's main button is the default
         if (e.key !== "escape") return;
         cx.stop_propagation();
         if (this.mode === "list") this.close(); else { this.mode = "list"; this.handle.focus(); cx.notify(); }
@@ -124,7 +125,7 @@ export default class FilesMenu extends View {
         .child(div().px(8).py(4).text_size(12.5).child(`Move "${name}" to the Trash?`))
         .child(h_flex().px(6).py(4).gap(6)
           .child(div().id("trash-yes").flex_1().h(28).flex().items_center().justify_center().rounded(6).cursor_pointer().bg(t.ansi1).text_color("#ffffff")
-            .on_click((_e, cx) => this.trash(cx)).child("Move to Trash"))
+            .border_1().border_color("#ffffff66").on_click((_e, cx) => this.trash(cx)).child("Move to Trash"))
           .child(div().id("trash-no").flex_1().h(28).flex().items_center().justify_center().rounded(6).cursor_pointer().bg(t.hover)
             .on_click((_e, cx) => { this.mode = "list"; cx.notify(); }).child("Cancel")));
     }
@@ -141,6 +142,6 @@ export default class FilesMenu extends View {
       .child(this.item(t, "m-new-file", "plus", "New file…", (cx) => this.ask("new-file", cx)))
       .child(this.item(t, "m-new-folder", "folder-plus", "New folder…", (cx) => this.ask("new-folder", cx)))
       .when(!p.gone, (el) => el.child(this.item(t, "m-rename", "square-pen", "Rename…", (cx) => this.ask("rename", cx))))
-      .when(!p.gone, (el) => el.child(this.sep(t)).child(this.item(t, "m-trash", "trash", "Move to Trash…", (cx) => { this.mode = "trash"; cx.notify(); }, { danger: true })));
+      .when(!p.gone, (el) => el.child(this.sep(t)).child(this.item(t, "m-trash", "trash", "Move to Trash…", (cx) => { this.mode = "trash"; this.handle.focus(); cx.notify(); }, { danger: true })));
   }
 }
