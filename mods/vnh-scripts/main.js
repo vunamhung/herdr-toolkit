@@ -3,6 +3,7 @@
 // panel under the list, a read-only log that scrolls and follows the end until you scroll it (↓ end brings it back). Jobs are tabs of that one window, and the
 // divider between the list and the window drags; a job that ended keeps its output and shows its exit code.
 // Stop kills it, Restart runs it again, ✕ removes it. `herdr-app do vnh-scripts.run-<script>` (also stop-, restart-) does the same.
+// `script -t 0`: its log is flushed at every write (its default is every 30 s, which showed a job's output seconds late).
 // Cost: while the panel is on screen and a job runs, one `hc ls` and one `hc read` per running job every 1.5 s; nothing otherwise.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, v_resizable, resizable_panel, ScrollHandle } from "gpui-base";
@@ -250,8 +251,8 @@ export default class Scripts extends View {
     const cmd = `${this.pm} run ${name}`;
     const log = `${home()}/.cache/vnh-scripts/${slug(root)}__${slug(name)}.log`;
     // With the login PATH known: plain sh (fast). Without it yet: the login shell, as before.
-    const inner = this.path ? ["/usr/bin/env", ...Object.entries(this.env ?? { PATH: this.path }).map(([k, v]) => `${k}=${v}`), "/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q "$0" /bin/sh -c "$1"']
-      : ["/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q "$0" /bin/zsh -lic "$1"'];
+    const inner = this.path ? ["/usr/bin/env", ...Object.entries(this.env ?? { PATH: this.path }).map(([k, v]) => `${k}=${v}`), "/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q -t 0 "$0" /bin/sh -c "$1"']
+      : ["/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q -t 0 "$0" /bin/zsh -lic "$1"'];
     const r = await hc(["run", "--bg", "--no-parent", "--outlive-parent", "--label", "vnh.scripts=1", "--cwd", root, "--json", "--", ...inner, log, cmd]).catch(() => null);
     let addr = null; try { addr = JSON.parse(r?.stdout ?? "{}").address ?? null; } catch {}
     if (!addr) return;
