@@ -119,7 +119,7 @@ static CGEventRef onScroll(CGEventTapProxy proxy, CGEventType type, CGEventRef e
     if (fabs(accX) + fabs(accY) < 10) return event;
     if (fabs(accX) > 2 * fabs(accY)) {
       // Fingers to the left: every space's tabs, grouped by space; to the right: only the space you are in (SWAP reverses it).
-      int left = accX < 0; if (swapSides) left = !left;
+      int left = accX > 0; if (swapSides) left = !left;       // accX > 0 is the fingers going to the left on this Mac
       NSString *mode = left ? @"all" : @"space";
       swipe = Sideways; carry = 0; logf_("switcher: open (%s)", mode.UTF8String); herdr(openCommand(mode));
     }
