@@ -9,7 +9,7 @@
 #                            colorScheme to terminal, so Claude, agy and Codex share one palette
 #   ./install.sh --gestures  also build gestures/HerdrPinch.swift and run it as a LaunchAgent
 #                            (trackpad pinch anywhere in Herdr: zoom in pulls, zoom out pushes; four fingers
-#                            swiping down anywhere: cmd-W)
+#                            PadActions: four-finger swipes / tap = cmd-W, cmd-T, cmd-shift-T; edge slides = volume, brightness)
 # Options can be combined: ./install.sh --layout --karabiner --gestures --orca
 set -euo pipefail
 
@@ -139,18 +139,19 @@ if want --gestures; then
   sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.herdr-pinch.plist" > "$PL"
   launchctl bootstrap "gui/$(id -u)" "$PL"
 
-  # Four fingers swiping down on the trackpad = cmd-W in every app (gestures/FourFingerClose.c: raw touches from the private
-  # MultitouchSupport framework, then a posted cmd-W). Same ad hoc signed app, same one-time Accessibility grant. Turn macOS's own
-  # four-finger vertical swipe off (Trackpad > More Gestures > Mission Control / App Expose), or it fires too.
-  FF="$HOME/Applications/FourFingerClose.app"
-  mkdir -p "$FF/Contents/MacOS"
-  clang -O2 -o "$FF/Contents/MacOS/four-finger-close" "$ROOT/gestures/FourFingerClose.c" -F/System/Library/PrivateFrameworks \
-    -framework MultitouchSupport -framework ApplicationServices -framework CoreFoundation
-  cp "$ROOT/gestures/Info-four-finger-close.plist" "$FF/Contents/Info.plist"
-  codesign -f -s - --identifier dev.vnh.four-finger-close "$FF"
-  PF="$HOME/Library/LaunchAgents/dev.vnh.four-finger-close.plist"
+  # Trackpad actions in every app (gestures/PadActions.m): four fingers swiping down = cmd-W, up = cmd-T, tapping = cmd-shift-T;
+  # one finger sliding along the right edge = volume, along the top edge = brightness. It reads the raw touches (private
+  # MultitouchSupport framework). Same ad hoc signed app, same one-time Accessibility grant (again after a rebuild). Turn macOS's
+  # own four-finger vertical swipe off (Trackpad > More Gestures > Mission Control / App Expose), or it fires too.
+  PADAPP="$HOME/Applications/PadActions.app"
+  mkdir -p "$PADAPP/Contents/MacOS"
+  clang -O2 -o "$PADAPP/Contents/MacOS/pad-actions" "$ROOT/gestures/PadActions.m" -F/System/Library/PrivateFrameworks \
+    -framework MultitouchSupport -framework DisplayServices -framework Cocoa -framework AudioToolbox -framework CoreAudio -framework ApplicationServices
+  cp "$ROOT/gestures/Info-pad-actions.plist" "$PADAPP/Contents/Info.plist"
+  codesign -f -s - --identifier dev.vnh.pad-actions "$PADAPP"
+  PF="$HOME/Library/LaunchAgents/dev.vnh.pad-actions.plist"
   [ -f "$PF" ] && { launchctl bootout "gui/$(id -u)" "$PF" 2>/dev/null; backup "$PF"; }
-  sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.four-finger-close.plist" > "$PF"
+  sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.pad-actions.plist" > "$PF"
   launchctl bootstrap "gui/$(id -u)" "$PF"
 fi
 

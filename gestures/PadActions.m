@@ -1,0 +1,162 @@
+// Trackpad actions, in every app. It reads the trackpad's raw touches (the private MultitouchSupport framework, the one
+// BetterTouchTool and Jitouch use: an NSEvent never carries a four-finger swipe or a touch's place on the pad) and:
+//   four fingers swiping down      -> ⌘W   (close the tab / window)
+//   four fingers swiping up        -> ⌘T   (new tab)
+//   four fingers tapping           -> ⌘⇧T  (reopen the tab just closed)
+//   one finger sliding up / down along the right edge -> volume up / down
+//   one finger sliding right / left along the top edge -> screen brightness up / down
+// The keys go to whichever app is in front; the volume of the default output (CoreAudio) and the brightness of the main display
+// (the private DisplayServices framework) follow the finger continuously, a slide of PAD_SLIDE of the pad's length being the whole range.
+// Needs Accessibility (to post keys): macOS asks once, and again after a rebuild. Turn macOS's own four-finger vertical swipe off
+// (System Settings > Trackpad > More Gestures > Mission Control / App Exposé), or it fires too.
+// Environment (the LaunchAgent plist sets them, so a change needs no rebuild): PAD_DY how far a four-finger swipe must go, as a
+// fraction of the pad (0.18); PAD_SWAP=1 swaps ⌘W and ⌘T; PAD_EDGE how wide the edge is (0.06); PAD_STEP how far a finger slides for
+// the whole range of volume / brightness (0.8); PAD_TAP the longest a four-finger tap lasts, in seconds (0.3); PAD_LOG a log file.
+// `PadActions --test volume 0.4` / `--test brightness 0.7` set that level (0 to 1) and exit; with no number, print the level.
+#import <Cocoa/Cocoa.h>
+#include <AudioToolbox/AudioServices.h>
+#include <CoreAudio/CoreAudio.h>
+#include <math.h>
+#include <stdarg.h>
+#include <time.h>
+
+typedef struct { float x, y; } MTPoint;
+typedef struct { MTPoint position, velocity; } MTVector;
+typedef struct {
+  int frame; double timestamp; int identifier, state, fingerId, handId;
+  MTVector normalized; float size; int zero1; float angle, majorAxis, minorAxis;
+  MTVector absoluteVector; int zero2[2]; float zDensity;
+} MTTouch;
+typedef void *MTDeviceRef;
+typedef int (*MTContactCallback)(MTDeviceRef, MTTouch *, int, double, int);
+extern CFMutableArrayRef MTDeviceCreateList(void);
+extern void MTRegisterContactFrameCallback(MTDeviceRef, MTContactCallback);
+extern void MTDeviceStart(MTDeviceRef, int);
+extern int DisplayServicesGetBrightness(CGDirectDisplayID, float *);
+extern int DisplayServicesSetBrightness(CGDirectDisplayID, float);
+
+static const char *logPath;
+static double needDY = 0.18, edge = 0.06, slide = 0.8, tapMax = 0.3;
+static int swap = 0;
+
+static void logf_(const char *fmt, ...) {
+  if (!logPath) return;
+  FILE *f = fopen(logPath, "a"); if (!f) return;
+  time_t t = time(NULL); char ts[32]; strftime(ts, sizeof ts, "%H:%M:%S", localtime(&t));
+  fprintf(f, "%s ", ts);
+  va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap);
+  fputc('\n', f); fclose(f);
+}
+
+// ⌘ (and ⇧) + a key: 13 = W, 17 = T.
+static void postKey(int code, CGEventFlags flags) {
+  CGEventRef d = CGEventCreateKeyboardEvent(NULL, code, true), u = CGEventCreateKeyboardEvent(NULL, code, false);
+  CGEventSetFlags(d, flags); CGEventSetFlags(u, flags);
+  CGEventPost(kCGHIDEventTap, d); CGEventPost(kCGHIDEventTap, u);
+  CFRelease(d); CFRelease(u);
+}
+
+// The volume of the default output device, 0 to 1 (and unmuted when it is raised); -1 when there is none.
+static AudioObjectID outDevice(void) {
+  AudioObjectID dev = 0; UInt32 size = sizeof dev;
+  AudioObjectPropertyAddress a = { kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+  return AudioObjectGetPropertyData(kAudioObjectSystemObject, &a, 0, NULL, &size, &dev) == noErr ? dev : 0;
+}
+static double getVolume(void) {
+  AudioObjectID dev = outDevice(); Float32 v = 0; UInt32 size = sizeof v;
+  AudioObjectPropertyAddress a = { kAudioHardwareServiceDeviceProperty_VirtualMainVolume, kAudioDevicePropertyScopeOutput, kAudioObjectPropertyElementMain };
+  return dev && AudioObjectGetPropertyData(dev, &a, 0, NULL, &size, &v) == noErr ? v : -1;
+}
+static void setVolume(double v) {
+  AudioObjectID dev = outDevice(); if (!dev) return;
+  Float32 f = v < 0 ? 0 : v > 1 ? 1 : v;
+  AudioObjectPropertyAddress a = { kAudioHardwareServiceDeviceProperty_VirtualMainVolume, kAudioDevicePropertyScopeOutput, kAudioObjectPropertyElementMain };
+  AudioObjectSetPropertyData(dev, &a, 0, NULL, sizeof f, &f);
+  if (f > 0) { UInt32 off = 0; AudioObjectPropertyAddress m = { kAudioDevicePropertyMute, kAudioDevicePropertyScopeOutput, kAudioObjectPropertyElementMain };
+    if (AudioObjectHasProperty(dev, &m)) AudioObjectSetPropertyData(dev, &m, 0, NULL, sizeof off, &off); }
+}
+static double getBrightness(void) { float b = -1; return DisplayServicesGetBrightness(CGMainDisplayID(), &b) == 0 ? b : -1; }
+static void setBrightness(double v) { DisplayServicesSetBrightness(CGMainDisplayID(), v < 0 ? 0 : v > 1 ? 1 : (float)v); }
+
+// The state of the touch on the pad (one state for all pads).
+static int prev = 0, active = 0, fired = 0, blocked = 0;     // four fingers: down / its action done / a fifth finger came
+static double startX, startY, startT, lastFire = 0, peak = 0;
+static int edgeMode = 0;                                       // one finger: 0 none, 1 right edge (volume), 2 top edge (brightness)
+static double edgeRef = 0, edgeLevel = 0, edgeSet = 0;      // where the finger was, the level it holds, the level last set
+
+static int onFrame(MTDeviceRef dev, MTTouch *t, int n, double ts, int frame) {
+  int cnt = 0; double sx = 0, sy = 0;
+  for (int i = 0; i < n; i++) if (t[i].state == 3 || t[i].state == 4) { cnt++; sx += t[i].normalized.position.x; sy += t[i].normalized.position.y; }
+  int was = prev; prev = cnt;
+
+  // ---- one finger along an edge
+  if (cnt == 1) {
+    double x = sx, y = sy;
+    if (was == 0) {
+      edgeMode = x >= 1 - edge ? 1 : (y >= 1 - edge ? 2 : 0);
+      edgeRef = edgeMode == 1 ? y : x;
+      edgeLevel = edgeSet = edgeMode == 1 ? getVolume() : getBrightness();
+      if (edgeLevel < 0) edgeMode = 0;
+    } else if (edgeMode) {
+      if ((edgeMode == 1 && x < 1 - edge - 0.1) || (edgeMode == 2 && y < 1 - edge - 0.1)) edgeMode = 0;   // left the edge: a pointer again
+      else {
+        double pos = edgeMode == 1 ? y : x;
+        edgeLevel += (pos - edgeRef) / slide; edgeRef = pos;               // the pad's y grows upward, x to the right
+        if (edgeLevel < 0) edgeLevel = 0; if (edgeLevel > 1) edgeLevel = 1;
+        if (fabs(edgeLevel - edgeSet) >= 0.01) { edgeSet = edgeLevel; if (edgeMode == 1) setVolume(edgeLevel); else setBrightness(edgeLevel); }
+      }
+    }
+  } else edgeMode = 0;
+
+  // ---- four fingers
+  if (cnt == 0) { active = fired = blocked = 0; peak = 0; return 0; }
+  if (cnt > 4) { blocked = 1; active = 0; return 0; }          // five fingers: a pinch, not this
+  if (cnt < 4) {
+    if (was == 4 && active && !fired && !blocked && peak < 0.03 && ts - startT < tapMax) {   // lifted at once, hardly moved: a tap
+      fired = 1;
+      time_t wall = time(NULL);
+      if (difftime(wall, (time_t)lastFire) >= 0.5) { lastFire = (double)wall; postKey(17, kCGEventFlagMaskCommand | kCGEventFlagMaskShift); logf_("four-finger tap (%.2fs) -> cmd+shift+t", ts - startT); }
+    }
+    active = 0; return 0;
+  }
+  if (blocked) return 0;
+  double x = sx / 4, y = sy / 4;
+  if (!active) { active = 1; startX = x; startY = y; startT = ts; peak = 0; return 0; }
+  double dy = y - startY, dx = x - startX, mag = fabs(dy);          // the pad's y grows upward
+  if (mag > peak) peak = mag;
+  if (!fired && mag >= needDY && fabs(dx) <= mag * 0.8 && ts - startT < 1.5) {
+    fired = 1;
+    int down = dy < 0, key = (down != swap) ? 13 : 17;
+    time_t wall = time(NULL);
+    if (difftime(wall, (time_t)lastFire) >= 0.8) { lastFire = (double)wall; postKey(key, kCGEventFlagMaskCommand); logf_("swipe %s: dy %.2f dx %.2f -> cmd+%c", down ? "down" : "up", mag, dx, key == 13 ? 'w' : 't'); }
+  }
+  return 0;
+}
+
+int main(int argc, char **argv) {
+  @autoreleasepool {
+    if (argc >= 3 && !strcmp(argv[1], "--test")) {
+      int vol = !strcmp(argv[2], "volume");
+      if (argc == 4) { if (vol) setVolume(atof(argv[3])); else setBrightness(atof(argv[3])); }
+      printf("%s %.3f\n", argv[2], vol ? getVolume() : getBrightness());
+      return 0;
+    }
+    logPath = getenv("PAD_LOG");
+    if (getenv("PAD_DY")) needDY = atof(getenv("PAD_DY"));
+    if (getenv("PAD_EDGE")) edge = atof(getenv("PAD_EDGE"));
+    if (getenv("PAD_SLIDE")) slide = atof(getenv("PAD_SLIDE"));
+    if (getenv("PAD_TAP")) tapMax = atof(getenv("PAD_TAP"));
+    swap = getenv("PAD_SWAP") && getenv("PAD_SWAP")[0] == '1';
+    const void *keys[] = { kAXTrustedCheckOptionPrompt }, *vals[] = { getenv("PAD_NOPROMPT") ? kCFBooleanFalse : kCFBooleanTrue };
+    CFDictionaryRef opts = CFDictionaryCreate(NULL, keys, vals, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    logf_("accessibility trusted: %d", AXIsProcessTrustedWithOptions(opts));
+    CFMutableArrayRef list = MTDeviceCreateList();
+    CFIndex n = list ? CFArrayGetCount(list) : 0;
+    for (CFIndex i = 0; i < n; i++) { MTDeviceRef d = (MTDeviceRef)CFArrayGetValueAtIndex(list, i); MTRegisterContactFrameCallback(d, onFrame); MTDeviceStart(d, 0); }
+    logf_("multitouch devices: %ld; four fingers: swipe down cmd+%c, up cmd+%c (%.2f of the pad), tap cmd+shift+t; edges (%.2f wide, a slide of %.2f is the whole range): right volume, top brightness",
+      (long)n, swap ? 't' : 'w', swap ? 'w' : 't', needDY, edge, slide);
+    if (n == 0) return 1;
+    CFRunLoopRun();
+  }
+  return 0;
+}

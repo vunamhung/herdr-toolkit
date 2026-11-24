@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.vnh.pad-actions</string>
+  <key>ProgramArguments</key><array><string>HOME_DIR/Applications/PadActions.app/Contents/MacOS/pad-actions</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PAD_LOG</key><string>HOME_DIR/Library/Logs/pad-actions.log</string>
+    <key>PAD_DY</key><string>0.18</string>
+    <key>PAD_EDGE</key><string>0.06</string>
+    <key>PAD_SLIDE</key><string>0.8</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+</dict>
+</plist>
