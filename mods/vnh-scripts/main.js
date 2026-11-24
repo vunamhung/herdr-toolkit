@@ -451,7 +451,8 @@ export default class Scripts extends View {
           .child(v_flex().id(`log-${j.addr}`).size_full().px(10).py(6).font_family(FONT).text_size(11).line_height("15px").text_color(t.muted)
             .overflow_y_scrollbar().when(Boolean(handle), (el) => el.track_scroll(handle))
             .on_scroll_wheel((_e, cx) => { if (!this.still[j.addr]) { this.still[j.addr] = true; cx.notify(); } })
-            .children(lines.map(line)))
+            .children(lines.map(line))
+            .child(div().flex_none().h(140)))       // blank room under the last line, so scrolling down has somewhere to go
           .when(!follow, (el) => el.child(div().id("log-end").absolute().right(16).bottom(8).h(24).px(10).flex().items_center().rounded(12).cursor_pointer()
             .bg(t.selected).text_color(t.foreground).text_size(11).hover((x) => x.bg(t.hover))
             .on_click((_e, cx) => { delete this.still[j.addr]; cx.notify(); }).child("↓ end"))))
