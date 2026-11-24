@@ -1543,7 +1543,7 @@ export default class Insights extends View {
     // VNH: vnh-tabs toggles the tab and hides / restores the right panels.
     const active = spaces().find((space) => space.active), tab = active?.tabs.find((x) => x.active)?.id;
     const on = Boolean(tab) && panes().some((pane) => pane.mod === "insights" && pane.tab === tab);
-    return h_flex().size_full().pr(10).items_center()
+    return h_flex().size_full().pr(4).items_center()
       .bg(t.chrome).border_b(1).border_color(t.border)
       .child(h_flex().id("insights-open").h(26).px(8).gap(5).flex_none()
         .items_center().rounded(6).text_size(12).bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
