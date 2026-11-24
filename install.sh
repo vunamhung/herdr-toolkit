@@ -8,7 +8,8 @@
 #   ./install.sh --orca     also install the Herdr theme "orca" (Claude Code's custom:orca palette) and set agy's
 #                            colorScheme to terminal, so Claude, agy and Codex share one palette
 #   ./install.sh --gestures  also build gestures/HerdrPinch.swift and run it as a LaunchAgent
-#                            (trackpad pinch anywhere in Herdr: zoom in pulls, zoom out pushes)
+#                            (trackpad pinch anywhere in Herdr: zoom in pulls, zoom out pushes; four fingers
+#                            swiping down anywhere: cmd-W)
 # Options can be combined: ./install.sh --layout --karabiner --gestures --orca
 set -euo pipefail
 
@@ -137,6 +138,20 @@ if want --gestures; then
   [ -f "$PL" ] && { launchctl bootout "gui/$(id -u)" "$PL" 2>/dev/null; backup "$PL"; }
   sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.herdr-pinch.plist" > "$PL"
   launchctl bootstrap "gui/$(id -u)" "$PL"
+
+  # Four fingers swiping down on the trackpad = cmd-W in every app (gestures/FourFingerClose.c: raw touches from the private
+  # MultitouchSupport framework, then a posted cmd-W). Same ad hoc signed app, same one-time Accessibility grant. Turn macOS's own
+  # four-finger vertical swipe off (Trackpad > More Gestures > Mission Control / App Expose), or it fires too.
+  FF="$HOME/Applications/FourFingerClose.app"
+  mkdir -p "$FF/Contents/MacOS"
+  clang -O2 -o "$FF/Contents/MacOS/four-finger-close" "$ROOT/gestures/FourFingerClose.c" -F/System/Library/PrivateFrameworks \
+    -framework MultitouchSupport -framework ApplicationServices -framework CoreFoundation
+  cp "$ROOT/gestures/Info-four-finger-close.plist" "$FF/Contents/Info.plist"
+  codesign -f -s - --identifier dev.vnh.four-finger-close "$FF"
+  PF="$HOME/Library/LaunchAgents/dev.vnh.four-finger-close.plist"
+  [ -f "$PF" ] && { launchctl bootout "gui/$(id -u)" "$PF" 2>/dev/null; backup "$PF"; }
+  sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.four-finger-close.plist" > "$PF"
+  launchctl bootstrap "gui/$(id -u)" "$PF"
 fi
 
 if command -v herdr-app >/dev/null; then
