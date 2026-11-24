@@ -2,7 +2,7 @@
 // showing marked "now". It only draws what vnh-tabs keeps in shared "vnh.tabswitch".
 //   mode "space": momentary. The two fingers that opened it scroll the highlight and, where they lift, that tab is selected.
 //   mode "all": a menu that stays. Scroll it, click a tab (its space is selected too) to go there; Esc, or a click outside, closes it.
-import { View, div } from "gpui-kit";
+import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { theme, shared, run, spaces, props, closeOverlay } from "herdr";
 
@@ -53,6 +53,7 @@ export default class TabSwitch extends View {
       return h_flex().id(`sw-${c.tab}`).h(32).flex_none().px(12).gap(9).items_center().rounded(7).text_size(13)
         .bg(on && !menu ? t.selected : t.background).text_color(on ? t.foreground : t.muted)
         .when(menu, (el) => el.cursor_pointer().hover((x) => x.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => { cx.stop_propagation(); this.pick(c); }))
+        .child(c.icon ? image(c.icon).size(16).flex_none() : div().size(16).flex_none())      // the agent's logo (the program's own icon)
         .child(div().flex_1().min_w(0).truncate().when(on, (el) => el.font_semibold()).when(c.preview, (el) => el.italic()).child(c.name))
         .when(Boolean(dot), (el) => el.child(div().size(7).rounded(4).bg(dot).flex_none()))
         .when(c.now, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("now")));

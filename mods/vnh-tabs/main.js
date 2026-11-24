@@ -172,7 +172,7 @@ export default class Tabs extends View {
         // "all" lists agents only: a tab that is just a terminal (or a conversation preview) is left out.
         if (mode === "all" && !all.some((p) => p.tab === c.id && p.program?.agent)) continue;
         const lead = all.find((p) => p.tab === c.id && p.program?.agent) ?? all.find((p) => p.tab === c.id);
-        items.push({ space: sp.id, tab: c.id, name: label(c, lead), status: c.status ?? null, preview: all.some((p) => p.tab === c.id && p.mod === "vnh-convo"), now: Boolean(sp.active && c.active) });
+        items.push({ space: sp.id, tab: c.id, name: label(c, lead), icon: lead?.program?.icon ?? null, status: c.status ?? null, preview: all.some((p) => p.tab === c.id && p.mod === "vnh-convo"), now: Boolean(sp.active && c.active) });
       }
       if (items.length > first) groups.push({ name: sp.name ?? "", first, count: items.length - first });
     }
