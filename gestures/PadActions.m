@@ -5,6 +5,7 @@
 //   four fingers tapping           -> ⌘⇧T  (reopen the tab just closed)
 //   one finger sliding up / down along the right edge -> volume up / down
 //   one finger sliding right / left along the top edge -> screen brightness up / down
+// While a finger slides along an edge the pointer is held still (and freed the moment the finger leaves the edge or lifts).
 // The keys go to whichever app is in front; the volume of the default output (CoreAudio) and the brightness of the main display
 // (the private DisplayServices framework) follow the finger continuously, a slide of PAD_SLIDE of the pad's length being the whole range.
 // Needs Accessibility (to post keys): macOS asks once, and again after a rebuild. Turn macOS's own four-finger vertical swipe off
@@ -12,7 +13,8 @@
 // Environment (the LaunchAgent plist sets them, so a change needs no rebuild): PAD_DY how far a four-finger swipe must go, as a
 // fraction of the pad (0.18); PAD_SWAP=1 swaps ⌘W and ⌘T; PAD_EDGE how wide the edge is (0.06); PAD_STEP how far a finger slides for
 // the whole range of volume / brightness (0.8); PAD_TAP the longest a four-finger tap lasts, in seconds (0.3); PAD_LOG a log file.
-// `PadActions --test volume 0.4` / `--test brightness 0.7` set that level (0 to 1) and exit; with no number, print the level.
+// `PadActions --test volume 0.4` / `--test brightness 0.7` set that level (0 to 1) and exit; with no number, print the level;
+// `--test lock` holds the pointer for 2 s.
 #import <Cocoa/Cocoa.h>
 #include <AudioToolbox/AudioServices.h>
 #include <CoreAudio/CoreAudio.h>
@@ -78,11 +80,22 @@ static void setVolume(double v) {
 static double getBrightness(void) { float b = -1; return DisplayServicesGetBrightness(CGMainDisplayID(), &b) == 0 ? b : -1; }
 static void setBrightness(double v) { DisplayServicesSetBrightness(CGMainDisplayID(), v < 0 ? 0 : v > 1 ? 1 : (float)v); }
 
+// The pointer held still while a finger slides along an edge. Freed when the slide ends, by a watchdog if the frames stop (a lost
+// lift must never leave it stuck), and when this process ends.
+static int cursorLocked = 0;
+static double lastEdgeFrame = 0;
+static void lockCursor(int on) {
+  if (on == cursorLocked) return;
+  cursorLocked = on;
+  CGAssociateMouseAndMouseCursorPosition(on ? 0 : 1);
+}
+static void freeCursor(int sig) { CGAssociateMouseAndMouseCursorPosition(1); if (sig) _exit(0); }
+
 // The state of the touch on the pad (one state for all pads).
 static int prev = 0, active = 0, fired = 0, blocked = 0;     // four fingers: down / its action done / a fifth finger came
 static double startX, startY, startT, lastFire = 0, peak = 0;
 static int edgeMode = 0;                                       // one finger: 0 none, 1 right edge (volume), 2 top edge (brightness)
-static double edgeRef = 0, edgeLevel = 0, edgeSet = 0;      // where the finger was, the level it holds, the level last set
+static double edgeRef = 0, edgeLevel = 0, edgeSet = 0, edgeFrom = 0;      // where the finger was, the level it holds, the level last set
 
 static int onFrame(MTDeviceRef dev, MTTouch *t, int n, double ts, int frame) {
   int cnt = 0; double sx = 0, sy = 0;
@@ -94,19 +107,21 @@ static int onFrame(MTDeviceRef dev, MTTouch *t, int n, double ts, int frame) {
     double x = sx, y = sy;
     if (was == 0) {
       edgeMode = x >= 1 - edge ? 1 : (y >= 1 - edge ? 2 : 0);
-      edgeRef = edgeMode == 1 ? y : x;
+      edgeRef = edgeFrom = edgeMode == 1 ? y : x;
       edgeLevel = edgeSet = edgeMode == 1 ? getVolume() : getBrightness();
       if (edgeLevel < 0) edgeMode = 0;
     } else if (edgeMode) {
-      if ((edgeMode == 1 && x < 1 - edge - 0.1) || (edgeMode == 2 && y < 1 - edge - 0.1)) edgeMode = 0;   // left the edge: a pointer again
+      if ((edgeMode == 1 && x < 1 - edge - 0.1) || (edgeMode == 2 && y < 1 - edge - 0.1)) { edgeMode = 0; lockCursor(0); }   // left the edge: a pointer again
       else {
         double pos = edgeMode == 1 ? y : x;
+        lastEdgeFrame = CFAbsoluteTimeGetCurrent();
+        if (fabs(pos - edgeFrom) >= 0.015) lockCursor(1);                  // it slides: hold the pointer
         edgeLevel += (pos - edgeRef) / slide; edgeRef = pos;               // the pad's y grows upward, x to the right
         if (edgeLevel < 0) edgeLevel = 0; if (edgeLevel > 1) edgeLevel = 1;
         if (fabs(edgeLevel - edgeSet) >= 0.01) { edgeSet = edgeLevel; if (edgeMode == 1) setVolume(edgeLevel); else setBrightness(edgeLevel); }
       }
     }
-  } else edgeMode = 0;
+  } else { edgeMode = 0; lockCursor(0); }
 
   // ---- four fingers
   if (cnt == 0) { active = fired = blocked = 0; peak = 0; return 0; }
@@ -135,12 +150,21 @@ static int onFrame(MTDeviceRef dev, MTTouch *t, int n, double ts, int frame) {
 
 int main(int argc, char **argv) {
   @autoreleasepool {
+    if (argc == 3 && !strcmp(argv[1], "--test") && !strcmp(argv[2], "lock")) {      // holds the pointer for 2 s, then frees it
+      lockCursor(1); sleep(2); lockCursor(0); return 0;
+    }
     if (argc >= 3 && !strcmp(argv[1], "--test")) {
       int vol = !strcmp(argv[2], "volume");
       if (argc == 4) { if (vol) setVolume(atof(argv[3])); else setBrightness(atof(argv[3])); }
       printf("%s %.3f\n", argv[2], vol ? getVolume() : getBrightness());
       return 0;
     }
+    CGAssociateMouseAndMouseCursorPosition(1);
+    signal(SIGTERM, freeCursor); signal(SIGINT, freeCursor); signal(SIGHUP, freeCursor); atexit_b(^{ freeCursor(0); });
+    CFRunLoopTimerRef dog = CFRunLoopTimerCreateWithHandler(NULL, CFAbsoluteTimeGetCurrent() + 0.25, 0.25, 0, 0, ^(CFRunLoopTimerRef tm) {
+      if (cursorLocked && CFAbsoluteTimeGetCurrent() - lastEdgeFrame > 0.4) lockCursor(0);
+    });
+    CFRunLoopAddTimer(CFRunLoopGetMain(), dog, kCFRunLoopCommonModes);
     logPath = getenv("PAD_LOG");
     if (getenv("PAD_DY")) needDY = atof(getenv("PAD_DY"));
     if (getenv("PAD_EDGE")) edge = atof(getenv("PAD_EDGE"));

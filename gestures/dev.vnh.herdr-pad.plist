@@ -10,8 +10,8 @@
     <key>HERDR_PINCH_LOG</key><string>HOME_DIR/Library/Logs/herdr-pad.log</string>
     <key>HERDR_PINCH_TOGETHER</key><string>vnh-tabs.git-pull</string>
     <key>HERDR_PINCH_APART</key><string>vnh-tabs.git-push</string>
-    <key>HERDR_PAD_EDGE</key><string>0.06</string>
-    <key>HERDR_PAD_STEP</key><string>0.07</string>
+    <key>HERDR_PAD_STEP</key><string>55</string>
+    <key>HERDR_PAD_IDLE</key><string>0.6</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

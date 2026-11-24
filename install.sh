@@ -8,7 +8,7 @@
 #   ./install.sh --orca     also install the Herdr theme "orca" (Claude Code's custom:orca palette) and set agy's
 #                            colorScheme to terminal, so Claude, agy and Codex share one palette
 #   ./install.sh --gestures  also build gestures/HerdrPad.m and PadActions.m and run them as LaunchAgents
-#                            (HerdrPad, only in Herdr: pinch = git pull / push, bottom-edge slide = previous / next tab;
+#                            (HerdrPad, only in Herdr: pinch = git pull / push, sideways two-finger scroll = tab switcher;
 #                            PadActions: four-finger swipes / tap = cmd-W, cmd-T, cmd-shift-T; edge slides = volume, brightness)
 # Options can be combined: ./install.sh --layout --karabiner --gestures --orca
 set -euo pipefail
@@ -33,7 +33,7 @@ backup() {
 # Our own mods, then the third-party ones this repo carries (each with its LICENSE; the ones we changed say so in
 # their first lines), so one clone is the whole UI. herdr-chat (chat, new-chat, chat-menu, chat-agents and its
 # host) is installed from vendor/herdr-chat below.
-MODS="claude-limits-status vnh-chrome vnh-tabs vnh-prompts vnh-convo vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions vnh-agents vnh-cover vnh-changes-menu vnh-filetree vnh-scripts vnh-timeline file-icons better-changes cloudflare-deploys insights filetree portal run walkthrough"
+MODS="claude-limits-status vnh-chrome vnh-tabs vnh-tabswitch vnh-prompts vnh-convo vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions vnh-agents vnh-cover vnh-changes-menu vnh-filetree vnh-scripts vnh-timeline file-icons better-changes cloudflare-deploys insights filetree portal run walkthrough"
 for mod in $MODS; do
   echo "mod: $mod"
   backup "$HERDR/mods/$mod"
@@ -125,15 +125,14 @@ if want --karabiner; then
 fi
 
 if want --gestures; then
-  echo "gestures: HerdrPad (pinch, bottom-edge slide in Herdr) and PadActions (every app)"
+  echo "gestures: HerdrPad (pinch, sideways scroll in Herdr) and PadActions (every app)"
   # Two small apps (signed ad hoc): macOS keeps Accessibility for an app more reliably than for a bare linker-signed binary. Grant
   # each once in System Settings > Privacy & Security > Accessibility; a rebuild asks again.
-  # HerdrPad (gestures/HerdrPad.m), only while Herdr is in front: pinch together / apart = git pull / push, one finger sliding
-  # along the bottom edge = the previous / next tab (the tab bar scrolls along).
+  # HerdrPad (gestures/HerdrPad.m), only while Herdr is in front: pinch together / apart = git pull / push, two fingers scrolling
+  # sideways = the tab switcher (a popup of the repo's tabs, vnh-tabswitch; where the scroll stops, that tab is selected).
   HAPP="$HOME/Applications/HerdrPad.app"
   mkdir -p "$HAPP/Contents/MacOS" "$HOME/Library/LaunchAgents"
-  clang -O2 -o "$HAPP/Contents/MacOS/herdr-pad" "$ROOT/gestures/HerdrPad.m" -F/System/Library/PrivateFrameworks \
-    -framework MultitouchSupport -framework Cocoa -framework ApplicationServices
+  clang -O2 -o "$HAPP/Contents/MacOS/herdr-pad" "$ROOT/gestures/HerdrPad.m" -framework Cocoa -framework ApplicationServices
   cp "$ROOT/gestures/Info-herdr-pad.plist" "$HAPP/Contents/Info.plist"
   codesign -f -s - --identifier dev.vnh.herdr-pad "$HAPP"
   PL="$HOME/Library/LaunchAgents/dev.vnh.herdr-pad.plist"

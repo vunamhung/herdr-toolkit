@@ -1,0 +1,1 @@
+{ "place": "none", "title": "Tabs", "focusable": false, "overlay": { "kind": "popup", "at": "top", "offset": 110, "width": 380, "height": 0.5 } }

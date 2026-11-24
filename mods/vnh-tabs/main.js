@@ -7,7 +7,7 @@ import { h_flex, ScrollHandle } from "gpui-base";
 // one are redrawn (ANIM is set while one is on screen, and a 500 ms timer notifies the view while it is).
 let ANIM = false;
 const breath = (from, to) => { ANIM = true; return Math.floor(Date.now() / 500) % 2 ? from : to; };
-import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, focused, checking, exec, notify, readTextFile, home } from "herdr";
+import { spaces, panes, run, openOverlay, closeOverlay, theme, window, shared, setShared, layout, settings, nextCommand, focused, checking, exec, notify, readTextFile, home } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -70,6 +70,9 @@ export default class Tabs extends View {
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
     if (!checking()) { rememberWorkFolder(); cx?.timer.every(1000, () => rememberWorkFolder()); }
     try { this.focus = JSON.parse(localStorage.getItem("timelineFocus") ?? "null"); } catch { this.focus = null; }
+    // A switcher left open (the agent died mid-gesture) closes by itself after a few seconds without a step.
+    this.switcher = null;
+    if (!checking()) cx.timer.every(500, () => { if (this.switcher && Date.now() > this.switcher.until) this.switchEnd(false); });
     // keys.json: "vnh-tabs.timeline" (cmd-shift-b) toggles the Timeline the same way as its button.
     // "vnh-tabs.insights": the Insights toolbar button; "vnh-tabs.insights-close": Esc in the dashboard.
     cx?.spawn(async (cx) => {
@@ -82,9 +85,48 @@ export default class Tabs extends View {
         // "vnh-tabs.git-push" (cmd-\): push the work folder's branch and its tags, no dialog.
         else if (c === "git-push") this.gitPush();
         else if (c === "git-pull") this.gitPull();
+        // "vnh-tabs.switch-open", "switch-step-<n>" (n may be negative), "switch-commit", "switch-cancel": the tab switcher the
+        // HerdrPad agent drives while two fingers scroll sideways in Herdr (a popup of this space's tabs, see vnh-tabswitch).
+        else if (c === "switch-open") this.switchOpen();
+        else if (/^switch-step-(-?\d+)$/.test(c)) this.switchStep(Number(c.slice("switch-step-".length)));
+        else if (c === "switch-commit") this.switchEnd(true);
+        else if (c === "switch-cancel") this.switchEnd(false);
         cx.notify();
       }
     });
+  }
+
+  // The tab switcher: a popup listing the tabs of the space you are in (the repo), the one showing highlighted. Each step moves the
+  // highlight; the end of the gesture selects the one it stopped on. The list and the highlight live in shared "vnh.tabswitch",
+  // which the popup (vnh-tabswitch) draws.
+  switchOpen() {
+    const space = spaces().find((s) => s.active);
+    if (!space || !(space.tabs ?? []).length) return;
+    if (this.switcher) this.switchEnd(false);
+    const all = panes(), tabs = space.tabs;
+    const list = tabs.map((c) => {
+      const lead = all.find((p) => p.tab === c.id && p.program?.agent) ?? all.find((p) => p.tab === c.id);
+      return { id: c.id, name: label(c, lead), status: c.status ?? null, preview: all.some((p) => p.tab === c.id && p.mod === "vnh-convo") };
+    });
+    const sel = Math.max(0, tabs.findIndex((c) => c.active));
+    setShared("vnh.tabswitch", { space: space.name ?? "", tabs: list, sel });
+    const id = openOverlay({ mod: "vnh-tabswitch", kind: "popup", key: "vnh-tabswitch", width: 380, height: Math.min(560, 70 + 34 * list.length) });
+    this.switcher = { id, until: Date.now() + 3500 };
+  }
+
+  switchStep(n) {
+    const st = shared("vnh.tabswitch");
+    if (!this.switcher || !st?.tabs?.length) return;
+    const sel = Math.max(0, Math.min(st.tabs.length - 1, st.sel + n));
+    if (sel !== st.sel) setShared("vnh.tabswitch", { ...st, sel });
+    this.switcher.until = Date.now() + 3500;
+  }
+
+  switchEnd(select) {
+    const sw = this.switcher, st = shared("vnh.tabswitch");
+    this.switcher = null;
+    if (select && st?.tabs?.[st.sel] && !st.tabs[st.sel].active) run("tab.select", { id: st.tabs[st.sel].id });
+    if (sw) try { closeOverlay(sw.id); } catch {}
   }
 
   // "vnh-tabs.files" (cmd-e), "vnh-tabs.changes" (alt-a), "vnh-tabs.graph": what the panel's
