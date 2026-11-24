@@ -307,17 +307,18 @@ export default class Scripts extends View {
     this.start(name, cx);
   }
 
+  // The tab goes at once; ending the job (and everything it started) and removing its terminal follow in the background.
   async remove(name, cx) {
     const j = this.jobs().find((x) => x.name === name);
     if (!j) return;
-    await this.killTree(j.addr, cx);
-    await hc(["rm", j.addr]).catch(() => {});
     delete this.live[j.addr]; delete this.still[j.addr];
-    try { this.scrolls[j.addr]?.release(); } catch {}
-    delete this.scrolls[j.addr];
     if (this.sel[j.root] === j.name) delete this.sel[j.root];
     this.save((all) => all.filter((x) => x !== j && !(x.root === j.root && x.name === j.name)));
     cx.notify();
+    const handle = this.scrolls[j.addr]; delete this.scrolls[j.addr];
+    await this.killTree(j.addr, cx);
+    await hc(["rm", j.addr]).catch(() => {});
+    try { handle?.release(); } catch {}
   }
 
   render() {
