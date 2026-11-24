@@ -6,7 +6,7 @@
 // `script -t 0`: its log is flushed at every write (its default is every 30 s, which showed a job's output seconds late).
 // Cost: while the panel is on screen and a job runs, one `hc ls` and one `hc read` per running job every 1.5 s; nothing otherwise.
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, v_resizable, resizable_panel, ScrollHandle } from "gpui-base";
+import { v_flex, h_flex, v_resizable, resizable_panel, ScrollHandle, InputState, Input } from "gpui-base";
 import { theme, hc, exec, nextCommand, home, writeTextFile, focused, panes, spaces, readTextFile, shared, setShared, window, layout, checking } from "herdr";
 
 const FONT = "PragmataPro";
@@ -107,6 +107,10 @@ function parseLog(raw0) {
 export default class Scripts extends View {
   init(_props, cx) {
     this.root = null; this.cwd = null; this.pm = "npm"; this.pkg = null; this.error = ""; this.busy = false; this.sig = "";
+    // The search box over the list: a script shows when its name or its command has the words typed (all of them, any case).
+    this.query = "";
+    this.input = InputState.new({ placeholder: "Search scripts" });
+    this.input.on("change", (_e, cx) => { this.query = String(this.input.value() ?? ""); cx.notify(); });
     this.git = null; this.gitAt = 0;     // the git summary shown when there is nothing to run
     this.live = {};                     // address -> { state, code, text }
     this.sel = {};                      // folder -> the name of the job whose tab shows
@@ -322,7 +326,9 @@ export default class Scripts extends View {
   }
 
   render() {
-    const t = theme(), pkg = this.pkg, scripts = Object.entries(pkg?.scripts ?? {}), jobs = this.jobs();
+    const t = theme(), pkg = this.pkg, all = Object.entries(pkg?.scripts ?? {}), jobs = this.jobs();
+    const words = this.query.toLowerCase().split(/\s+/).filter(Boolean);
+    const scripts = words.length ? all.filter(([n, c]) => words.every((w) => n.toLowerCase().includes(w) || String(c).toLowerCase().includes(w))) : all;
     const green = "#3fae6a", red = "#e5534b";
     const iconBtn = (id, icon, fn) => div().id(id).size(22).flex_none().flex().items_center().justify_center().rounded(5).cursor_pointer()
       .text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
@@ -357,8 +363,13 @@ export default class Scripts extends View {
       .child(v_flex().flex_none().px(14).py(10).gap(2).border_b(1).border_color(t.border)
         .child(div().truncate().font_semibold().text_size(13).child(pkg?.name ?? (this.root ? this.root.split("/").pop() : "Scripts")))
         .child(div().truncate().text_size(10.5).text_color(t.dim).child(`${this.root ? this.root.replace(home(), "~") : ""} · ${this.pm}`)))
+      .when(all.length > 0 || words.length > 0, (el) => el.child(h_flex().flex_none().h(30).mx(8).mt(8).px(8).gap(6).items_center().rounded(7).bg(t.hover).text_size(12)
+        .child(Input.new(this.input).flex_1().h_full().text_size(12).text_color(t.foreground))
+        .when(words.length > 0, (b) => b.child(div().id("scripts-clear").flex_none().cursor_pointer().text_color(t.muted).hover((x) => x.text_color(t.foreground))
+          .on_click((_e, cx) => { this.input.set_value(""); this.query = ""; cx.notify(); }).child("✕")))))
       .child(div().id("scripts-scroll").flex_1().min_h(0).overflow_y_scrollbar()
         .child(v_flex().p(6).gap(1)
+          .when(words.length > 0 && scripts.length === 0, (el) => el.child(div().p(10).text_size(12).text_color(t.dim).child("No script matches")))
           .when(Boolean(this.error) && !this.git, (el) => el.child(div().p(10).text_size(12).text_color(t.dim).child(this.error)))
           .when(!this.error && !scripts.length && !this.git, (el) => el.child(div().p(10).text_size(12).text_color(t.dim).child("No scripts in package.json")))
           .when((Boolean(this.error) || !scripts.length) && Boolean(this.git), (el) => el.child(gitSummary()))
