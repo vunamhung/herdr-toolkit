@@ -437,6 +437,11 @@ export default class Tabs extends View {
 
   // The side panel is remembered per space: switching shows that space's choice
   // (closed if it never had one), and opening or closing it records it.
+  applyPanel(want) {
+    if (want) { run("layout.select", { stack: "panel-body", child: want }); run("layout.show", { id: "panel" }); }
+    else run("layout.hide", { id: "panel" });
+  }
+
   syncPanel(space, panel, body, enabled) {
     // While the Timeline hides the panel (syncTimeline), that isn't the space's choice.
     if (!space || !panel || this.focus || this.insights) return;
@@ -447,16 +452,19 @@ export default class Tabs extends View {
       if (!(first && !(space.id in this.panels))) {
         const stored = this.panels[space.id] ?? null, want = enabled.includes(stored) ? stored : null;
         if (want !== now) {
-          this.pending = { want, until: Date.now() + 1000 };
-          if (want) { run("layout.select", { stack: "panel-body", child: want }); run("layout.show", { id: "panel" }); }
-          else run("layout.hide", { id: "panel" });
+          this.pending = { want, until: Date.now() + 1000, tries: 0 };
+          this.applyPanel(want);
           return;
         }
       }
     }
     // Until the restore lands (or something else won), the old state isn't a choice.
     if (this.pending) {
-      if (this.pending.want !== now && Date.now() < this.pending.until) return;
+      if (this.pending.want !== now) {
+        if (Date.now() < this.pending.until) return;
+        // The restore did not land (the command was dropped): send it again, up to twice, rather than take the other space's panel as this one's choice.
+        if (this.pending.tries < 2) { this.pending.tries++; this.pending.until = Date.now() + 1000; this.applyPanel(this.pending.want); return; }
+      }
       this.pending = null;
     }
     if (this.panels[space.id] === now) return;
