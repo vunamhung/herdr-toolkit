@@ -2,7 +2,7 @@
 //   pinching the fingers together -> `herdr-app do vnh-tabs.git-pull`, spreading them apart -> `vnh-tabs.git-push`
 //     (HERDR_PINCH_TOGETHER / HERDR_PINCH_APART name the commands, HERDR_PINCH_IN / HERDR_PINCH_OUT the thresholds)
 //   two fingers scrolling sideways -> the tab switcher: a popup of the tabs of the space you are in (the repo). The sideways move only
-//     opens it; then, without lifting, scrolling up / down moves the highlight, one tab per HERDR_PAD_STEP points of scroll (45; fingers
+//     opens it; then, without lifting, scrolling up / down moves the highlight, one tab per HERDR_PAD_STEP points of scroll (30; fingers
 //     up = the next tab, HERDR_PAD_FLIP=1 reverses it), and where the fingers lift (or stop for HERDR_PAD_IDLE seconds, 0.6) that tab
 //     is selected. The popup is vnh-tabswitch,
 //     driven through `vnh-tabs.switch-open-<x>-<y>-<width>-<height>` (where the pointer is in the window, so the popup opens there),
@@ -19,7 +19,7 @@
 static NSString *herdrBundle = @"dev.herdr.app";
 static NSString *herdrApp, *together, *apart;
 static const char *logPath;
-static double inThreshold = 0.3, outThreshold = 0.35, stepPx = 45, idleSec = 0.6;
+static double inThreshold = 0.3, outThreshold = 0.35, stepPx = 30, idleSec = 0.6;
 static int flip = 0;
 static CGFloat pinchSum = 0;
 static NSDate *lastPinch;
