@@ -24,7 +24,11 @@ function color256(n) {
 }
 // A terminal log (raw, as `script` wrote it) -> its last lines, each a list of runs { t: text, fg: colour | null, b: bold }.
 // Only colours and bold are kept; a line redrawn with \r keeps its last drawing; every other control sequence is dropped.
-function parseLog(raw) {
+function parseLog(raw0) {
+  // A clear screen (ESC[2J / ESC[3J, or a reset) wipes what came before it, as a terminal does.
+  let cut = -1; const clr = /\u001b\[[23]J|\u001bc/g; let cm;
+  while ((cm = clr.exec(raw0))) cut = cm.index + cm[0].length;
+  const raw = cut >= 0 ? raw0.slice(cut) : raw0;
   const text = raw.replace(/\^D\u0008+/g, "").replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "").replace(/\u001b\[[0-9;?]*[ -\/]*[@-ln-~]/g, "").replace(/\u001b[()][A-Za-z0-9]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001a\u001c-\u001f]/g, "");
   const out = [];
   for (const rawLine of text.split("\n")) {
@@ -47,8 +51,12 @@ function parseLog(raw) {
     push(seg.slice(last));
     out.push(runs);
   }
-  while (out.length && !out[out.length - 1].some((r) => r.t.trim())) out.pop();
-  return out.slice(-KEEP);
+  // No blank line at the start or the end, and at most one in a row.
+  const blank = (l) => !l.some((r) => r.t.trim());
+  const tidy = [];
+  for (const l of out) { if (blank(l) && (!tidy.length || blank(tidy[tidy.length - 1]))) continue; tidy.push(l); }
+  while (tidy.length && blank(tidy[tidy.length - 1])) tidy.pop();
+  return tidy.slice(-KEEP);
 }
 
 export default class Scripts extends View {
@@ -182,24 +190,49 @@ export default class Scripts extends View {
     this.poll(cx);
   }
 
+  // Ends a job and everything it started. `hc kill` only ends the terminal's own program (here `script`); the shell under it and the
+  // server it runs (vite...) would stay up, holding their port. So: every descendant of that program gets TERM, then KILL if it stays.
+  async killTree(addr, cx) {
+    const g = await hc(["get", addr, "--json"]).catch(() => null);
+    let pid = 0; try { pid = Number(JSON.parse(g?.stdout ?? "{}").pid) || 0; } catch {}
+    const family = async () => {
+      const ps = await exec("ps", ["-Ao", "pid=,ppid="]).catch(() => null);
+      const kids = new Map();
+      for (const l of String(ps?.stdout ?? "").split("\n")) { const m = l.trim().match(/^(\d+)\s+(\d+)$/); if (m) (kids.get(+m[2]) ?? kids.set(+m[2], []).get(+m[2])).push(+m[1]); }
+      const all = []; const walk = (p) => { for (const c of kids.get(p) ?? []) { all.push(c); walk(c); } };
+      if (pid) walk(pid);
+      return all;
+    };
+    const first = pid ? await family() : [];
+    if (first.length) await exec("kill", ["-TERM", ...first.map(String)]).catch(() => {});
+    await hc(["kill", addr]).catch(() => {});
+    if (first.length) {
+      await new Promise((ok) => cx.timer.after(1200, () => ok(null)));
+      const ps = await exec("ps", ["-Ao", "pid="]).catch(() => null);
+      const alive = new Set(String(ps?.stdout ?? "").split("\n").map((x) => +x.trim()));
+      const left = first.filter((p) => alive.has(p));
+      if (left.length) await exec("kill", ["-KILL", ...left.map(String)]).catch(() => {});
+    }
+  }
+
   async stop(name, cx) {
     const j = this.jobs().find((x) => x.name === name);
     if (!j) return;
-    await hc(["kill", j.addr]).catch(() => {});
+    await this.killTree(j.addr, cx);
     this.live[j.addr] = { ...(this.live[j.addr] ?? { raw: "", lines: [] }), state: "running", code: null };   // the next poll reads its end
     this.polling = false; this.poll(cx);
   }
 
   async restart(name, cx) {
     const j = this.jobs().find((x) => x.name === name);
-    if (j && this.stateOf(name) === "running") { await hc(["kill", j.addr]).catch(() => {}); await new Promise((ok) => cx.timer.after(400, () => ok(null))); this.live[j.addr] = { state: "exited", code: null, raw: "", lines: [] }; }
+    if (j && this.stateOf(name) === "running") { await this.killTree(j.addr, cx); await new Promise((ok) => cx.timer.after(400, () => ok(null))); this.live[j.addr] = { state: "exited", code: null, raw: "", lines: [] }; }
     this.start(name, cx);
   }
 
   async remove(name, cx) {
     const j = this.jobs().find((x) => x.name === name);
     if (!j) return;
-    await hc(["kill", j.addr]).catch(() => {});
+    await this.killTree(j.addr, cx);
     await hc(["rm", j.addr]).catch(() => {});
     delete this.live[j.addr]; delete this.still[j.addr];
     try { this.scrolls[j.addr]?.release(); } catch {}
