@@ -111,6 +111,14 @@ export default class Scripts extends View {
     this.query = "";
     this.input = InputState.new({ placeholder: "Search scripts" });
     this.input.on("change", (_e, cx) => { this.query = String(this.input.value() ?? ""); cx.notify(); });
+    // Keys: ↑ ↓ move over the scripts shown, Enter runs the one under the cursor, Esc clears the search. They work while the search
+    // box has the keyboard (click it): the key reaches the panel's root, as in the Files panel.
+    this.handle = cx.focus_handle();
+    this.listScroll = ScrollHandle.new();
+    this.cursor = null; this.visible = []; this.typing = false;
+    this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
+    this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
+    this.input.on("submit", (_e, cx) => this.runCursor(cx));
     this.git = null; this.gitAt = 0;     // the git summary shown when there is nothing to run
     this.live = {};                     // address -> { state, code, text }
     this.sel = {};                      // folder -> the name of the job whose tab shows
@@ -248,6 +256,24 @@ export default class Scripts extends View {
     return j ? (this.live[j.addr]?.state ?? "running") : "idle";
   }
 
+  cursorName() { return this.visible.includes(this.cursor) ? this.cursor : this.visible[0] ?? null; }
+  moveCursor(d, cx) {
+    if (!this.visible.length) return;
+    const i = Math.max(0, Math.min(this.visible.length - 1, this.visible.indexOf(this.cursorName()) + d));
+    this.cursor = this.visible[i];
+    try { this.listScroll.scroll_to_item(i); } catch {}
+    cx.notify();
+  }
+  runCursor(cx) { const n = this.cursorName(); if (n) this.start(n, cx); }
+  key(e, cx) {
+    const m = e.modifiers ?? {};
+    if (m.control || m.alt || m.platform) return;
+    if (e.key === "down" || e.key === "up") this.moveCursor(e.key === "down" ? 1 : -1, cx);
+    else if (e.key === "escape" && this.query) { this.input.set_value(""); this.query = ""; cx.notify(); }
+    else return;
+    cx.stop_propagation();
+  }
+
   async start(name, cx) {
     if (!this.root || this.stateOf(name) === "running") return;
     const root = this.root, old = this.jobs().find((x) => x.name === name);
@@ -335,9 +361,12 @@ export default class Scripts extends View {
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { cx.stop_propagation(); fn(cx); })
       .child(svg(icon).size(13));
+    this.visible = scripts.map(([n]) => n);
+    const at = this.typing || this.cursor !== null ? this.cursorName() : null;
     const row = ([name, cmd]) => {
       const s = this.stateOf(name);
       return h_flex().id(`script-${name}`).h(34).flex_none().px(10).gap(8).items_center().rounded(7).cursor_pointer()
+        .when(name === at, (el) => el.bg(t.selected))
         .hover((x) => x.bg(t.hover))
         .on_click((_e, cx) => this.start(name, cx))
         .child(svg("mods/vnh-scripts/play.svg").size(12).flex_none().text_color(s === "running" ? green : t.muted))
@@ -367,13 +396,12 @@ export default class Scripts extends View {
         .child(Input.new(this.input).flex_1().h_full().text_size(12).text_color(t.foreground))
         .when(words.length > 0, (b) => b.child(div().id("scripts-clear").flex_none().cursor_pointer().text_color(t.muted).hover((x) => x.text_color(t.foreground))
           .on_click((_e, cx) => { this.input.set_value(""); this.query = ""; cx.notify(); }).child("✕")))))
-      .child(div().id("scripts-scroll").flex_1().min_h(0).overflow_y_scrollbar()
-        .child(v_flex().p(6).gap(1)
+      .child(v_flex().id("scripts-scroll").flex_1().min_h(0).p(6).gap(1).overflow_y_scrollbar().track_scroll(this.listScroll)
           .when(words.length > 0 && scripts.length === 0, (el) => el.child(div().p(10).text_size(12).text_color(t.dim).child("No script matches")))
           .when(Boolean(this.error) && !this.git, (el) => el.child(div().p(10).text_size(12).text_color(t.dim).child(this.error)))
           .when(!this.error && !scripts.length && !this.git, (el) => el.child(div().p(10).text_size(12).text_color(t.dim).child("No scripts in package.json")))
           .when((Boolean(this.error) || !scripts.length) && Boolean(this.git), (el) => el.child(gitSummary()))
-          .children(scripts.map(row))));
+          .children(scripts.map(row)));
     const line = (runs) => {
       if (runs.length <= 1 && !runs[0]?.fg && !runs[0]?.b) return div().flex_none().whitespace_normal().child(runs[0]?.t || " ");
       return h_flex().flex_none().flex_wrap().children(runs.flatMap((r) => (r.t.match(/\S+\s*|\s+/g) ?? []).map((w) =>
@@ -410,7 +438,8 @@ export default class Scripts extends View {
             .bg(t.selected).text_color(t.foreground).text_size(11).hover((x) => x.bg(t.hover))
             .on_click((_e, cx) => { delete this.still[j.addr]; cx.notify(); }).child("↓ end"))));
     };
-    const root = v_flex().size_full().min_h(0).bg(t.background).text_color(t.foreground).font_family(FONT);
+    const root = v_flex().id("scripts-root").size_full().min_h(0).bg(t.background).text_color(t.foreground).font_family(FONT)
+      .track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx));
     if (!jobs.length) return root.child(list);
     return root.child(v_resizable("scripts-split").size_full().min_h(0)
       .child(resizable_panel().size(Math.min(240, 64 + 36 * Math.max(1, scripts.length))).size_range(90).child(list))
