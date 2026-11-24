@@ -96,6 +96,20 @@ static NSString *openCommand(NSString *mode) {
   return [@"vnh-tabs.switch-open-" stringByAppendingString:mode];
 }
 
+// Over Herdr's tab bar (the top strip of its window) a sideways scroll is the tab bar's own: it is left alone.
+static double tabBarH = 42;
+static BOOL overTabBar(void) {
+  CGEventRef ev = CGEventCreate(NULL); CGPoint p = CGEventGetLocation(ev); CFRelease(ev);
+  pid_t pid = NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
+  NSArray *wins = CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+  for (NSDictionary *w in wins) {
+    if ([w[(__bridge NSString *)kCGWindowOwnerPID] intValue] != pid || [w[(__bridge NSString *)kCGWindowLayer] intValue] != 0) continue;
+    CGRect r; if (!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(__bridge NSString *)kCGWindowBounds], &r)) continue;
+    if (CGRectContainsPoint(r, p)) return p.y - r.origin.y < tabBarH;
+  }
+  return NO;
+}
+
 static void switcherEnd(const char *why) {
   if (swipe != Sideways) { swipe = Idle; return; }
   swipe = Idle; endedAt = CFAbsoluteTimeGetCurrent();
@@ -112,7 +126,7 @@ static CGEventRef onScroll(CGEventTapProxy proxy, CGEventType type, CGEventRef e
   double now = CFAbsoluteTimeGetCurrent();
   if (e.momentumPhase != NSEventPhaseNone) return now - endedAt < 1.5 ? NULL : event;   // the glide after our gesture is not passed on either
   NSEventPhase ph = e.phase;
-  if (ph == NSEventPhaseBegan || ph == NSEventPhaseMayBegin) { swipe = Deciding; accX = accY = carry = 0; }
+  if (ph == NSEventPhaseBegan || ph == NSEventPhaseMayBegin) { swipe = overTabBar() ? Vertical : Deciding; accX = accY = carry = 0; }
   if (swipe == Idle || swipe == Vertical) { if (ph == NSEventPhaseEnded || ph == NSEventPhaseCancelled) swipe = Idle; return event; }
   double dx = e.scrollingDeltaX, dy = e.scrollingDeltaY;
   lastScroll = now;
@@ -165,6 +179,7 @@ int main(void) {
     apart = env[@"HERDR_PINCH_APART"] ?: @"vnh-tabs.git-push";
     if (env[@"HERDR_PINCH_IN"]) inThreshold = [env[@"HERDR_PINCH_IN"] doubleValue];
     if (env[@"HERDR_PINCH_OUT"]) outThreshold = [env[@"HERDR_PINCH_OUT"] doubleValue];
+    if (env[@"HERDR_PAD_TABBAR"]) tabBarH = [env[@"HERDR_PAD_TABBAR"] doubleValue];
     if (env[@"HERDR_PAD_STEP"]) stepPx = [env[@"HERDR_PAD_STEP"] doubleValue];
     if (env[@"HERDR_PAD_IDLE"]) idleSec = [env[@"HERDR_PAD_IDLE"] doubleValue];
     flip = [env[@"HERDR_PAD_FLIP"] isEqualToString:@"1"];
