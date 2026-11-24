@@ -119,6 +119,9 @@ export default class Scripts extends View {
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.input.on("submit", (_e, cx) => this.runCursor(cx));
+    // The line under a running job's log: what you type goes to the job's input (Enter sends it with a return), as in a terminal.
+    this.talk = InputState.new({ placeholder: "Type to the job, Enter sends" });
+    this.talk.on("submit", (_e, cx) => this.sendText(null, cx));
     this.git = null; this.gitAt = 0;     // the git summary shown when there is nothing to run
     this.live = {};                     // address -> { state, code, text }
     this.sel = {};                      // folder -> the name of the job whose tab shows
@@ -263,6 +266,21 @@ export default class Scripts extends View {
     this.cursor = this.visible[i];
     try { this.listScroll.scroll_to_item(i); } catch {}
     cx.notify();
+  }
+  // Text (the box's when null) pressed into the running job, then return; an empty box sends the return alone.
+  async sendText(text, cx) {
+    const j = this.jobs().find((x) => x.name === this.sel[this.root]) ?? this.jobs().slice(-1)[0];
+    if (!j) return;
+    const v = text ?? String(this.talk.value() ?? "");
+    if (text == null) this.talk.set_value("");
+    await hc(v ? ["send", j.addr, v] : ["keys", j.addr, "enter"]).catch(() => {});
+    this.burst = Date.now() + 4000; this.poll(cx);
+  }
+  async sendKeys(keys, cx) {
+    const j = this.jobs().find((x) => x.name === this.sel[this.root]) ?? this.jobs().slice(-1)[0];
+    if (!j) return;
+    await hc(["keys", j.addr, ...keys]).catch(() => {});
+    this.burst = Date.now() + 4000; this.poll(cx);
   }
   runCursor(cx) { const n = this.cursorName(); if (n) this.start(n, cx); }
   key(e, cx) {
@@ -436,7 +454,15 @@ export default class Scripts extends View {
             .children(lines.map(line)))
           .when(!follow, (el) => el.child(div().id("log-end").absolute().right(16).bottom(8).h(24).px(10).flex().items_center().rounded(12).cursor_pointer()
             .bg(t.selected).text_color(t.foreground).text_size(11).hover((x) => x.bg(t.hover))
-            .on_click((_e, cx) => { delete this.still[j.addr]; cx.notify(); }).child("↓ end"))));
+            .on_click((_e, cx) => { delete this.still[j.addr]; cx.notify(); }).child("↓ end"))))
+        .when(running, (el) => el.child(h_flex().flex_none().h(30).mx(8).my(6).px(8).gap(6).items_center().rounded(7).bg(t.hover).text_size(12)
+          .child(Input.new(this.talk).flex_1().h_full().text_size(12).text_color(t.foreground))
+          .children([["y", () => this.sendText("y", null)], ["n", () => this.sendText("n", null)]].map(([k]) => div().id(`say-${k}`).flex_none().px(6).rounded(4).cursor_pointer().text_color(t.muted)
+            .hover((x) => x.bg(t.selected).text_color(t.foreground)).on_click((_e, cx) => this.sendText(k, cx)).child(k)))
+          .child(div().id("say-enter").flex_none().px(6).rounded(4).cursor_pointer().text_color(t.muted)
+            .hover((x) => x.bg(t.selected).text_color(t.foreground)).on_click((_e, cx) => this.sendKeys(["enter"], cx)).child("↵"))
+          .child(div().id("say-int").flex_none().px(6).rounded(4).cursor_pointer().text_color(t.muted)
+            .hover((x) => x.bg(t.selected).text_color(t.foreground)).on_click((_e, cx) => this.sendKeys(["ctrl+c"], cx)).child("^C"))));
     };
     const root = v_flex().id("scripts-root").size_full().min_h(0).bg(t.background).text_color(t.foreground).font_family(FONT)
       .track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx));
