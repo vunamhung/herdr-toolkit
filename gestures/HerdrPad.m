@@ -1,9 +1,10 @@
 // Trackpad actions for Herdr (only while Herdr is the frontmost app; the ones for every app are PadActions.m):
 //   pinching the fingers together -> `herdr-app do vnh-tabs.git-pull`, spreading them apart -> `vnh-tabs.git-push`
 //     (HERDR_PINCH_TOGETHER / HERDR_PINCH_APART name the commands, HERDR_PINCH_IN / HERDR_PINCH_OUT the thresholds)
-//   two fingers scrolling sideways -> the tab switcher: a popup of the tabs of the space you are in (the repo); the scroll moves the
-//     highlight, one tab per HERDR_PAD_STEP points of scroll (55), and where the fingers lift (or stop for HERDR_PAD_IDLE seconds,
-//     0.6) that tab is selected. Fingers moving left go to the next tab (HERDR_PAD_FLIP=1 reverses it). The popup is vnh-tabswitch,
+//   two fingers scrolling sideways -> the tab switcher: a popup of the tabs of the space you are in (the repo). The sideways move only
+//     opens it; then, without lifting, scrolling up / down moves the highlight, one tab per HERDR_PAD_STEP points of scroll (45; fingers
+//     up = the next tab, HERDR_PAD_FLIP=1 reverses it), and where the fingers lift (or stop for HERDR_PAD_IDLE seconds, 0.6) that tab
+//     is selected. The popup is vnh-tabswitch,
 //     driven through `vnh-tabs.switch-open-<x>-<y>-<width>-<height>` (where the pointer is in the window, so the popup opens there),
 //     `switch-step-<n>`, `switch-commit`.
 // Mods only see gestures over what they draw, and a terminal isn't a mod, hence this small agent. The pinch reacts once per gesture,
@@ -18,7 +19,7 @@
 static NSString *herdrBundle = @"dev.herdr.app";
 static NSString *herdrApp, *together, *apart;
 static const char *logPath;
-static double inThreshold = 0.3, outThreshold = 0.35, stepPx = 55, idleSec = 0.6;
+static double inThreshold = 0.3, outThreshold = 0.35, stepPx = 45, idleSec = 0.6;
 static int flip = 0;
 static CGFloat pinchSum = 0;
 static NSDate *lastPinch;
@@ -118,10 +119,10 @@ static CGEventRef onScroll(CGEventTapProxy proxy, CGEventType type, CGEventRef e
     if (fabs(accX) + fabs(accY) < 10) return event;
     if (fabs(accX) > 2 * fabs(accY)) { swipe = Sideways; carry = 0; logf_("switcher: open"); herdr(openCommand()); }
     else { swipe = Vertical; return event; }
-    dx = accX;                                                          // what was held back counts
+    dy = 0;                                                             // the sideways move only opens it
   }
   if (swipe == Sideways) {
-    carry += (flip ? dx : -dx);                                         // fingers to the left: the next tab
+    carry += (flip ? dy : -dy);                                         // once open, up / down moves it: fingers up, the next tab
     int n = 0;
     while (carry >= stepPx) { n++; carry -= stepPx; }
     while (carry <= -stepPx) { n--; carry += stepPx; }
