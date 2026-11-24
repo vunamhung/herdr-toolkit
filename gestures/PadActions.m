@@ -14,7 +14,7 @@
 // fraction of the pad (0.18); PAD_SWAP=1 swaps ⌘W and ⌘T; PAD_EDGE how wide the edge is (0.06); PAD_STEP how far a finger slides for
 // the whole range of volume / brightness (0.8); PAD_TAP the longest a four-finger tap lasts, in seconds (0.3); PAD_LOG a log file.
 // `PadActions --test volume 0.4` / `--test brightness 0.7` set that level (0 to 1) and exit; with no number, print the level;
-// `--test lock` holds the pointer for 2 s.
+// `--test lock` holds the pointer for 3 s.
 #import <Cocoa/Cocoa.h>
 #include <AudioToolbox/AudioServices.h>
 #include <CoreAudio/CoreAudio.h>
@@ -83,13 +83,30 @@ static void setBrightness(double v) { DisplayServicesSetBrightness(CGMainDisplay
 // The pointer held still while a finger slides along an edge. Freed when the slide ends, by a watchdog if the frames stop (a lost
 // lift must never leave it stuck), and when this process ends.
 static int cursorLocked = 0;
+static CGPoint lockPt;
+static CFMachPortRef moveTap;
 static double lastEdgeFrame = 0;
+// Held by an event tap: while locked, every pointer movement is dropped and the pointer is put back where it was.
+// (CGAssociateMouseAndMouseCursorPosition did nothing for a background agent.)
+static CGEventRef onMove(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *info) {
+  if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) { CGEventTapEnable(moveTap, true); return event; }
+  if (cursorLocked) { CGWarpMouseCursorPosition(lockPt); return NULL; }
+  return event;
+}
+static void installMoveTap(void) {
+  CGSetLocalEventsSuppressionInterval(0);
+  CGEventMask moves = CGEventMaskBit(kCGEventMouseMoved) | CGEventMaskBit(kCGEventLeftMouseDragged) | CGEventMaskBit(kCGEventRightMouseDragged) | CGEventMaskBit(kCGEventOtherMouseDragged);
+  moveTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, moves, onMove, NULL);
+  if (moveTap) { CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(kCFAllocatorDefault, moveTap, 0), kCFRunLoopCommonModes); CGEventTapEnable(moveTap, true); }
+  else logf_("pointer tap refused (no Accessibility): the pointer cannot be held");
+}
 static void lockCursor(int on) {
   if (on == cursorLocked) return;
+  if (on) { CGEventRef e = CGEventCreate(NULL); lockPt = CGEventGetLocation(e); CFRelease(e); }
   cursorLocked = on;
-  CGAssociateMouseAndMouseCursorPosition(on ? 0 : 1);
+  logf_("pointer %s", on ? "held" : "freed");
 }
-static void freeCursor(int sig) { CGAssociateMouseAndMouseCursorPosition(1); if (sig) _exit(0); }
+static void freeCursor(int sig) { cursorLocked = 0; if (sig) _exit(0); }
 
 // The state of the touch on the pad (one state for all pads).
 static int prev = 0, active = 0, fired = 0, blocked = 0;     // four fingers: down / its action done / a fifth finger came
@@ -107,6 +124,7 @@ static int onFrame(MTDeviceRef dev, MTTouch *t, int n, double ts, int frame) {
     double x = sx, y = sy;
     if (was == 0) {
       edgeMode = x >= 1 - edge ? 1 : (y >= 1 - edge ? 2 : 0);
+      if (x >= 0.8 || y >= 0.8) logf_("touch near an edge: x %.2f y %.2f -> %s", x, y, edgeMode == 1 ? "volume" : edgeMode == 2 ? "brightness" : "not on the edge");
       edgeRef = edgeFrom = edgeMode == 1 ? y : x;
       edgeLevel = edgeSet = edgeMode == 1 ? getVolume() : getBrightness();
       if (edgeLevel < 0) edgeMode = 0;
@@ -151,7 +169,9 @@ static int onFrame(MTDeviceRef dev, MTTouch *t, int n, double ts, int frame) {
 int main(int argc, char **argv) {
   @autoreleasepool {
     if (argc == 3 && !strcmp(argv[1], "--test") && !strcmp(argv[2], "lock")) {      // holds the pointer for 2 s, then frees it
-      lockCursor(1); sleep(2); lockCursor(0); return 0;
+      installMoveTap(); lockCursor(1);
+      CFRunLoopRunInMode(kCFRunLoopDefaultMode, 3, false);         // 3 s with the tap on: move the pointer, it stays
+      lockCursor(0); return 0;
     }
     if (argc >= 3 && !strcmp(argv[1], "--test")) {
       int vol = !strcmp(argv[2], "volume");
@@ -159,7 +179,7 @@ int main(int argc, char **argv) {
       printf("%s %.3f\n", argv[2], vol ? getVolume() : getBrightness());
       return 0;
     }
-    CGAssociateMouseAndMouseCursorPosition(1);
+    installMoveTap();
     signal(SIGTERM, freeCursor); signal(SIGINT, freeCursor); signal(SIGHUP, freeCursor); atexit_b(^{ freeCursor(0); });
     CFRunLoopTimerRef dog = CFRunLoopTimerCreateWithHandler(NULL, CFAbsoluteTimeGetCurrent() + 0.25, 0.25, 0, 0, ^(CFRunLoopTimerRef tm) {
       if (cursorLocked && CFAbsoluteTimeGetCurrent() - lastEdgeFrame > 0.4) lockCursor(0);
