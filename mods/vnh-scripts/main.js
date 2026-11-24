@@ -106,31 +106,28 @@ export default class Scripts extends View {
         if (text == null) error = "No package.json in this folder";
         else { try { pkg = JSON.parse(text); } catch { error = "package.json is not valid JSON"; } }
       } else error = "No folder yet";
-      if ((error || !Object.keys(pkg?.scripts ?? {}).length) && this.root && (this.gitRoot !== this.root || Date.now() - this.gitAt > 10000)) await this.loadGit(this.root);
+      if ((error || !Object.keys(pkg?.scripts ?? {}).length) && this.root && (this.gitRoot !== this.root || Date.now() - this.gitAt > 60000)) await this.loadGit(this.root);
       const sig = JSON.stringify([pkg?.name, pkg?.scripts, error, this.pm, this.root, this.git]);
       if (sig !== this.sig) { this.sig = sig; this.pkg = pkg; this.error = error; cx.notify(); }
     } finally { this.busy = false; }
   }
 
-  // The summary of the repository (shown when there is no package.json or no scripts): branch, how far from its upstream, what is
-  // changed, the last commits. Two git calls, at most every 10 s, only while that is on screen.
+  // `git summary` (git-extras) of the folder, shown when there is no package.json or no scripts: project, repo age, branch, last
+  // active, commits, files, uncommitted, authors. Parsed from its output; at most once a minute, only while that is on screen.
   async loadGit(root) {
     this.gitRoot = root; this.gitAt = Date.now();
-    const [st, lg] = await Promise.all([
-      exec("git", ["--no-optional-locks", "-C", root, "status", "--porcelain=v1", "-b"]).catch(() => null),
-      exec("git", ["-C", root, "log", "-n", "8", "--format=%h%x09%an%x09%ar%x09%s"]).catch(() => null),
-    ]);
-    if (st?.code !== 0) { this.git = null; return; }
-    const lines = String(st.stdout).split("\n").filter(Boolean), head = (lines.shift() ?? "").replace(/^## /, "");
-    const m = head.match(/^(.+?)(?:\.\.\.(\S+))?(?: \[(.*)\])?$/);
-    const ahead = Number(m?.[3]?.match(/ahead (\d+)/)?.[1] ?? 0), behind = Number(m?.[3]?.match(/behind (\d+)/)?.[1] ?? 0);
-    let staged = 0, changed = 0, untracked = 0;
-    for (const l of lines) {
-      if (l.startsWith("??")) untracked++;
-      else { if (l[0] !== " ") staged++; if (l[1] !== " ") changed++; }
+    const r = await exec("git", ["-C", root, "summary"]).catch(() => null);
+    if (r?.code !== 0) { this.git = null; return; }
+    const rows = [], authors = []; let inAuthors = false;
+    for (const l of String(r.stdout).split("\n")) {
+      const a = l.match(/^\s*(\d+)\s+(.+?)\s+([\d.]+%)\s*$/);
+      if (inAuthors && a) { authors.push({ n: a[1], name: a[2], pct: a[3] }); continue; }
+      const kv = l.match(/^\s*([^:]+?):?\s*:\s*(.*?)\s*$/);
+      if (!kv) continue;
+      if (kv[1].trim() === "authors") { inAuthors = true; continue; }
+      rows.push([kv[1].trim().replace(/:$/, ""), kv[2]]);
     }
-    const commits = lg?.code === 0 ? String(lg.stdout).split("\n").filter(Boolean).map((x) => { const [h, a, w, ...subj] = x.split("\t"); return { h, a, w, s: subj.join("\t") }; }) : [];
-    this.git = { branch: m?.[1]?.replace(/^No commits yet on /, "") ?? head, upstream: m?.[2] ?? "", ahead, behind, staged, changed, untracked, commits };
+    this.git = rows.length ? { rows, authors } : null;
   }
 
   // The jobs of this folder, in the order they were started: { name, addr, cmd }.
@@ -231,23 +228,18 @@ export default class Scripts extends View {
           .child(div().truncate().text_size(10.5).text_color(t.dim).child(String(cmd))));
     };
     const gitSummary = () => {
-      const g = this.git, chip = (label, n, color) => h_flex().gap(5).items_center().text_size(11.5).text_color(n ? color : t.dim)
-        .child(div().size(7).rounded(4).bg(n ? color : t.border)).child(`${n} ${label}`);
+      const g = this.git;
       return v_flex().gap(10).p(8)
         .child(div().text_size(11).text_color(t.dim).child(this.error || "No scripts in package.json"))
-        .child(v_flex().gap(4)
-          .child(h_flex().gap(8).items_center().text_size(12.5).font_medium()
-            .child(div().truncate().child(g.branch))
-            .when(g.ahead > 0, (el) => el.child(div().flex_none().text_color("#22a99a").child(`↑${g.ahead}`)))
-            .when(g.behind > 0, (el) => el.child(div().flex_none().text_color("#5b8def").child(`↓${g.behind}`))))
-          .when(Boolean(g.upstream), (el) => el.child(div().truncate().text_size(10.5).text_color(t.dim).child(g.upstream))))
-        .child(h_flex().gap(14).flex_wrap()
-          .child(chip("staged", g.staged, green)).child(chip("modified", g.changed, "#e3814f")).child(chip("new", g.untracked, "#5b8def")))
-        .when(g.commits.length > 0, (el) => el.child(v_flex().gap(1)
-          .child(div().text_size(10.5).text_color(t.dim).pb(3).child("Recent commits"))
-          .children(g.commits.map((c, i) => v_flex().id(`gc-${i}`).py(4).gap(1)
-            .child(div().text_size(12).whitespace_normal().child(c.s))
-            .child(h_flex().gap(8).text_size(10.5).text_color(t.dim).child(div().child(c.h)).child(div().truncate().child(c.a)).child(div().flex_none().child(c.w)))))));
+        .child(v_flex().gap(3).children(g.rows.map(([k, v], i) => h_flex().id(`gs-${i}`).gap(10).text_size(12)
+          .child(div().w(92).flex_none().text_color(t.dim).child(k))
+          .child(div().flex_1().min_w(0).truncate().child(v || "–")))))
+        .when(g.authors.length > 0, (el) => el.child(v_flex().gap(3)
+          .child(div().text_size(11).text_color(t.dim).child("authors"))
+          .children(g.authors.slice(0, 8).map((a, i) => h_flex().id(`ga-${i}`).gap(8).text_size(12)
+            .child(div().w(34).flex_none().text_right().text_color(t.dim).child(a.n))
+            .child(div().flex_1().min_w(0).truncate().child(a.name))
+            .child(div().flex_none().text_color(t.dim).child(a.pct))))));
     };
     const list = v_flex().size_full().min_h(0)
       .child(v_flex().flex_none().px(14).py(10).gap(2).border_b(1).border_color(t.border)
