@@ -1,7 +1,7 @@
 // Trackpad actions, in every app. It reads the trackpad's raw touches (the private MultitouchSupport framework, the one
 // BetterTouchTool and Jitouch use: an NSEvent never carries a four-finger swipe or a touch's place on the pad) and:
 //   four fingers swiping down      -> ⌘W   (close the tab / window)
-//   four fingers swiping up        -> ⌘T   (new tab; in Herdr: a new tab running claude --dangerously-skip-permissions)
+//   four fingers swiping up        -> ⌘T   (new tab; in Herdr: a new tab running claude --dangerously-skip-permissions; in Antigravity: ⌘N, a new conversation)
 //   four fingers tapping           -> ⌘⇧T  (reopen the tab just closed)
 //   one finger sliding up / down along the right edge -> volume up / down
 //   one finger sliding right / left along the top edge -> screen brightness up / down
@@ -234,7 +234,9 @@ static int onFrame(MTDeviceRef dev, MTTouch *t, int n, double ts, int frame) {
     fired = 1;
     int down = dy < 0, key = (down != swap) ? 13 : 17;
     time_t wall = time(NULL);
-    if (difftime(wall, (time_t)lastFire) >= 0.8) { lastFire = (double)wall; if (key == 17 && herdrNewTab()) logf_("swipe up in Herdr -> new tab with claude"); else { postKey(key, kCGEventFlagMaskCommand); } logf_("swipe %s: dy %.2f dx %.2f -> cmd+%c", down ? "down" : "up", mag, dx, key == 13 ? 'w' : 't'); }
+    if (difftime(wall, (time_t)lastFire) >= 0.8) { lastFire = (double)wall; if (key == 17 && herdrNewTab()) logf_("swipe up in Herdr -> new tab with claude");
+      else if (key == 17 && [frontBundle() isEqualToString:@"com.google.antigravity"]) { postKey(45, kCGEventFlagMaskCommand); logf_("swipe up in Antigravity -> cmd+n (new conversation)"); }   // there, a new tab is ⌘N
+      else { postKey(key, kCGEventFlagMaskCommand); } logf_("swipe %s: dy %.2f dx %.2f -> cmd+%c", down ? "down" : "up", mag, dx, key == 13 ? 'w' : 't'); }
   }
   return 0;
 }
