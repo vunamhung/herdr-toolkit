@@ -72,6 +72,13 @@ export default class Tabs extends View {
     try { this.focus = JSON.parse(localStorage.getItem("timelineFocus") ?? "null"); } catch { this.focus = null; }
     // A switcher left open (the agent died mid-gesture) closes by itself after a few seconds without a step.
     this.switcher = null;
+    // Closed tabs, for "vnh-tabs.reopen" (cmd-shift-t): each tab's folder, name and agent session are noted while it lives; when one
+    // disappears (its space still there) the note goes on a stack, and reopen opens a tab with the same name in the same folder (an
+    // agent tab resumes its conversation). Herdr has no such thing: a closed tab ends its terminals.
+    try { this.closed = JSON.parse(localStorage.getItem("closedTabs") ?? "[]"); } catch { this.closed = []; }
+    if (!Array.isArray(this.closed)) this.closed = [];
+    this.snap = null; this.sessions = {};
+    if (!checking()) cx.timer.every(1000, () => this.trackTabs());
     if (!checking()) cx.timer.every(500, () => { if (this.switcher && Date.now() > this.switcher.until) this.switchEnd(false); });
     // keys.json: "vnh-tabs.timeline" (cmd-shift-b) toggles the Timeline the same way as its button.
     // "vnh-tabs.insights": the Insights toolbar button; "vnh-tabs.insights-close": Esc in the dashboard.
@@ -93,11 +100,61 @@ export default class Tabs extends View {
           this.switchOpen(m[1] ?? "space", m[2] ? m[2].slice(1).split("-").map(Number) : []);
         }
         else if (/^switch-step-(-?\d+)$/.test(c)) this.switchStep(Number(c.slice("switch-step-".length)));
+        else if (c === "reopen") this.reopenTab();
+        else if (c === "reopen-clear") { this.closed = []; try { localStorage.setItem("closedTabs", "[]"); } catch {} }
         else if (c === "switch-commit") this.switchEnd(true);
         else if (c === "switch-cancel") this.switchEnd(false);
         cx.notify();
       }
     });
+  }
+
+  // What a tab is, to be able to open it again: its folder, its name, and for an agent its conversation (the status file the agents
+  // write, ~/.cache/herdr-status/<terminal>.json, names the session).
+  trackTabs() {
+    const now = spaces(), all = panes(), next = new Map();
+    for (const sp of now) {
+      for (const c of sp.tabs ?? []) {
+        const mine = all.filter((p) => p.tab === c.id);
+        if (mine.some((p) => p.mod === "vnh-convo" || p.mod === "vnh-markdown")) continue;        // a preview: not a tab to bring back
+        const lead = mine.find((p) => p.program?.agent && p.terminal) ?? mine.find((p) => p.terminal);
+        if (!lead) continue;
+        const agent = lead.program?.agent ? `${lead.program.key ?? ""} ${lead.program.name ?? ""}`.toLowerCase() : "";
+        const kind = /claude/.test(agent) ? "claude" : /agy|antigravity/.test(agent) ? "agy" : /codex/.test(agent) ? "codex" : null;
+        next.set(c.id, { space: sp.id, name: label(c, lead), folder: lead.cwd ?? null, kind, terminal: lead.terminal });
+        if (kind) this.readSession(lead.terminal);
+      }
+    }
+    if (this.snap) {
+      const spaceIds = new Set(now.map((sp) => sp.id));
+      for (const [id, info] of this.snap) {
+        if (next.has(id) || !spaceIds.has(info.space)) continue;                              // still there, or its whole space went
+        this.closed.push({ space: info.space, name: info.name, folder: info.folder, kind: info.kind, session: this.sessions[info.terminal]?.id ?? null });
+        this.closed = this.closed.slice(-20);
+        try { localStorage.setItem("closedTabs", JSON.stringify(this.closed)); } catch {}
+      }
+    }
+    this.snap = next;
+  }
+
+  async readSession(terminal) {
+    const old = this.sessions[terminal];
+    if (old && Date.now() - old.at < 10000) return;
+    this.sessions[terminal] = { id: old?.id ?? null, at: Date.now() };
+    const st = await readTextFile(`${home()}/.cache/herdr-status/${terminal}.json`).then((x) => JSON.parse(x ?? "null")).catch(() => null);
+    if (st?.session) this.sessions[terminal] = { id: st.session, at: Date.now() };
+  }
+
+  // "vnh-tabs.reopen" (cmd-shift-t): the tab closed last comes back: its name, its folder, and an agent's conversation resumed.
+  reopenTab() {
+    const it = this.closed.pop();
+    try { localStorage.setItem("closedTabs", JSON.stringify(this.closed)); } catch {}
+    if (!it) { notify({ title: "No closed tab to reopen", level: "info", timeout: 2000 }); return; }
+    const RESUME = { claude: 'exec claude --resume "$1"', agy: 'exec agy --conversation "$1"', codex: 'exec codex resume "$1"' };
+    const space = spaces().some((sp) => sp.id === it.space) ? it.space : spaces().find((sp) => sp.active)?.id;
+    const args = { space, name: String(it.name ?? "").slice(0, 40) || undefined, folder: it.folder || undefined };
+    if (it.kind && it.session && RESUME[it.kind]) args.argv = ["sh", "-lc", RESUME[it.kind], "resume", it.session];
+    run("tab.new", args);
   }
 
   // The tab switcher: a popup listing tabs, the one showing highlighted: the tabs of the space you are in (mode "space": the repo) or

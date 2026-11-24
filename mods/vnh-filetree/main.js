@@ -1323,9 +1323,10 @@ export default class FileTree extends View {
   }
 
   // ── drawing ──────────────────────────────────────────────────────────────────────────
-  button(id, label, tip, on, onClick, t, R) {
-    return div().id(id).h(20).min_w(20).px(4).flex_none().flex().items_center().justify_center().rounded(R).cursor_pointer()
-      .text_size(12).text_color(on ? t.foreground : t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip)
+  button(id, label, tip, on, onClick, t, R, big = false) {
+    // `big`: the tools beside the filter box (↑ ⌂ ◉ ⊘ Σ ⊟) are larger than the header's buttons.
+    return div().id(id).h(big ? 26 : 20).min_w(big ? 26 : 20).px(big ? 5 : 4).flex_none().flex().items_center().justify_center().rounded(R).cursor_pointer()
+      .text_size(big ? 17 : 12).text_color(on ? t.foreground : t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip)
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click((_e, cx) => { onClick(cx); cx.notify(); })
       .child(label);
@@ -1497,6 +1498,7 @@ export default class FileTree extends View {
     }
     const title = this.file ?? (this.root ? baseOf(this.root) : "Files");
     const btn = (id, label, tip, on, fn) => this.button(id, label, tip, on, fn, t, R);
+    const tbtn = (id, label, tip, on, fn) => this.button(id, label, tip, on, fn, t, R, true);
     const header = h_flex().h(look.header).flex_none().px(8).gap(4).items_center().bg(t.chrome).border_b(1).border_color(t.border).text_size(12)
       .when(Boolean(this.file), (el) => el.child(btn("ft-back", svg(ICON("chevron-left")).size(12), "Back to the tree (Esc)", false, () => this.closePreview())))
       .when(Boolean(this.file), (el) => el.child(image(fileIcon(this.file, false, false, settings().dark !== false)).size(14).flex_none()))
@@ -1516,15 +1518,15 @@ export default class FileTree extends View {
 
     // Tools sit beside the filter box and change with the view.
     const tools = this.view === "tree" ? [
-      btn("ft-up", "↑", "Up a folder", false, () => { if (!this.root) return; this.follow = false; this.pinned = this.root.replace(/[\\/][^\\/]+[\\/]?$/, "") || "/"; this.pinnedOn = this.on; }),
-      btn("ft-home", "⌂", this.follow ? "Following the focused pane" : "Back to the focused pane's folder", this.follow, () => { this.follow = true; this.pinned = null; }),
-      btn("ft-hidden", this.showHidden ? "◉" : "○", this.showHidden ? "Hide dotfiles (.)" : "Show dotfiles (.)", this.showHidden, () => { this.showHidden = !this.showHidden; this.savePrefs(); }),
-      btn("ft-ignored", this.showIgnored ? "⊙" : "⊘", this.showIgnored ? "Hide git-ignored files and folders (i)" : "Show git-ignored files and folders (i)", this.showIgnored, () => { this.showIgnored = !this.showIgnored; this.savePrefs(); }),
-      btn("ft-size", "Σ", this.showSize ? "Show dates" : "Show sizes", Boolean(this.showSize), () => { this.showSize = !this.showSize; this.savePrefs(); }),
-      btn("ft-collapse", "⊟", "Collapse all", false, (cx) => this.collapseAll(cx)),
+      tbtn("ft-up", "↑", "Up a folder", false, () => { if (!this.root) return; this.follow = false; this.pinned = this.root.replace(/[\\/][^\\/]+[\\/]?$/, "") || "/"; this.pinnedOn = this.on; }),
+      tbtn("ft-home", "⌂", this.follow ? "Following the focused pane" : "Back to the focused pane's folder", this.follow, () => { this.follow = true; this.pinned = null; }),
+      tbtn("ft-hidden", this.showHidden ? "◉" : "○", this.showHidden ? "Hide dotfiles (.)" : "Show dotfiles (.)", this.showHidden, () => { this.showHidden = !this.showHidden; this.savePrefs(); }),
+      tbtn("ft-ignored", this.showIgnored ? "⊙" : "⊘", this.showIgnored ? "Hide git-ignored files and folders (i)" : "Show git-ignored files and folders (i)", this.showIgnored, () => { this.showIgnored = !this.showIgnored; this.savePrefs(); }),
+      tbtn("ft-size", "Σ", this.showSize ? "Show dates" : "Show sizes", Boolean(this.showSize), () => { this.showSize = !this.showSize; this.savePrefs(); }),
+      tbtn("ft-collapse", "⊟", "Collapse all", false, (cx) => this.collapseAll(cx)),
     ] : [
-      btn("ft-agents", this.allAgents ? "∗" : "◎", this.allAgents ? "Showing every agent: show only the one in view" : "Showing the agent in view: show every agent", !this.allAgents, () => { this.allAgents = !this.allAgents; try { localStorage.setItem("allAgents", this.allAgents ? "1" : "0"); } catch {} }),
-      btn("ft-forget", "⊘", "Clear the list", false, () => { this.history = []; try { localStorage.setItem("history", "[]"); } catch {} }),
+      tbtn("ft-agents", this.allAgents ? "∗" : "◎", this.allAgents ? "Showing every agent: show only the one in view" : "Showing the agent in view: show every agent", !this.allAgents, () => { this.allAgents = !this.allAgents; try { localStorage.setItem("allAgents", this.allAgents ? "1" : "0"); } catch {} }),
+      tbtn("ft-forget", "⊘", "Clear the list", false, () => { this.history = []; try { localStorage.setItem("history", "[]"); } catch {} }),
     ];
 
     // VNH: in the side panel, a rounded, bordered card like the Changes panel's; a pane has Herdr's own frame.
@@ -1549,10 +1551,10 @@ export default class FileTree extends View {
     return root
       .when(!this.subList().length, (el) => el.child(this.summary(t)))
       .child(h_flex().flex_none().mx(6).mt(6).mb(4).gap(2).items_center()
-        .child(h_flex().flex_1().min_w(0).h(26).px(8).gap(6).items_center().rounded(R).bg(t.canvas ?? t.background).border_1().border_color(this.typing ? t.accent : t.input ?? t.border).cursor_text()
+        .child(h_flex().flex_1().min_w(0).h(22).px(7).gap(5).items_center().rounded(R).bg(t.canvas ?? t.background).border_1().border_color(this.typing ? t.accent : t.input ?? t.border).cursor_text()
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .child(svg(ICON("search")).size(12).flex_none().text_color(t.dim))
-          .child(Input.new(this.input).flex_1().h_full().text_size(12).text_color(t.foreground))
+          .child(Input.new(this.input).flex_1().h_full().text_size(11.5).text_color(t.foreground))
           .when(Boolean(this.query), (el) => el.child(div().id("ft-clear").flex_none().text_size(12).text_color(t.dim).cursor_pointer().hover((s) => s.text_color(t.foreground)).on_click((_e, cx) => this.clearSearch(cx)).child("×"))))
         .children(tools))
       .child(div().flex_1().min_h(0).relative().px(4)
