@@ -4,7 +4,7 @@
     "alt-s": "better-changes.generate",
     "cmd-e": "vnh-tabs.files",
     "alt-a": "vnh-tabs.changes",
-    "cmd-\\": "vnh-tabs.git-push"
+    "cmd-\\": "vnh-tabs.insights"
   },
   "global": {
     "cmd-enter": "mod.open:vnh-command",

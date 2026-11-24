@@ -153,7 +153,7 @@ export default class GitMenu extends View {
     return [
       { id: "update", icon: "update", label: "Update Project…", hint: d?.up ? `pull ${d.up}` : "", run: () => this.act("Updating", ["pull", "--ff-only"], `Updated ${d?.head ?? ""}`) },
       { id: "commit", icon: "commit", label: "Commit…", hint: "Changes", run: () => { this.close(); run("layout.select", { stack: "panel-body", child: "changes" }); run("layout.show", { id: "panel" }); } },
-      { id: "push", icon: "push", label: "Push…", hint: "⌘\\", run: () => { this.close(); run("vnh-tabs.git-push"); } },
+      { id: "push", icon: "push", label: "Push…", run: () => { this.close(); run("vnh-tabs.git-push"); } },
       { id: "io", icon: "clock", label: "Incoming and Outgoing Commits…", hint: sync, run: () => this.act("Fetching", ["fetch", "--quiet", "--prune"], "Fetched: the counts are up to date") },
       { id: "new", icon: "plus", label: "New Branch…", hint: `from ${d?.head ?? "HEAD"}`, divider: true, run: (cx) => this.ask("branch", cx) },
       { id: "rev", icon: "tag", label: "Checkout Tag or Revision…", hint: "", run: (cx) => this.ask("revision", cx) },
