@@ -166,11 +166,18 @@ export default class Tabs extends View {
   switchOpen(mode = "space", at = []) {
     const every = spaces(), pick = mode === "all" ? every : every.filter((s) => s.active);
     const all = panes(), items = [], groups = [];
+    // A sleeping agent (vnh-agents/sleep.js) has no terminal in its tab, only a cover pane: it is still listed, with its agent's logo.
+    const covers = new Map(all.filter((p) => p.mod === "vnh-cover").map((p) => [p.tab, p.pane]));
+    const sleepers = covers.size ? (shared("vnh.asleep") ?? []) : [];
+    const LOGO = { claude: "icons/claude.svg", agy: "icons/antigravity.svg", codex: "icons/codex.svg" };
     for (const sp of pick) {
       const first = items.length;
       for (const c of sp.tabs ?? []) {
         // "all" lists agents only: a tab that is just a terminal (or a conversation preview) is left out.
-        if (mode === "all" && !all.some((p) => p.tab === c.id && p.program?.agent)) continue;
+        const awake = all.some((p) => p.tab === c.id && p.program?.agent);
+        const nap = !awake && covers.has(c.id) ? sleepers.find((r) => r.cover === covers.get(c.id) || r.tab === c.id) ?? null : null;
+        if (nap) { items.push({ space: sp.id, tab: c.id, name: nap.title || label(c, null), icon: LOGO[nap.agent] ?? null, asleep: true, since: nap.at ?? null, status: null, preview: false, now: Boolean(sp.active && c.active) }); continue; }
+        if (mode === "all" && !awake) continue;
         const lead = all.find((p) => p.tab === c.id && p.program?.agent) ?? all.find((p) => p.tab === c.id);
         items.push({ space: sp.id, tab: c.id, name: label(c, lead), icon: lead?.program?.icon ?? null, since: lead?.program?.agent ? (shared("vnh.agentSince") ?? {})[lead.terminal]?.at ?? null : null, status: c.status ?? null, preview: all.some((p) => p.tab === c.id && p.mod === "vnh-convo"), now: Boolean(sp.active && c.active) });
       }
