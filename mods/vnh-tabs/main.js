@@ -85,9 +85,13 @@ export default class Tabs extends View {
         // "vnh-tabs.git-push" (cmd-\): push the work folder's branch and its tags, no dialog.
         else if (c === "git-push") this.gitPush();
         else if (c === "git-pull") this.gitPull();
-        // "vnh-tabs.switch-open", "switch-step-<n>" (n may be negative), "switch-commit", "switch-cancel": the tab switcher the
-        // HerdrPad agent drives while two fingers scroll sideways in Herdr (a popup of this space's tabs, see vnh-tabswitch).
-        else if (/^switch-open(-\d+-\d+-\d+-\d+)?$/.test(c)) this.switchOpen(c.split("-").slice(2).map(Number));
+        // "vnh-tabs.switch-open[-all|-space][-x-y-w-h]", "switch-step-<n>" (n may be negative), "switch-commit", "switch-cancel": the tab
+        // switcher the HerdrPad agent drives while two fingers scroll in Herdr (a popup of the tabs of this space, or of every space
+        // grouped by space; see vnh-tabswitch).
+        else if (/^switch-open(-all|-space)?((-\d+){4})?$/.test(c)) {
+          const m = c.match(/^switch-open(?:-(all|space))?((?:-\d+){4})?$/);
+          this.switchOpen(m[1] ?? "space", m[2] ? m[2].slice(1).split("-").map(Number) : []);
+        }
         else if (/^switch-step-(-?\d+)$/.test(c)) this.switchStep(Number(c.slice("switch-step-".length)));
         else if (c === "switch-commit") this.switchEnd(true);
         else if (c === "switch-cancel") this.switchEnd(false);
@@ -96,23 +100,28 @@ export default class Tabs extends View {
     });
   }
 
-  // The tab switcher: a popup listing the tabs of the space you are in (the repo), the one showing highlighted. Each step moves the
-  // highlight; the end of the gesture selects the one it stopped on. The list and the highlight live in shared "vnh.tabswitch",
-  // which the popup (vnh-tabswitch) draws.
+  // The tab switcher: a popup listing tabs, the one showing highlighted: the tabs of the space you are in (mode "space": the repo) or
+  // the tabs of every space, grouped by space (mode "all"). Each step moves the highlight; the end of the gesture selects the one it
+  // stopped on (its space too, when it is in another). The groups, the tabs and the highlight live in shared "vnh.tabswitch", which
+  // the popup (vnh-tabswitch) draws.
   // `at` = [x, y, window width, window height] when the agent gives the pointer's place in the window: the popup opens there (kept
   // inside the window); without it, where Herdr last saw the pointer.
-  switchOpen(at = []) {
-    const space = spaces().find((s) => s.active);
-    if (!space || !(space.tabs ?? []).length) return;
+  switchOpen(mode = "space", at = []) {
+    const every = spaces(), pick = mode === "all" ? every : every.filter((s) => s.active);
+    const all = panes(), items = [], groups = [];
+    for (const sp of pick) {
+      const first = items.length;
+      for (const c of sp.tabs ?? []) {
+        const lead = all.find((p) => p.tab === c.id && p.program?.agent) ?? all.find((p) => p.tab === c.id);
+        items.push({ space: sp.id, tab: c.id, name: label(c, lead), status: c.status ?? null, preview: all.some((p) => p.tab === c.id && p.mod === "vnh-convo"), now: Boolean(sp.active && c.active) });
+      }
+      if (items.length > first) groups.push({ name: sp.name ?? "", first, count: items.length - first });
+    }
+    if (!items.length) return;
     if (this.switcher) this.switchEnd(false);
-    const all = panes(), tabs = space.tabs;
-    const list = tabs.map((c) => {
-      const lead = all.find((p) => p.tab === c.id && p.program?.agent) ?? all.find((p) => p.tab === c.id);
-      return { id: c.id, name: label(c, lead), status: c.status ?? null, preview: all.some((p) => p.tab === c.id && p.mod === "vnh-convo") };
-    });
-    const sel = Math.max(0, tabs.findIndex((c) => c.active));
-    setShared("vnh.tabswitch", { space: space.name ?? "", tabs: list, sel });
-    const width = 380, height = Math.min(560, 70 + 34 * list.length);
+    const sel = Math.max(0, items.findIndex((i) => i.now));
+    setShared("vnh.tabswitch", { mode, groups, items, sel });
+    const width = 380, height = Math.min(560, 40 + 32 * items.length + 30 * groups.length);
     const place = at.length === 4 ? { x: Math.max(8, Math.min(at[0], at[2] - width - 8)), y: Math.max(8, Math.min(at[1], at[3] - height - 8)) } : "pointer";
     const id = openOverlay({ mod: "vnh-tabswitch", kind: "popup", key: "vnh-tabswitch", at: place, width, height });
     this.switcher = { id, until: Date.now() + 3500 };
@@ -120,16 +129,19 @@ export default class Tabs extends View {
 
   switchStep(n) {
     const st = shared("vnh.tabswitch");
-    if (!this.switcher || !st?.tabs?.length) return;
-    const sel = Math.max(0, Math.min(st.tabs.length - 1, st.sel + n));
+    if (!this.switcher || !st?.items?.length) return;
+    const sel = Math.max(0, Math.min(st.items.length - 1, st.sel + n));
     if (sel !== st.sel) setShared("vnh.tabswitch", { ...st, sel });
     this.switcher.until = Date.now() + 3500;
   }
 
   switchEnd(select) {
-    const sw = this.switcher, st = shared("vnh.tabswitch");
+    const sw = this.switcher, st = shared("vnh.tabswitch"), it = st?.items?.[st.sel];
     this.switcher = null;
-    if (select && st?.tabs?.[st.sel] && !st.tabs[st.sel].active) run("tab.select", { id: st.tabs[st.sel].id });
+    if (select && it && !it.now) {
+      if (spaces().find((s) => s.active)?.id !== it.space) run("space.select", { id: it.space });
+      run("tab.select", { id: it.tab });
+    }
     if (sw) try { closeOverlay(sw.id); } catch {}
   }
 

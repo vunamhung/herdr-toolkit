@@ -1,11 +1,11 @@
 // Trackpad actions for Herdr (only while Herdr is the frontmost app; the ones for every app are PadActions.m):
 //   pinching the fingers together -> `herdr-app do vnh-tabs.git-pull`, spreading them apart -> `vnh-tabs.git-push`
 //     (HERDR_PINCH_TOGETHER / HERDR_PINCH_APART name the commands, HERDR_PINCH_IN / HERDR_PINCH_OUT the thresholds)
-//   two fingers scrolling sideways -> the tab switcher: a popup of the tabs of the space you are in (the repo). The sideways move only
-//     opens it; then, without lifting, scrolling up / down moves the highlight, one tab per HERDR_PAD_STEP points of scroll (30; fingers
+//   two fingers scrolling sideways -> the tab switcher: to the left a popup of the tabs of every space, grouped by space; to the right
+//     only the space you are in (the repo; HERDR_PAD_SWAP_SIDES=1 swaps the two). The sideways move only opens it; then, without lifting, scrolling up / down moves the highlight, one tab per HERDR_PAD_STEP points of scroll (30; fingers
 //     up = the next tab, HERDR_PAD_FLIP=1 reverses it), and where the fingers lift (or stop for HERDR_PAD_IDLE seconds, 0.6) that tab
 //     is selected. The popup is vnh-tabswitch,
-//     driven through `vnh-tabs.switch-open-<x>-<y>-<width>-<height>` (where the pointer is in the window, so the popup opens there),
+//     driven through `vnh-tabs.switch-open-<all|space>-<x>-<y>-<width>-<height>` (where the pointer is in the window, so the popup opens there),
 //     `switch-step-<n>`, `switch-commit`.
 // Mods only see gestures over what they draw, and a terminal isn't a mod, hence this small agent. The pinch reacts once per gesture,
 // past a clear pinch (+0.35 / -0.3 of scale), at most every 3 s. While the switcher is on, the sideways scroll is not passed on to the
@@ -20,7 +20,7 @@ static NSString *herdrBundle = @"dev.herdr.app";
 static NSString *herdrApp, *together, *apart;
 static const char *logPath;
 static double inThreshold = 0.3, outThreshold = 0.35, stepPx = 30, idleSec = 0.6;
-static int flip = 0;
+static int flip = 0, swapSides = 0;
 static CGFloat pinchSum = 0;
 static NSDate *lastPinch;
 static dispatch_queue_t commands;                      // one command at a time, in order
@@ -81,7 +81,7 @@ static CFMachPortRef scrollTap;
 
 // The pointer's place in Herdr's window, in points from its top left, with the window's size: the command that opens the switcher
 // carries it, so the popup opens where the pointer is.
-static NSString *openCommand(void) {
+static NSString *openCommand(NSString *mode) {
   CGEventRef ev = CGEventCreate(NULL); CGPoint p = CGEventGetLocation(ev); CFRelease(ev);
   pid_t pid = NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
   NSArray *wins = CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
@@ -89,9 +89,9 @@ static NSString *openCommand(void) {
     if ([w[(__bridge NSString *)kCGWindowOwnerPID] intValue] != pid || [w[(__bridge NSString *)kCGWindowLayer] intValue] != 0) continue;
     CGRect r; if (!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(__bridge NSString *)kCGWindowBounds], &r)) continue;
     if (!CGRectContainsPoint(r, p)) continue;
-    return [NSString stringWithFormat:@"vnh-tabs.switch-open-%d-%d-%d-%d", (int)(p.x - r.origin.x), (int)(p.y - r.origin.y), (int)r.size.width, (int)r.size.height];
+    return [NSString stringWithFormat:@"vnh-tabs.switch-open-%@-%d-%d-%d-%d", mode, (int)(p.x - r.origin.x), (int)(p.y - r.origin.y), (int)r.size.width, (int)r.size.height];
   }
-  return @"vnh-tabs.switch-open";
+  return [@"vnh-tabs.switch-open-" stringByAppendingString:mode];
 }
 
 static void switcherEnd(const char *why) {
@@ -117,7 +117,12 @@ static CGEventRef onScroll(CGEventTapProxy proxy, CGEventType type, CGEventRef e
   if (swipe == Deciding) {
     accX += dx; accY += dy;
     if (fabs(accX) + fabs(accY) < 10) return event;
-    if (fabs(accX) > 2 * fabs(accY)) { swipe = Sideways; carry = 0; logf_("switcher: open"); herdr(openCommand()); }
+    if (fabs(accX) > 2 * fabs(accY)) {
+      // Fingers to the left: every space's tabs, grouped by space; to the right: only the space you are in (SWAP reverses it).
+      int left = accX < 0; if (swapSides) left = !left;
+      NSString *mode = left ? @"all" : @"space";
+      swipe = Sideways; carry = 0; logf_("switcher: open (%s)", mode.UTF8String); herdr(openCommand(mode));
+    }
     else { swipe = Vertical; return event; }
     dy = 0;                                                             // the sideways move only opens it
   }
@@ -157,6 +162,7 @@ int main(void) {
     if (env[@"HERDR_PAD_STEP"]) stepPx = [env[@"HERDR_PAD_STEP"] doubleValue];
     if (env[@"HERDR_PAD_IDLE"]) idleSec = [env[@"HERDR_PAD_IDLE"] doubleValue];
     flip = [env[@"HERDR_PAD_FLIP"] isEqualToString:@"1"];
+    swapSides = [env[@"HERDR_PAD_SWAP_SIDES"] isEqualToString:@"1"];
     if (env[@"HERDR_PINCH_LOG"]) logPath = strdup([env[@"HERDR_PINCH_LOG"] UTF8String]);
     commands = dispatch_queue_create("herdr-pad.commands", DISPATCH_QUEUE_SERIAL);
 
