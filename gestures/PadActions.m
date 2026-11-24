@@ -166,6 +166,9 @@ static CGEventRef onKey(CGEventTapProxy proxy, CGEventType type, CGEventRef even
   return NULL;
 }
 static void installKeyTap(void) {
+  // Real key presses reach a tap only with the Input Monitoring permission (a key a program posts does not need it).
+  if (!CGPreflightListenEventAccess()) { logf_("input monitoring: not granted, asking (System Settings > Privacy & Security > Input Monitoring)"); CGRequestListenEventAccess(); }
+  else logf_("input monitoring: granted");
   keyTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, CGEventMaskBit(kCGEventKeyDown), onKey, NULL);
   if (keyTap) { CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(kCFAllocatorDefault, keyTap, 0), kCFRunLoopCommonModes); CGEventTapEnable(keyTap, true); }
   else logf_("key tap refused (no Accessibility): cmd+` is not taken");
@@ -250,17 +253,17 @@ int main(int argc, char **argv) {
       return 0;
     }
     installMoveTap();
-    if (!(getenv("PAD_SWITCH") && getenv("PAD_SWITCH")[0] == '0')) {
-      if (getenv("PAD_SWITCH_A")) swA = @(getenv("PAD_SWITCH_A"));
-      if (getenv("PAD_SWITCH_B")) swB = @(getenv("PAD_SWITCH_B"));
-      installKeyTap();
-    }
     signal(SIGTERM, freeCursor); signal(SIGINT, freeCursor); signal(SIGHUP, freeCursor); atexit_b(^{ freeCursor(0); });
     CFRunLoopTimerRef dog = CFRunLoopTimerCreateWithHandler(NULL, CFAbsoluteTimeGetCurrent() + 0.25, 0.25, 0, 0, ^(CFRunLoopTimerRef tm) {
       if (cursorLocked && CFAbsoluteTimeGetCurrent() - lastEdgeFrame > 0.4) lockCursor(0);
     });
     CFRunLoopAddTimer(CFRunLoopGetMain(), dog, kCFRunLoopCommonModes);
     logPath = getenv("PAD_LOG");
+    if (!(getenv("PAD_SWITCH") && getenv("PAD_SWITCH")[0] == '0')) {
+      if (getenv("PAD_SWITCH_A")) swA = @(getenv("PAD_SWITCH_A"));
+      if (getenv("PAD_SWITCH_B")) swB = @(getenv("PAD_SWITCH_B"));
+      installKeyTap();
+    }
     if (getenv("PAD_DY")) needDY = atof(getenv("PAD_DY"));
     if (getenv("PAD_EDGE")) edge = atof(getenv("PAD_EDGE"));
     if (getenv("PAD_SLIDE")) slide = atof(getenv("PAD_SLIDE"));
