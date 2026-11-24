@@ -1,7 +1,7 @@
 // Trackpad actions, in every app. It reads the trackpad's raw touches (the private MultitouchSupport framework, the one
 // BetterTouchTool and Jitouch use: an NSEvent never carries a four-finger swipe or a touch's place on the pad) and:
 //   four fingers swiping down      -> ⌘W   (close the tab / window)
-//   four fingers swiping up        -> ⌘T   (new tab)
+//   four fingers swiping up        -> ⌘T   (new tab; in Herdr: a new tab running claude --dangerously-skip-permissions)
 //   four fingers tapping           -> ⌘⇧T  (reopen the tab just closed)
 //   one finger sliding up / down along the right edge -> volume up / down
 //   one finger sliding right / left along the top edge -> screen brightness up / down
@@ -56,6 +56,25 @@ static void postKey(int code, CGEventFlags flags) {
   CGEventSetFlags(d, flags); CGEventSetFlags(u, flags);
   CGEventPost(kCGHIDEventTap, d); CGEventPost(kCGHIDEventTap, u);
   CFRelease(d); CFRelease(u);
+}
+
+// In Herdr, a new tab is a new Claude Code (with --dangerously-skip-permissions) instead of a shell: `herdr-app do tab.new {argv}`.
+// PAD_HERDR_NEWTAB (a JSON argv, default the one above) changes it; "" keeps ⌘T there too.
+static BOOL herdrFront(void) { return [NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier isEqualToString:@"dev.herdr.app"]; }
+static NSString *newTabArgv = @"[\"claude\",\"--dangerously-skip-permissions\"]";
+static BOOL herdrNewTab(void) {
+  if (!newTabArgv.length || !herdrFront()) return NO;
+  NSString *app = getenv("HERDR_APP") ? @(getenv("HERDR_APP")) : [NSHomeDirectory() stringByAppendingPathComponent:@".local/bin/herdr-app"];
+  if (![NSFileManager.defaultManager isExecutableFileAtPath:app]) return NO;
+  NSString *arg = [NSString stringWithFormat:@"{\"argv\":%@}", newTabArgv];
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{      // the touch callback must not wait for it
+    NSTask *t = [NSTask new];
+    t.executableURL = [NSURL fileURLWithPath:app];
+    t.arguments = @[@"do", @"tab.new", arg];
+    t.standardOutput = NSFileHandle.fileHandleWithNullDevice; t.standardError = NSFileHandle.fileHandleWithNullDevice;
+    NSError *err = nil; if ([t launchAndReturnError:&err]) [t waitUntilExit];
+  });
+  return YES;
 }
 
 // The volume of the default output device, 0 to 1 (and unmuted when it is raised); -1 when there is none.
@@ -161,7 +180,7 @@ static int onFrame(MTDeviceRef dev, MTTouch *t, int n, double ts, int frame) {
     fired = 1;
     int down = dy < 0, key = (down != swap) ? 13 : 17;
     time_t wall = time(NULL);
-    if (difftime(wall, (time_t)lastFire) >= 0.8) { lastFire = (double)wall; postKey(key, kCGEventFlagMaskCommand); logf_("swipe %s: dy %.2f dx %.2f -> cmd+%c", down ? "down" : "up", mag, dx, key == 13 ? 'w' : 't'); }
+    if (difftime(wall, (time_t)lastFire) >= 0.8) { lastFire = (double)wall; if (key == 17 && herdrNewTab()) logf_("swipe up in Herdr -> new tab with claude"); else { postKey(key, kCGEventFlagMaskCommand); } logf_("swipe %s: dy %.2f dx %.2f -> cmd+%c", down ? "down" : "up", mag, dx, key == 13 ? 'w' : 't'); }
   }
   return 0;
 }
@@ -190,6 +209,7 @@ int main(int argc, char **argv) {
     if (getenv("PAD_EDGE")) edge = atof(getenv("PAD_EDGE"));
     if (getenv("PAD_SLIDE")) slide = atof(getenv("PAD_SLIDE"));
     if (getenv("PAD_TAP")) tapMax = atof(getenv("PAD_TAP"));
+    if (getenv("PAD_HERDR_NEWTAB")) newTabArgv = @(getenv("PAD_HERDR_NEWTAB"));
     swap = getenv("PAD_SWAP") && getenv("PAD_SWAP")[0] == '1';
     const void *keys[] = { kAXTrustedCheckOptionPrompt }, *vals[] = { getenv("PAD_NOPROMPT") ? kCFBooleanFalse : kCFBooleanTrue };
     CFDictionaryRef opts = CFDictionaryCreate(NULL, keys, vals, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
