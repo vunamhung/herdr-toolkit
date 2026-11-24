@@ -1550,8 +1550,7 @@ export default class Insights extends View {
         .hover((style) => style.bg(t.hover).text_color(t.foreground))
         .on_mouse_down("left", (_event, cx) => cx.stop_propagation())
         .on_click(() => (hasVnhTabs() ? run("vnh-tabs.insights") : showInsights()))
-        .child(svg("mods/insights/insights.svg").size(14))
-        .child("Insights"));
+        .child(svg("mods/insights/insights.svg").size(14)));   // VNH: the icon only
   }
 
   header(c) {
