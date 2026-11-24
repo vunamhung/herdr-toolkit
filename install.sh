@@ -126,15 +126,18 @@ fi
 
 if want --gestures; then
   echo "gestures: HerdrPad (pinch, sideways scroll in Herdr) and PadActions (every app)"
-  # Two small apps (signed ad hoc): macOS keeps Accessibility for an app more reliably than for a bare linker-signed binary. Grant
+  # Two small apps: macOS keeps Accessibility for an app more reliably than for a bare linker-signed binary. Grant
   # each once in System Settings > Privacy & Security > Accessibility; a rebuild asks again.
   # HerdrPad (gestures/HerdrPad.m), only while Herdr is in front: pinch together / apart = git pull / push, two fingers scrolling
   # sideways = the tab switcher (a popup of the repo's tabs, vnh-tabswitch; where the scroll stops, that tab is selected).
+  # Signed by the certificate "VNH Local" when it exists (gestures/make-signing-cert.sh makes it once): the apps then keep their
+  # Accessibility grant across rebuilds. Without it, ad hoc: macOS forgets the grant at every rebuild.
+  SIGN="-"; security find-identity -v -p codesigning 2>/dev/null | grep -q '"VNH Local"' && SIGN="VNH Local"
   HAPP="$HOME/Applications/HerdrPad.app"
   mkdir -p "$HAPP/Contents/MacOS" "$HOME/Library/LaunchAgents"
   clang -O2 -o "$HAPP/Contents/MacOS/herdr-pad" "$ROOT/gestures/HerdrPad.m" -framework Cocoa -framework ApplicationServices
   cp "$ROOT/gestures/Info-herdr-pad.plist" "$HAPP/Contents/Info.plist"
-  codesign -f -s - --identifier dev.vnh.herdr-pad "$HAPP"
+  codesign -f -s "$SIGN" --identifier dev.vnh.herdr-pad "$HAPP"
   PL="$HOME/Library/LaunchAgents/dev.vnh.herdr-pad.plist"
   [ -f "$PL" ] && { launchctl bootout "gui/$(id -u)" "$PL" 2>/dev/null; backup "$PL"; }
   sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.herdr-pad.plist" > "$PL"
@@ -149,7 +152,7 @@ if want --gestures; then
   clang -O2 -o "$PADAPP/Contents/MacOS/pad-actions" "$ROOT/gestures/PadActions.m" -F/System/Library/PrivateFrameworks \
     -framework MultitouchSupport -framework DisplayServices -framework Cocoa -framework AudioToolbox -framework CoreAudio -framework ApplicationServices
   cp "$ROOT/gestures/Info-pad-actions.plist" "$PADAPP/Contents/Info.plist"
-  codesign -f -s - --identifier dev.vnh.pad-actions "$PADAPP"
+  codesign -f -s "$SIGN" --identifier dev.vnh.pad-actions "$PADAPP"
   PF="$HOME/Library/LaunchAgents/dev.vnh.pad-actions.plist"
   [ -f "$PF" ] && { launchctl bootout "gui/$(id -u)" "$PF" 2>/dev/null; backup "$PF"; }
   sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.pad-actions.plist" > "$PF"
