@@ -1523,7 +1523,7 @@ export default class FileTree extends View {
       tbtn("ft-hidden", this.showHidden ? "◉" : "○", this.showHidden ? "Hide dotfiles (.)" : "Show dotfiles (.)", this.showHidden, () => { this.showHidden = !this.showHidden; this.savePrefs(); }),
       tbtn("ft-ignored", this.showIgnored ? "⊙" : "⊘", this.showIgnored ? "Hide git-ignored files and folders (i)" : "Show git-ignored files and folders (i)", this.showIgnored, () => { this.showIgnored = !this.showIgnored; this.savePrefs(); }),
       tbtn("ft-size", "Σ", this.showSize ? "Show dates" : "Show sizes", Boolean(this.showSize), () => { this.showSize = !this.showSize; this.savePrefs(); }),
-      tbtn("ft-collapse", "⊟", "Collapse all", false, (cx) => this.collapseAll(cx)),
+      tbtn("ft-collapse", svg(ICON("collapse")).size(17), "Collapse all folders", false, (cx) => this.collapseAll(cx)),
     ] : [
       tbtn("ft-agents", this.allAgents ? "∗" : "◎", this.allAgents ? "Showing every agent: show only the one in view" : "Showing the agent in view: show every agent", !this.allAgents, () => { this.allAgents = !this.allAgents; try { localStorage.setItem("allAgents", this.allAgents ? "1" : "0"); } catch {} }),
       tbtn("ft-forget", "⊘", "Clear the list", false, () => { this.history = []; try { localStorage.setItem("history", "[]"); } catch {} }),
