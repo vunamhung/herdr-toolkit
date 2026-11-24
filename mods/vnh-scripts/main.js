@@ -22,37 +22,81 @@ function color256(n) {
   const k = n - 16, c = [Math.floor(k / 36), Math.floor(k / 6) % 6, k % 6].map((x) => (x ? 55 + x * 40 : 0));
   return `#${c.map(hex2).join("")}`;
 }
-// A terminal log (raw, as `script` wrote it) -> its last lines, each a list of runs { t: text, fg: colour | null, b: bold }.
-// Only colours and bold are kept; a line redrawn with \r keeps its last drawing; every other control sequence is dropped.
+// A terminal log (raw, as `script` wrote it) -> its last lines, each a list of runs { t: text, fg: colour | null, b: bold }. A small
+// terminal emulator: text lands where the cursor is (a line redrawn with \r, vite's "(x2)" that moves up one line and writes over it),
+// colours and bold are kept, clearing the line / the screen works; "home + erase below" (vite's clear screen) wipes what came before.
 function parseLog(raw0) {
-  // A clear screen (ESC[2J / ESC[3J, or a reset) wipes what came before it, as a terminal does.
-  let cut = -1; const clr = /\u001b\[[23]J|\u001bc/g; let cm;
-  while ((cm = clr.exec(raw0))) cut = cm.index + cm[0].length;
-  const raw = cut >= 0 ? raw0.slice(cut) : raw0;
-  const text = raw.replace(/\^D\u0008+/g, "").replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "").replace(/\u001b\[[0-9;?]*[ -\/]*[@-ln-~]/g, "").replace(/\u001b[()][A-Za-z0-9]/g, "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001a\u001c-\u001f]/g, "");
-  const out = [];
-  for (const rawLine of text.split("\n")) {
-    const segs = rawLine.split("\r").filter((x) => x.replace(/\u001b\[[0-9;]*m/g, "") !== "");
-    const seg = segs.length ? segs[segs.length - 1] : "";
-    const runs = []; let fg = null, b = false, last = 0, m;
-    const re = /\u001b\[([0-9;]*)m/g;
-    const push = (t) => { if (t) runs.push({ t, fg, b }); };
-    while ((m = re.exec(seg))) {
-      push(seg.slice(last, m.index)); last = re.lastIndex;
-      const a = m[1] === "" ? [0] : m[1].split(";").map((x) => Number(x) || 0);
-      for (let i = 0; i < a.length; i++) {
-        const c = a[i];
-        if (c === 0) { fg = null; b = false; } else if (c === 1) b = true; else if (c === 22) b = false;
-        else if (c >= 30 && c <= 37) fg = BASE[c - 30]; else if (c >= 90 && c <= 97) fg = BASE[c - 90 + 8]; else if (c === 39) fg = null;
-        else if (c === 38 && a[i + 1] === 5) { fg = color256(a[i + 2] ?? 7); i += 2; }
-        else if (c === 38 && a[i + 1] === 2) { fg = `#${hex2(a[i + 2])}${hex2(a[i + 3])}${hex2(a[i + 4])}`; i += 4; }
-      }
+  const raw = raw0.replace(/\^D\u0008+/g, "");
+  let rows = [[]], r = 0, c = 0, fg = null, b = false, home = false;
+  const row = () => (rows[r] ??= []);
+  const goto = (nr) => { r = Math.max(0, nr); while (rows.length <= r) rows.push([]); };
+  const wipe = () => { rows = [[]]; r = 0; c = 0; };
+  const CSI = /\u001b\[([0-9;?]*)([ -\/]*)([@-~])/y;
+  const sgr = (a) => {
+    for (let i = 0; i < a.length; i++) {
+      const k = a[i];
+      if (k === 0) { fg = null; b = false; } else if (k === 1) b = true; else if (k === 22) b = false;
+      else if (k >= 30 && k <= 37) fg = BASE[k - 30]; else if (k >= 90 && k <= 97) fg = BASE[k - 90 + 8]; else if (k === 39) fg = null;
+      else if (k === 38 && a[i + 1] === 5) { fg = color256(a[i + 2] ?? 7); i += 2; }
+      else if (k === 38 && a[i + 1] === 2) { fg = `#${hex2(a[i + 2])}${hex2(a[i + 3])}${hex2(a[i + 4])}`; i += 4; }
     }
-    push(seg.slice(last));
-    out.push(runs);
+  };
+  const csi = (params, fin) => {
+    const a = params.replace(/\?/g, "").split(";").map((x) => (x === "" ? NaN : Number(x))), n1 = Number.isNaN(a[0]) ? 1 : Math.max(1, a[0]);
+    const wasHome = home; home = false;
+    switch (fin) {
+      case "m": sgr(params === "" ? [0] : params.split(";").map((x) => Number(x) || 0)); break;
+      case "A": goto(r - n1); break;
+      case "B": goto(r + n1); break;
+      case "C": c += n1; break;
+      case "D": c = Math.max(0, c - n1); break;
+      case "E": goto(r + n1); c = 0; break;
+      case "F": goto(r - n1); c = 0; break;
+      case "G": c = n1 - 1; break;
+      case "H": case "f": {
+        const rr = Number.isNaN(a[0]) ? 1 : a[0], cc = Number.isNaN(a[1]) ? 1 : a[1];
+        if (rr <= 1 && cc <= 1) { home = true; r = 0; c = 0; } else { goto(rr - 1); c = cc - 1; }
+        break;
+      }
+      case "K": { const m = Number.isNaN(a[0]) ? 0 : a[0], rw = row();
+        if (m === 0) rw.length = Math.min(rw.length, c); else if (m === 1) { for (let i = 0; i <= c && i < rw.length; i++) rw[i] = { ch: " ", fg: null, b: false }; } else rw.length = 0; break; }
+      case "J": { const m = Number.isNaN(a[0]) ? 0 : a[0];
+        if (m === 2 || m === 3 || (m === 0 && wasHome)) wipe(); else if (m === 0) { row().length = Math.min(row().length, c); rows.length = r + 1; } break; }
+      case "P": { const rw = row(); rw.splice(c, n1); break; }
+      default: break;
+    }
+  };
+  for (let i = 0; i < raw.length;) {
+    const ch = raw[i];
+    if (ch === "\u001b") {
+      const nx = raw[i + 1];
+      if (nx === "[") { CSI.lastIndex = i; const m = CSI.exec(raw); if (!m) break; i = CSI.lastIndex; csi(m[1], m[3]); continue; }
+      if (nx === "]") { const bel = raw.indexOf("\u0007", i), st = raw.indexOf("\u001b\\", i); const e = bel < 0 ? st : st < 0 ? bel : Math.min(bel, st); if (e < 0) break; i = e + (raw[e] === "\u0007" ? 1 : 2); continue; }
+      if (nx === "c") { wipe(); i += 2; continue; }
+      if (nx === "(" || nx === ")") { i += 3; continue; }
+      i += 2; continue;
+    }
+    if (ch === "\r") { c = 0; i++; continue; }
+    if (ch === "\n") { goto(r + 1); i++; continue; }
+    if (ch === "\u0008") { c = Math.max(0, c - 1); i++; continue; }
+    if (ch === "\t") { c = (c + 8) & ~7; i++; continue; }
+    if (ch < " " || ch === "\u007f") { i++; continue; }
+    home = false;
+    const cp = String.fromCodePoint(raw.codePointAt(i)); i += cp.length;
+    const rw = row(); while (rw.length < c) rw.push({ ch: " ", fg: null, b: false });
+    rw[c] = { ch: cp, fg, b }; c++;
   }
+  const out = rows.map((rw) => {
+    const runs = [];
+    for (const cell of rw) {
+      const last = runs[runs.length - 1];
+      if (last && last.fg === cell.fg && last.b === cell.b) last.t += cell.ch; else runs.push({ t: cell.ch, fg: cell.fg, b: cell.b });
+    }
+    if (runs.length) runs[runs.length - 1].t = runs[runs.length - 1].t.replace(/\s+$/, "");
+    return runs.filter((x) => x.t !== "");
+  });
   // No blank line at the start or the end, and at most one in a row.
-  const blank = (l) => !l.some((r) => r.t.trim());
+  const blank = (l) => !l.some((x) => x.t.trim());
   const tidy = [];
   for (const l of out) { if (blank(l) && (!tidy.length || blank(tidy[tidy.length - 1]))) continue; tidy.push(l); }
   while (tidy.length && blank(tidy[tidy.length - 1])) tidy.pop();
@@ -150,13 +194,18 @@ export default class Scripts extends View {
     const file = `${home()}/.cache/vnh-scripts/path.txt`;
     const old = await readTextFile(file).catch(() => null);
     let saved = null; try { saved = JSON.parse(old ?? "null"); } catch {}
-    if (saved?.path && Date.now() - saved.at < 86400000) { this.path = saved.path; return; }
-    const r = await exec("/bin/zsh", ["-lic", "print -r -- $PATH"], { timeout: 15000 }).catch(() => null);
-    const path = String(r?.stdout ?? "").trim().split("\n").pop();
-    if (r?.code === 0 && path.includes("/")) {
-      this.path = path;
+    if (saved?.path && saved?.env && Date.now() - saved.at < 86400000) { this.path = saved.path; this.env = saved.env; return; }
+    // `env` of a login shell: PATH and the rest (NVM_DIR, PNPM_HOME, COREPACK_*...), minus what belongs to the session that asked.
+    const r = await exec("/bin/zsh", ["-lic", "env"], { timeout: 15000 }).catch(() => null);
+    const env = {};
+    for (const l of String(r?.stdout ?? "").split("\n")) {
+      const m = l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (m && !/^(CLAUDE|AI_AGENT|OLDPWD|PWD|SHLVL|_|HC_|TERM_SESSION|ITERM|P9K|GITSTATUS)/.test(m[1])) env[m[1]] = m[2];
+    }
+    if (r?.code === 0 && env.PATH?.includes("/")) {
+      this.path = env.PATH; this.env = env;
       await exec("mkdir", ["-p", `${home()}/.cache/vnh-scripts`]).catch(() => {});
-      await writeTextFile(file, JSON.stringify({ path, at: Date.now() })).catch(() => {});
+      await writeTextFile(file, JSON.stringify({ path: env.PATH, env, at: Date.now() }), null).catch(() => {});
     }
   }
 
@@ -201,7 +250,7 @@ export default class Scripts extends View {
     const cmd = `${this.pm} run ${name}`;
     const log = `${home()}/.cache/vnh-scripts/${slug(root)}__${slug(name)}.log`;
     // With the login PATH known: plain sh (fast). Without it yet: the login shell, as before.
-    const inner = this.path ? ["/usr/bin/env", `PATH=${this.path}`, "/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q "$0" /bin/sh -c "$1"']
+    const inner = this.path ? ["/usr/bin/env", ...Object.entries(this.env ?? { PATH: this.path }).map(([k, v]) => `${k}=${v}`), "/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q "$0" /bin/sh -c "$1"']
       : ["/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q "$0" /bin/zsh -lic "$1"'];
     const r = await hc(["run", "--bg", "--no-parent", "--outlive-parent", "--label", "vnh.scripts=1", "--cwd", root, "--json", "--", ...inner, log, cmd]).catch(() => null);
     let addr = null; try { addr = JSON.parse(r?.stdout ?? "{}").address ?? null; } catch {}
@@ -232,10 +281,13 @@ export default class Scripts extends View {
     if (first.length) await exec("kill", ["-TERM", ...first.map(String)]).catch(() => {});
     await hc(["kill", addr]).catch(() => {});
     if (first.length) {
-      await new Promise((ok) => cx.timer.after(1200, () => ok(null)));
-      const ps = await exec("ps", ["-Ao", "pid="]).catch(() => null);
-      const alive = new Set(String(ps?.stdout ?? "").split("\n").map((x) => +x.trim()));
-      const left = first.filter((p) => alive.has(p));
+      let left = first;
+      for (let i = 0; i < 12 && left.length; i++) {
+        await new Promise((ok) => cx.timer.after(100, () => ok(null)));
+        const ps = await exec("ps", ["-Ao", "pid="]).catch(() => null);
+        const alive = new Set(String(ps?.stdout ?? "").split("\n").map((x) => +x.trim()));
+        left = left.filter((p) => alive.has(p));
+      }
       if (left.length) await exec("kill", ["-KILL", ...left.map(String)]).catch(() => {});
     }
   }
