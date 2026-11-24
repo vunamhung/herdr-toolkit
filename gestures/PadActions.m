@@ -11,7 +11,7 @@
 // Needs Accessibility (to post keys): macOS asks once, and again after a rebuild. Turn macOS's own four-finger vertical swipe off
 // (System Settings > Trackpad > More Gestures > Mission Control / App Exposé), or it fires too.
 // Environment (the LaunchAgent plist sets them, so a change needs no rebuild): PAD_DY how far a four-finger swipe must go, as a
-// fraction of the pad (0.18); PAD_SWAP=1 swaps ⌘W and ⌘T; PAD_EDGE how wide the edge is (0.06); PAD_STEP how far a finger slides for
+// fraction of the pad (0.18); PAD_SWAP=1 swaps ⌘W and ⌘T; PAD_EDGE how wide the edge is (0.12); PAD_SLIDE how far a finger slides for
 // the whole range of volume / brightness (0.8); PAD_TAP the longest a four-finger tap lasts, in seconds (0.3); PAD_LOG a log file.
 // `PadActions --test volume 0.4` / `--test brightness 0.7` set that level (0 to 1) and exit; with no number, print the level;
 // `--test lock` holds the pointer for 3 s.
@@ -38,7 +38,7 @@ extern int DisplayServicesGetBrightness(CGDirectDisplayID, float *);
 extern int DisplayServicesSetBrightness(CGDirectDisplayID, float);
 
 static const char *logPath;
-static double needDY = 0.18, edge = 0.06, slide = 0.8, tapMax = 0.3;
+static double needDY = 0.18, edge = 0.12, slide = 0.8, tapMax = 0.3;
 static int swap = 0;
 
 static void logf_(const char *fmt, ...) {
