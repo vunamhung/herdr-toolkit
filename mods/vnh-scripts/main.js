@@ -449,7 +449,7 @@ export default class Scripts extends View {
           .when(running, (el) => el.child(iconBtn("job-stop", "mods/vnh-scripts/stop.svg", (cx) => this.stop(j.name, cx)))))
         .child(div().flex_1().min_h(0).relative()
           .child(v_flex().id(`log-${j.addr}`).size_full().px(10).py(6).font_family(FONT).text_size(11).line_height("15px").text_color(t.muted)
-            .overflow_y_scrollbar().when(Boolean(handle), (el) => el.track_scroll(handle))
+            .overflow_y_scroll().when(Boolean(handle), (el) => el.track_scroll(handle))
             .on_scroll_wheel((_e, cx) => { if (!this.still[j.addr]) { this.still[j.addr] = true; cx.notify(); } })
             .children(lines.map(line))
             .child(div().flex_none().h(140)))       // blank room under the last line, so scrolling down has somewhere to go
