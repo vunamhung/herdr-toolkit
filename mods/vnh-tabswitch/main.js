@@ -60,7 +60,10 @@ export default class TabSwitch extends View {
       return h_flex().id(`sw-${c.tab}`).h(32).flex_none().px(12).gap(9).items_center().rounded(7).text_size(13)
         .bg(on && !menu ? t.selected : t.background).text_color(on ? t.foreground : t.muted)
         .when(menu, (el) => el.cursor_pointer().hover((x) => x.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => { cx.stop_propagation(); this.pick(c); }))
-        .child(c.icon ? image(c.icon).size(16).flex_none().when(Boolean(c.asleep), (el) => el.opacity(0.5)) : div().size(16).flex_none())      // the agent's logo (the program's own icon)
+        // A one-colour glyph (the terminal's) takes the text colour, light on the popup's dark background; a picture (an agent's logo) is drawn as it is.
+        .child(!c.icon ? div().size(16).flex_none()
+          : c.tint ? svg(c.icon).size(16).flex_none().text_color(t.foreground)
+          : image(c.icon).size(16).flex_none().when(Boolean(c.asleep), (el) => el.opacity(0.5)))      // the agent's logo (the program's own icon)
         .child(div().flex_1().min_w(0).truncate().when(on, (el) => el.font_semibold()).when(Boolean(c.asleep), (el) => el.italic().text_color(t.dim)).when(c.preview, (el) => el.italic()).child(c.name))
         // How long, then the state, in the Agents list's order: a filled dot (working, blocked, done), a ring (idle), the moon (asleep).
         .when(Boolean(c.since) || Boolean(dot), (el) => el.child(h_flex().flex_none().gap(5).items_center().text_size(10.5).text_color(t.dim)

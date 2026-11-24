@@ -179,7 +179,7 @@ export default class Tabs extends View {
         if (nap) { items.push({ space: sp.id, tab: c.id, name: nap.title || label(c, null), icon: LOGO[nap.agent] ?? null, asleep: true, since: nap.at ?? null, status: null, preview: false, now: Boolean(sp.active && c.active) }); continue; }
         if (mode === "all" && !awake) continue;
         const lead = all.find((p) => p.tab === c.id && p.program?.agent) ?? all.find((p) => p.tab === c.id);
-        items.push({ space: sp.id, tab: c.id, name: label(c, lead), icon: lead?.program?.icon ?? null, since: lead?.program?.agent ? (shared("vnh.agentSince") ?? {})[lead.terminal]?.at ?? null : null, status: c.status ?? null, preview: all.some((p) => p.tab === c.id && p.mod === "vnh-convo"), now: Boolean(sp.active && c.active) });
+        items.push({ space: sp.id, tab: c.id, name: label(c, lead), icon: lead?.program?.icon ?? null, tint: Boolean(lead?.program?.tint), since: lead?.program?.agent ? (shared("vnh.agentSince") ?? {})[lead.terminal]?.at ?? null : null, status: c.status ?? null, preview: all.some((p) => p.tab === c.id && p.mod === "vnh-convo"), now: Boolean(sp.active && c.active) });
       }
       if (items.length > first) groups.push({ name: sp.name ?? "", first, count: items.length - first });
     }
