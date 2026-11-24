@@ -125,10 +125,33 @@ static void installMoveTap(void) {
 static CFMachPortRef keyTap;
 static NSString *swA = @"dev.herdr.app", *swB = @"com.google.antigravity";
 static void bringFront(NSString *bundle) {
-  NSURL *url = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:bundle];
-  if (!url) { logf_("switch: no app %s", bundle.UTF8String); return; }
-  NSWorkspaceOpenConfiguration *cfg = [NSWorkspaceOpenConfiguration configuration]; cfg.activates = YES;
-  [NSWorkspace.sharedWorkspace openApplicationAtURL:url configuration:cfg completionHandler:nil];
+  // Running: the Accessibility API's "frontmost" (what System Events does; a background agent's own activate request, and `open`, are
+  // not always honoured). Not running: `open -b` launches it.
+  NSArray *running = [NSRunningApplication runningApplicationsWithBundleIdentifier:bundle];
+  if (running.count) {
+    NSRunningApplication *a = running.firstObject;
+    AXUIElementRef app = AXUIElementCreateApplication(a.processIdentifier);
+    AXError e = AXUIElementSetAttributeValue(app, kAXFrontmostAttribute, kCFBooleanTrue);
+    CFRelease(app);
+    if (a.hidden) [a unhide];
+    if (e == kAXErrorSuccess) return;
+    logf_("switch: accessibility refused (%d), using open", (int)e);
+  }
+  NSTask *t = [NSTask new];
+  t.executableURL = [NSURL fileURLWithPath:@"/usr/bin/open"];
+  t.arguments = @[@"-b", bundle];
+  NSError *err = nil; [t launchAndReturnError:&err];
+}
+// The app in front, read from the windows on screen (front to back): a background agent's NSWorkspace.frontmostApplication goes stale.
+static NSString *frontBundle(void) {
+  NSArray *wins = CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+  for (NSDictionary *w in wins) {
+    if ([w[(__bridge NSString *)kCGWindowLayer] intValue] != 0) continue;
+    CGRect r; if (!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(__bridge NSString *)kCGWindowBounds], &r) || r.size.width < 100 || r.size.height < 100) continue;
+    NSRunningApplication *a = [NSRunningApplication runningApplicationWithProcessIdentifier:[w[(__bridge NSString *)kCGWindowOwnerPID] intValue]];
+    if (a.bundleIdentifier) return a.bundleIdentifier;
+  }
+  return NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier;
 }
 static CGEventRef onKey(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *info) {
   if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) { CGEventTapEnable(keyTap, true); return event; }
@@ -136,7 +159,7 @@ static CGEventRef onKey(CGEventTapProxy proxy, CGEventType type, CGEventRef even
   CGEventFlags f = CGEventGetFlags(event) & (kCGEventFlagMaskCommand | kCGEventFlagMaskShift | kCGEventFlagMaskAlternate | kCGEventFlagMaskControl);
   if (CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode) != 50 || f != kCGEventFlagMaskCommand) return event;
   if (CGEventGetIntegerValueField(event, kCGKeyboardEventAutorepeat)) return NULL;
-  NSString *front = NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier;
+  NSString *front = frontBundle();
   NSString *to = [front isEqualToString:swA] ? swB : swA;
   dispatch_async(dispatch_get_main_queue(), ^{ bringFront(to); });
   logf_("cmd+` : %s -> %s", front.UTF8String ?: "?", to.UTF8String);
