@@ -119,6 +119,34 @@ static void installMoveTap(void) {
   if (moveTap) { CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(kCFAllocatorDefault, moveTap, 0), kCFRunLoopCommonModes); CGEventTapEnable(moveTap, true); }
   else logf_("pointer tap refused (no Accessibility): the pointer cannot be held");
 }
+// ⌘ ` (the key under Esc): Herdr, then Antigravity, then Herdr again, and so on. From any other app it goes to Herdr first; in Herdr, to
+// Antigravity; in Antigravity, to Herdr. The key is taken (the system's own "next window" for it is not run). Open or hidden, the app
+// is brought to the front (launched if it is not running). PAD_SWITCH_A / PAD_SWITCH_B are the two bundle ids; PAD_SWITCH=0 turns it off.
+static CFMachPortRef keyTap;
+static NSString *swA = @"dev.herdr.app", *swB = @"com.google.antigravity";
+static void bringFront(NSString *bundle) {
+  NSURL *url = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:bundle];
+  if (!url) { logf_("switch: no app %s", bundle.UTF8String); return; }
+  NSWorkspaceOpenConfiguration *cfg = [NSWorkspaceOpenConfiguration configuration]; cfg.activates = YES;
+  [NSWorkspace.sharedWorkspace openApplicationAtURL:url configuration:cfg completionHandler:nil];
+}
+static CGEventRef onKey(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *info) {
+  if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) { CGEventTapEnable(keyTap, true); return event; }
+  if (type != kCGEventKeyDown) return event;
+  CGEventFlags f = CGEventGetFlags(event) & (kCGEventFlagMaskCommand | kCGEventFlagMaskShift | kCGEventFlagMaskAlternate | kCGEventFlagMaskControl);
+  if (CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode) != 50 || f != kCGEventFlagMaskCommand) return event;
+  if (CGEventGetIntegerValueField(event, kCGKeyboardEventAutorepeat)) return NULL;
+  NSString *front = NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier;
+  NSString *to = [front isEqualToString:swA] ? swB : swA;
+  dispatch_async(dispatch_get_main_queue(), ^{ bringFront(to); });
+  logf_("cmd+` : %s -> %s", front.UTF8String ?: "?", to.UTF8String);
+  return NULL;
+}
+static void installKeyTap(void) {
+  keyTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, CGEventMaskBit(kCGEventKeyDown), onKey, NULL);
+  if (keyTap) { CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(kCFAllocatorDefault, keyTap, 0), kCFRunLoopCommonModes); CGEventTapEnable(keyTap, true); }
+  else logf_("key tap refused (no Accessibility): cmd+` is not taken");
+}
 static void lockCursor(int on) {
   if (on == cursorLocked) return;
   if (on) { CGEventRef e = CGEventCreate(NULL); lockPt = CGEventGetLocation(e); CFRelease(e); }
@@ -199,6 +227,11 @@ int main(int argc, char **argv) {
       return 0;
     }
     installMoveTap();
+    if (!(getenv("PAD_SWITCH") && getenv("PAD_SWITCH")[0] == '0')) {
+      if (getenv("PAD_SWITCH_A")) swA = @(getenv("PAD_SWITCH_A"));
+      if (getenv("PAD_SWITCH_B")) swB = @(getenv("PAD_SWITCH_B"));
+      installKeyTap();
+    }
     signal(SIGTERM, freeCursor); signal(SIGINT, freeCursor); signal(SIGHUP, freeCursor); atexit_b(^{ freeCursor(0); });
     CFRunLoopTimerRef dog = CFRunLoopTimerCreateWithHandler(NULL, CFAbsoluteTimeGetCurrent() + 0.25, 0.25, 0, 0, ^(CFRunLoopTimerRef tm) {
       if (cursorLocked && CFAbsoluteTimeGetCurrent() - lastEdgeFrame > 0.4) lockCursor(0);
