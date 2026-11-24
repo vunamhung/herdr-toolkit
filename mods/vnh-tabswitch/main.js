@@ -62,12 +62,12 @@ export default class TabSwitch extends View {
         .when(menu, (el) => el.cursor_pointer().hover((x) => x.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => { cx.stop_propagation(); this.pick(c); }))
         .child(c.icon ? image(c.icon).size(16).flex_none().when(Boolean(c.asleep), (el) => el.opacity(0.5)) : div().size(16).flex_none())      // the agent's logo (the program's own icon)
         .child(div().flex_1().min_w(0).truncate().when(on, (el) => el.font_semibold()).when(Boolean(c.asleep), (el) => el.italic().text_color(t.dim)).when(c.preview, (el) => el.italic()).child(c.name))
-        // The state, as in the Agents list: a filled dot (working, blocked, done), a ring (idle), the moon (asleep), then how long.
+        // How long, then the state, in the Agents list's order: a filled dot (working, blocked, done), a ring (idle), the moon (asleep).
         .when(Boolean(c.since) || Boolean(dot), (el) => el.child(h_flex().flex_none().gap(5).items_center().text_size(10.5).text_color(t.dim)
+          .when(Boolean(c.since), (m) => m.child(div().child(duration(Date.now() - c.since))))
           .child(c.asleep ? svg("mods/vnh-agents/moon.svg").size(12).flex_none()
             : dot ? div().size(7).rounded(4).bg(dot).flex_none()
-            : div().size(8).rounded(4).border_1().border_color(t.dim).flex_none())
-          .when(Boolean(c.since), (m) => m.child(div().child(duration(Date.now() - c.since))))))
+            : div().size(8).rounded(4).border_1().border_color(t.dim).flex_none())))
         .when(c.now, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("now")));
     };
     if (menu) {
