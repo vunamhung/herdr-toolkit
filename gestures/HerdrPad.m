@@ -4,7 +4,8 @@
 //   two fingers scrolling sideways -> the tab switcher: a popup of the tabs of the space you are in (the repo); the scroll moves the
 //     highlight, one tab per HERDR_PAD_STEP points of scroll (55), and where the fingers lift (or stop for HERDR_PAD_IDLE seconds,
 //     0.6) that tab is selected. Fingers moving left go to the next tab (HERDR_PAD_FLIP=1 reverses it). The popup is vnh-tabswitch,
-//     driven through `vnh-tabs.switch-open`, `switch-step-<n>`, `switch-commit`.
+//     driven through `vnh-tabs.switch-open-<x>-<y>-<width>-<height>` (where the pointer is in the window, so the popup opens there),
+//     `switch-step-<n>`, `switch-commit`.
 // Mods only see gestures over what they draw, and a terminal isn't a mod, hence this small agent. The pinch reacts once per gesture,
 // past a clear pinch (+0.35 / -0.3 of scale), at most every 3 s. While the switcher is on, the sideways scroll is not passed on to the
 // terminal underneath. The plist sets the environment, so a change needs no rebuild, which would ask for Accessibility again.
@@ -77,6 +78,21 @@ static int swipe = Idle;
 static double accX = 0, accY = 0, carry = 0, lastScroll = 0, endedAt = 0;
 static CFMachPortRef scrollTap;
 
+// The pointer's place in Herdr's window, in points from its top left, with the window's size: the command that opens the switcher
+// carries it, so the popup opens where the pointer is.
+static NSString *openCommand(void) {
+  CGEventRef ev = CGEventCreate(NULL); CGPoint p = CGEventGetLocation(ev); CFRelease(ev);
+  pid_t pid = NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
+  NSArray *wins = CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+  for (NSDictionary *w in wins) {
+    if ([w[(__bridge NSString *)kCGWindowOwnerPID] intValue] != pid || [w[(__bridge NSString *)kCGWindowLayer] intValue] != 0) continue;
+    CGRect r; if (!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(__bridge NSString *)kCGWindowBounds], &r)) continue;
+    if (!CGRectContainsPoint(r, p)) continue;
+    return [NSString stringWithFormat:@"vnh-tabs.switch-open-%d-%d-%d-%d", (int)(p.x - r.origin.x), (int)(p.y - r.origin.y), (int)r.size.width, (int)r.size.height];
+  }
+  return @"vnh-tabs.switch-open";
+}
+
 static void switcherEnd(const char *why) {
   if (swipe != Sideways) { swipe = Idle; return; }
   swipe = Idle; endedAt = CFAbsoluteTimeGetCurrent();
@@ -100,7 +116,7 @@ static CGEventRef onScroll(CGEventTapProxy proxy, CGEventType type, CGEventRef e
   if (swipe == Deciding) {
     accX += dx; accY += dy;
     if (fabs(accX) + fabs(accY) < 10) return event;
-    if (fabs(accX) > 2 * fabs(accY)) { swipe = Sideways; carry = 0; logf_("switcher: open"); herdr(@"vnh-tabs.switch-open"); }
+    if (fabs(accX) > 2 * fabs(accY)) { swipe = Sideways; carry = 0; logf_("switcher: open"); herdr(openCommand()); }
     else { swipe = Vertical; return event; }
     dx = accX;                                                          // what was held back counts
   }

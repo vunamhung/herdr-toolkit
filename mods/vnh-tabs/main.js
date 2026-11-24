@@ -87,7 +87,7 @@ export default class Tabs extends View {
         else if (c === "git-pull") this.gitPull();
         // "vnh-tabs.switch-open", "switch-step-<n>" (n may be negative), "switch-commit", "switch-cancel": the tab switcher the
         // HerdrPad agent drives while two fingers scroll sideways in Herdr (a popup of this space's tabs, see vnh-tabswitch).
-        else if (c === "switch-open") this.switchOpen();
+        else if (/^switch-open(-\d+-\d+-\d+-\d+)?$/.test(c)) this.switchOpen(c.split("-").slice(2).map(Number));
         else if (/^switch-step-(-?\d+)$/.test(c)) this.switchStep(Number(c.slice("switch-step-".length)));
         else if (c === "switch-commit") this.switchEnd(true);
         else if (c === "switch-cancel") this.switchEnd(false);
@@ -99,7 +99,9 @@ export default class Tabs extends View {
   // The tab switcher: a popup listing the tabs of the space you are in (the repo), the one showing highlighted. Each step moves the
   // highlight; the end of the gesture selects the one it stopped on. The list and the highlight live in shared "vnh.tabswitch",
   // which the popup (vnh-tabswitch) draws.
-  switchOpen() {
+  // `at` = [x, y, window width, window height] when the agent gives the pointer's place in the window: the popup opens there (kept
+  // inside the window); without it, where Herdr last saw the pointer.
+  switchOpen(at = []) {
     const space = spaces().find((s) => s.active);
     if (!space || !(space.tabs ?? []).length) return;
     if (this.switcher) this.switchEnd(false);
@@ -110,7 +112,9 @@ export default class Tabs extends View {
     });
     const sel = Math.max(0, tabs.findIndex((c) => c.active));
     setShared("vnh.tabswitch", { space: space.name ?? "", tabs: list, sel });
-    const id = openOverlay({ mod: "vnh-tabswitch", kind: "popup", key: "vnh-tabswitch", width: 380, height: Math.min(560, 70 + 34 * list.length) });
+    const width = 380, height = Math.min(560, 70 + 34 * list.length);
+    const place = at.length === 4 ? { x: Math.max(8, Math.min(at[0], at[2] - width - 8)), y: Math.max(8, Math.min(at[1], at[3] - height - 8)) } : "pointer";
+    const id = openOverlay({ mod: "vnh-tabswitch", kind: "popup", key: "vnh-tabswitch", at: place, width, height });
     this.switcher = { id, until: Date.now() + 3500 };
   }
 
