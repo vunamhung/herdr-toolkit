@@ -1,5 +1,5 @@
 // The tab switcher's popup: tabs of the space you are in (the repo), or of every space grouped under their space's name; the one
-// showing marked "now". It only draws what vnh-tabs keeps in shared "vnh.tabswitch".
+// showing in bold. It only draws what vnh-tabs keeps in shared "vnh.tabswitch".
 //   mode "space": momentary. The two fingers that opened it scroll the highlight and, where they lift, that tab is selected.
 //   mode "all": a menu that stays. Scroll it, click a tab (its space is selected too) to go there; Esc, or a click outside, closes it.
 import { View, div, image, svg } from "gpui-kit";
@@ -67,8 +67,7 @@ export default class TabSwitch extends View {
           .when(Boolean(c.since), (m) => m.child(div().child(duration(Date.now() - c.since))))
           .child(c.asleep ? svg("mods/vnh-agents/moon.svg").size(12).flex_none()
             : dot ? div().size(7).rounded(4).bg(dot).flex_none()
-            : div().size(8).rounded(4).border_1().border_color(t.dim).flex_none())))
-        .when(c.now, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("now")));
+            : div().size(8).rounded(4).border_1().border_color(t.dim).flex_none())));
     };
     if (menu) {
       return v_flex().id("sw-menu").size_full().min_h(0).bg(t.background).text_color(t.foreground).p(8).gap(2)
