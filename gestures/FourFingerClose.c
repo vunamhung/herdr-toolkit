@@ -1,11 +1,11 @@
-// Four fingers swiping down on the trackpad = ⌘W, in every app.
+// Four fingers swiping down on the trackpad = ⌘W, swiping up = ⌘T, in every app.
 // Reads the trackpad's raw touches (the private MultitouchSupport framework, the one BetterTouchTool and Jitouch use: an
-// NSEvent never carries a four-finger swipe) and, when exactly four fingers travel down together, posts ⌘W to whichever
-// app is in front. Once per touch, at most every 0.8 s. Needs Accessibility (to post the key): macOS asks once.
+// NSEvent never carries a four-finger swipe) and, when exactly four fingers travel down (⌘W) or up (⌘T) together, posts
+// the key to whichever app is in front. Once per touch, at most every 0.8 s. Needs Accessibility (to post the key): macOS asks once.
 // Turn macOS's own four-finger vertical swipe off (System Settings > Trackpad > More Gestures > Mission Control / App
 // Exposé), or it fires too.
-// Environment (the LaunchAgent plist sets them, so a change needs no rebuild): FFC_DY how far down, as a fraction of the
-// pad's height (default 0.18); FFC_UP=1 swipes up instead of down; FFC_LOG a log file (every gesture, with its travel).
+// Environment (the LaunchAgent plist sets them, so a change needs no rebuild): FFC_DY how far, as a fraction of the pad's
+// height (default 0.18); FFC_SWAP=1 swaps the two (up = ⌘W, down = ⌘T); FFC_LOG a log file (every gesture, with its travel).
 #include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <math.h>
@@ -30,7 +30,7 @@ extern void MTDeviceStart(MTDeviceRef, int);
 
 static const char *logPath;
 static double needDY = 0.18;
-static int swipeUp = 0;
+static int swap = 0;
 
 static void logf_(const char *fmt, ...) {
   if (!logPath) return;
@@ -41,8 +41,8 @@ static void logf_(const char *fmt, ...) {
   fputc('\n', f); fclose(f);
 }
 
-static void closeWindow(void) {
-  CGEventRef d = CGEventCreateKeyboardEvent(NULL, 13, true), u = CGEventCreateKeyboardEvent(NULL, 13, false);   // 13 = W
+static void postKey(int code) {      // ⌘ + the key: 13 = W, 17 = T
+  CGEventRef d = CGEventCreateKeyboardEvent(NULL, code, true), u = CGEventCreateKeyboardEvent(NULL, code, false);
   CGEventSetFlags(d, kCGEventFlagMaskCommand); CGEventSetFlags(u, kCGEventFlagMaskCommand);
   CGEventPost(kCGHIDEventTap, d); CGEventPost(kCGHIDEventTap, u);
   CFRelease(d); CFRelease(u);
@@ -63,12 +63,13 @@ static int onFrame(MTDeviceRef dev, MTTouch *t, int n, double ts, int frame) {
   if (cnt != 4 || blocked) { active = 0; return 0; }
   double x = sx / 4, y = sy / 4;
   if (!active) { active = 1; startX = x; startY = y; startT = ts; peak = 0; return 0; }
-  double dy = (y - startY) * (swipeUp ? 1 : -1), dx = x - startX;     // the pad's y grows upward
-  if (dy > peak) peak = dy;
-  if (!fired && dy >= needDY && fabs(dx) <= dy * 0.8 && ts - startT < 1.5) {
+  double dy = y - startY, dx = x - startX, mag = fabs(dy);          // the pad's y grows upward
+  if (mag > peak) peak = mag;
+  if (!fired && mag >= needDY && fabs(dx) <= mag * 0.8 && ts - startT < 1.5) {
     fired = 1;
+    int down = dy < 0, key = (down != swap) ? 13 : 17;
     time_t wall = time(NULL);
-    if (difftime(wall, (time_t)lastFire) >= 0.8) { lastFire = (double)wall; closeWindow(); logf_("swipe %s: dy %.2f dx %.2f -> cmd+w", swipeUp ? "up" : "down", dy, dx); }
+    if (difftime(wall, (time_t)lastFire) >= 0.8) { lastFire = (double)wall; postKey(key); logf_("swipe %s: dy %.2f dx %.2f -> cmd+%c", down ? "down" : "up", mag, dx, key == 13 ? 'w' : 't'); }
   }
   return 0;
 }
@@ -76,14 +77,14 @@ static int onFrame(MTDeviceRef dev, MTTouch *t, int n, double ts, int frame) {
 int main(void) {
   logPath = getenv("FFC_LOG");
   if (getenv("FFC_DY")) needDY = atof(getenv("FFC_DY"));
-  swipeUp = getenv("FFC_UP") && getenv("FFC_UP")[0] == '1';
+  swap = getenv("FFC_SWAP") && getenv("FFC_SWAP")[0] == '1';
   const void *keys[] = { kAXTrustedCheckOptionPrompt }, *vals[] = { getenv("FFC_NOPROMPT") ? kCFBooleanFalse : kCFBooleanTrue };
   CFDictionaryRef opts = CFDictionaryCreate(NULL, keys, vals, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
   logf_("accessibility trusted: %d", AXIsProcessTrustedWithOptions(opts));
   CFMutableArrayRef list = MTDeviceCreateList();
   CFIndex n = list ? CFArrayGetCount(list) : 0;
   for (CFIndex i = 0; i < n; i++) { MTDeviceRef d = (MTDeviceRef)CFArrayGetValueAtIndex(list, i); MTRegisterContactFrameCallback(d, onFrame); MTDeviceStart(d, 0); }
-  logf_("multitouch devices: %ld, need %.2f of the pad's height %s", (long)n, needDY, swipeUp ? "up" : "down");
+  logf_("multitouch devices: %ld, need %.2f of the pad's height (down = cmd+%c, up = cmd+%c)", (long)n, needDY, swap ? 't' : 'w', swap ? 'w' : 't');
   if (n == 0) return 1;
   CFRunLoopRun();
   return 0;
