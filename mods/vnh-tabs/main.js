@@ -101,7 +101,7 @@ export default class Tabs extends View {
   }
 
   // The tab switcher: a popup listing tabs, the one showing highlighted: the tabs of the space you are in (mode "space": the repo) or
-  // the tabs of every space, grouped by space (mode "all"). Each step moves the highlight; the end of the gesture selects the one it
+  // the tabs that run an agent in every space, grouped by space (mode "all": terminals are left out). Each step moves the highlight; the end of the gesture selects the one it
   // stopped on (its space too, when it is in another). The groups, the tabs and the highlight live in shared "vnh.tabswitch", which
   // the popup (vnh-tabswitch) draws.
   // `at` = [x, y, window width, window height] when the agent gives the pointer's place in the window: the popup opens there (kept
@@ -112,6 +112,8 @@ export default class Tabs extends View {
     for (const sp of pick) {
       const first = items.length;
       for (const c of sp.tabs ?? []) {
+        // "all" lists agents only: a tab that is just a terminal (or a conversation preview) is left out.
+        if (mode === "all" && !all.some((p) => p.tab === c.id && p.program?.agent)) continue;
         const lead = all.find((p) => p.tab === c.id && p.program?.agent) ?? all.find((p) => p.tab === c.id);
         items.push({ space: sp.id, tab: c.id, name: label(c, lead), status: c.status ?? null, preview: all.some((p) => p.tab === c.id && p.mod === "vnh-convo"), now: Boolean(sp.active && c.active) });
       }
@@ -124,7 +126,9 @@ export default class Tabs extends View {
     const width = 380, height = Math.min(560, 40 + 32 * items.length + 30 * groups.length);
     const place = at.length === 4 ? { x: Math.max(8, Math.min(at[0], at[2] - width - 8)), y: Math.max(8, Math.min(at[1], at[3] - height - 8)) } : "pointer";
     const id = openOverlay({ mod: "vnh-tabswitch", kind: "popup", key: "vnh-tabswitch", at: place, width, height });
-    this.switcher = { id, until: Date.now() + 3500 };
+    // "space" is a momentary switcher (the gesture drives it and ends it); "all" stays open (it is a menu: scroll it, click a tab; Esc or
+    // a click outside closes it), so no timeout.
+    this.switcher = { id, until: mode === "all" ? Infinity : Date.now() + 3500 };
   }
 
   switchStep(n) {

@@ -1,12 +1,14 @@
 // Trackpad actions for Herdr (only while Herdr is the frontmost app; the ones for every app are PadActions.m):
 //   pinching the fingers together -> `herdr-app do vnh-tabs.git-pull`, spreading them apart -> `vnh-tabs.git-push`
 //     (HERDR_PINCH_TOGETHER / HERDR_PINCH_APART name the commands, HERDR_PINCH_IN / HERDR_PINCH_OUT the thresholds)
-//   two fingers scrolling sideways -> the tab switcher: to the left a popup of the tabs of every space, grouped by space; to the right
-//     only the space you are in (the repo; HERDR_PAD_SWAP_SIDES=1 swaps the two). The sideways move only opens it; then, without lifting, scrolling up / down moves the highlight, one tab per HERDR_PAD_STEP points of scroll (30; fingers
-//     up = the next tab, HERDR_PAD_FLIP=1 reverses it), and where the fingers lift (or stop for HERDR_PAD_IDLE seconds, 0.6) that tab
-//     is selected. The popup is vnh-tabswitch,
-//     driven through `vnh-tabs.switch-open-<all|space>-<x>-<y>-<width>-<height>` (where the pointer is in the window, so the popup opens there),
-//     `switch-step-<n>`, `switch-commit`.
+//   two fingers scrolling sideways -> the tab switcher (a popup, vnh-tabswitch, driven through `vnh-tabs.switch-open-<all|space>-<x>-<y>-
+//     <width>-<height>`, where the pointer is in the window, so it opens there; HERDR_PAD_SWAP_SIDES=1 swaps the two sides):
+//       to the left: a MENU of the tabs of every space, grouped by space. It stays open on its own: scroll it, click a tab (its space
+//         is selected too); Esc or a click outside closes it. The gesture that opened it does nothing more.
+//       to the right: the tabs of the space you are in (the repo), MOMENTARY. The sideways move only opens it; then, without lifting,
+//         scrolling up / down moves the highlight, one tab per HERDR_PAD_STEP points of scroll (30; fingers up = the next tab,
+//         HERDR_PAD_FLIP=1 reverses it), and where the fingers lift (or stop for HERDR_PAD_IDLE seconds, 0.6) that tab is selected
+//         (`switch-step-<n>`, `switch-commit`).
 // Mods only see gestures over what they draw, and a terminal isn't a mod, hence this small agent. The pinch reacts once per gesture,
 // past a clear pinch (+0.35 / -0.3 of scale), at most every 3 s. While the switcher is on, the sideways scroll is not passed on to the
 // terminal underneath. The plist sets the environment, so a change needs no rebuild, which would ask for Accessibility again.
@@ -74,7 +76,7 @@ static void onMagnify(NSEvent *e) {
 // ---- two fingers scrolling sideways: the tab switcher
 // A gesture starts undecided; once it has gone a few points and is clearly sideways (twice as much across as down) the switcher
 // opens, and from then on the gesture is ours (its events are not passed on) until the fingers lift.
-enum { Idle, Deciding, Sideways, Vertical };
+enum { Idle, Deciding, Sideways, Sticky, Vertical };
 static int swipe = Idle;
 static double accX = 0, accY = 0, carry = 0, lastScroll = 0, endedAt = 0;
 static CFMachPortRef scrollTap;
@@ -121,10 +123,14 @@ static CGEventRef onScroll(CGEventTapProxy proxy, CGEventType type, CGEventRef e
       // Fingers to the left: every space's tabs, grouped by space; to the right: only the space you are in (SWAP reverses it).
       int left = accX > 0; if (swapSides) left = !left;       // accX > 0 is the fingers going to the left on this Mac
       NSString *mode = left ? @"all" : @"space";
-      swipe = Sideways; carry = 0; logf_("switcher: open (%s)", mode.UTF8String); herdr(openCommand(mode));
+      swipe = left ? Sticky : Sideways; carry = 0; logf_("switcher: open (%s)", mode.UTF8String); herdr(openCommand(mode));
     }
     else { swipe = Vertical; return event; }
     dy = 0;                                                             // the sideways move only opens it
+  }
+  if (swipe == Sticky) {                                                // the menu stays open on its own: this gesture only opened it
+    if (ph == NSEventPhaseEnded || ph == NSEventPhaseCancelled) { swipe = Idle; endedAt = now; }
+    return NULL;
   }
   if (swipe == Sideways) {
     carry += (flip ? dy : -dy);                                         // once open, up / down moves it: fingers up, the next tab
