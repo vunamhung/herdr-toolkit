@@ -422,7 +422,7 @@ export default class Tabs extends View {
         .on_click(() => this.toggleTimeline())
         .child(svg("mods/vnh-prompts/timeline.svg").size(14)).child("Timeline");
     };
-    return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+    return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).pr(0).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => this.wheel(e))
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scroll().track_scroll(this.scroll)
