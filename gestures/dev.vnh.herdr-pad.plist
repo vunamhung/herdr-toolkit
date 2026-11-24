@@ -2,14 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>dev.vnh.herdr-pinch</string>
-  <key>ProgramArguments</key><array><string>HOME_DIR/Applications/HerdrPinch.app/Contents/MacOS/herdr-pinch</string></array>
+  <key>Label</key><string>dev.vnh.herdr-pad</string>
+  <key>ProgramArguments</key><array><string>HOME_DIR/Applications/HerdrPad.app/Contents/MacOS/herdr-pad</string></array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HERDR_APP</key><string>HOME_DIR/.local/bin/herdr-app</string>
-    <key>HERDR_PINCH_LOG</key><string>HOME_DIR/Library/Logs/herdr-pinch.log</string>
+    <key>HERDR_PINCH_LOG</key><string>HOME_DIR/Library/Logs/herdr-pad.log</string>
     <key>HERDR_PINCH_TOGETHER</key><string>vnh-tabs.git-pull</string>
     <key>HERDR_PINCH_APART</key><string>vnh-tabs.git-push</string>
+    <key>HERDR_PAD_EDGE</key><string>0.06</string>
+    <key>HERDR_PAD_STEP</key><string>0.07</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

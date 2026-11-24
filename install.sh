@@ -7,8 +7,8 @@
 #   ./install.sh --karabiner  also add the Cmd+` -> Herdr rule to Karabiner-Elements
 #   ./install.sh --orca     also install the Herdr theme "orca" (Claude Code's custom:orca palette) and set agy's
 #                            colorScheme to terminal, so Claude, agy and Codex share one palette
-#   ./install.sh --gestures  also build gestures/HerdrPinch.swift and run it as a LaunchAgent
-#                            (trackpad pinch anywhere in Herdr: zoom in pulls, zoom out pushes; four fingers
+#   ./install.sh --gestures  also build gestures/HerdrPad.m and PadActions.m and run them as LaunchAgents
+#                            (HerdrPad, only in Herdr: pinch = git pull / push, bottom-edge slide = previous / next tab;
 #                            PadActions: four-finger swipes / tap = cmd-W, cmd-T, cmd-shift-T; edge slides = volume, brightness)
 # Options can be combined: ./install.sh --layout --karabiner --gestures --orca
 set -euo pipefail
@@ -125,18 +125,20 @@ if want --karabiner; then
 fi
 
 if want --gestures; then
-  echo "gestures: trackpad pinch in Herdr pulls / pushes"
-  # A small app (HerdrPinch.app, signed ad hoc): macOS keeps Accessibility for it more reliably than
-  # for a bare linker-signed binary. Grant it once in System Settings > Privacy & Security >
-  # Accessibility; a rebuild asks again.
-  APP="$HOME/Applications/HerdrPinch.app"
-  mkdir -p "$APP/Contents/MacOS" "$HOME/Library/LaunchAgents"
-  swiftc -O -o "$APP/Contents/MacOS/herdr-pinch" "$ROOT/gestures/HerdrPinch.swift"
-  cp "$ROOT/gestures/Info.plist" "$APP/Contents/Info.plist"
-  codesign -f -s - --identifier dev.vnh.herdr-pinch "$APP"
-  PL="$HOME/Library/LaunchAgents/dev.vnh.herdr-pinch.plist"
+  echo "gestures: HerdrPad (pinch, bottom-edge slide in Herdr) and PadActions (every app)"
+  # Two small apps (signed ad hoc): macOS keeps Accessibility for an app more reliably than for a bare linker-signed binary. Grant
+  # each once in System Settings > Privacy & Security > Accessibility; a rebuild asks again.
+  # HerdrPad (gestures/HerdrPad.m), only while Herdr is in front: pinch together / apart = git pull / push, one finger sliding
+  # along the bottom edge = the previous / next tab (the tab bar scrolls along).
+  HAPP="$HOME/Applications/HerdrPad.app"
+  mkdir -p "$HAPP/Contents/MacOS" "$HOME/Library/LaunchAgents"
+  clang -O2 -o "$HAPP/Contents/MacOS/herdr-pad" "$ROOT/gestures/HerdrPad.m" -F/System/Library/PrivateFrameworks \
+    -framework MultitouchSupport -framework Cocoa -framework ApplicationServices
+  cp "$ROOT/gestures/Info-herdr-pad.plist" "$HAPP/Contents/Info.plist"
+  codesign -f -s - --identifier dev.vnh.herdr-pad "$HAPP"
+  PL="$HOME/Library/LaunchAgents/dev.vnh.herdr-pad.plist"
   [ -f "$PL" ] && { launchctl bootout "gui/$(id -u)" "$PL" 2>/dev/null; backup "$PL"; }
-  sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.herdr-pinch.plist" > "$PL"
+  sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.herdr-pad.plist" > "$PL"
   launchctl bootstrap "gui/$(id -u)" "$PL"
 
   # Trackpad actions in every app (gestures/PadActions.m): four fingers swiping down = cmd-W, up = cmd-T, tapping = cmd-shift-T;
