@@ -119,7 +119,7 @@ static void installMoveTap(void) {
   if (moveTap) { CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(kCFAllocatorDefault, moveTap, 0), kCFRunLoopCommonModes); CGEventTapEnable(moveTap, true); }
   else logf_("pointer tap refused (no Accessibility): the pointer cannot be held");
 }
-// ⌘ ` (the key under Esc): Herdr, then Antigravity, then Herdr again, and so on. From any other app it goes to Herdr first; in Herdr, to
+// ⌘ ` (the key under Esc; and ⌘ Esc while Herdr or Antigravity is in front): Herdr, then Antigravity, then Herdr again, and so on. From any other app it goes to Herdr first; in Herdr, to
 // Antigravity; in Antigravity, to Herdr. The key is taken (the system's own "next window" for it is not run). Open or hidden, the app
 // is brought to the front (launched if it is not running). PAD_SWITCH_A / PAD_SWITCH_B are the two bundle ids; PAD_SWITCH=0 turns it off.
 static CFMachPortRef keyTap;
@@ -157,9 +157,12 @@ static CGEventRef onKey(CGEventTapProxy proxy, CGEventType type, CGEventRef even
   if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) { CGEventTapEnable(keyTap, true); return event; }
   if (type != kCGEventKeyDown) return event;
   CGEventFlags f = CGEventGetFlags(event) & (kCGEventFlagMaskCommand | kCGEventFlagMaskShift | kCGEventFlagMaskAlternate | kCGEventFlagMaskControl);
-  if (CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode) != 50 || f != kCGEventFlagMaskCommand) return event;
-  if (CGEventGetIntegerValueField(event, kCGKeyboardEventAutorepeat)) return NULL;
+  int code = (int)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
+  if ((code != 50 && code != 53) || f != kCGEventFlagMaskCommand) return event;
   NSString *front = frontBundle();
+  // ⌘ Esc does the same, but only while one of the two is in front (elsewhere Esc keeps its own meaning).
+  if (code == 53 && !([front isEqualToString:swA] || [front isEqualToString:swB])) return event;
+  if (CGEventGetIntegerValueField(event, kCGKeyboardEventAutorepeat)) return NULL;
   NSString *to = [front isEqualToString:swA] ? swB : swA;
   dispatch_async(dispatch_get_main_queue(), ^{ bringFront(to); });
   logf_("cmd+` : %s -> %s", front.UTF8String ?: "?", to.UTF8String);
