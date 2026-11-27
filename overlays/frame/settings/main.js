@@ -622,9 +622,14 @@ export default class Settings extends View {
     const path = `${appHome()}/keys.json`;
     try {
       const text = await readTextFile(path);
-      const data = JSON.parse(text);
+      let data = {};
+      if (text && text.trim()) {
+        const parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("keys.json must be a JSON object");
+        data = parsed;
+      }
       const warn = mutate(data);
-      await writeTextFile(path, JSON.stringify(data, null, 2) + "\n", text);
+      await writeTextFile(path, JSON.stringify(data, null, 2) + "\n", text ?? null);
       if (warn) notify({ title: "Shortcut reassigned", body: warn, level: "warning", timeout: 3500 });
     } catch (e) {
       notify({ title: "Couldn't save the shortcut", body: String(e?.message ?? e), level: "error", timeout: 4000 });
@@ -1021,16 +1026,28 @@ export default class Settings extends View {
     const layoutName = shared("layout") ?? "main";
     const layoutRaw = await readTextFile(`${home}/layouts/${layoutName}.json`).catch(() => null);
     const used = new Set();
-    if (layoutRaw) { const re = /"mod"\s*:\s*"([^"]+)"/g; let m; while ((m = re.exec(layoutRaw)) !== null) used.add(m[1]); }
+    if (layoutRaw) {
+      try {
+        const doc = JSON.parse(layoutRaw);
+        const walk = (n) => {
+          if (!n || typeof n !== "object") return;
+          if (typeof n.content?.mod === "string") used.add(n.content.mod);
+          if (typeof n.content?.pane?.header?.content?.mod === "string") used.add(n.content.pane.header.content.mod);
+          for (const fl of n.floating ?? []) if (typeof fl?.content?.mod === "string") used.add(fl.content.mod);
+          for (const ch of n.children ?? []) walk(ch);
+        };
+        walk(doc);
+        if (typeof doc?.terminal_menu === "string") used.add(doc.terminal_menu);
+      } catch { /* ignore invalid layout json */ }
+    }
     let shipped = new Set();
     try { const inst = JSON.parse((await readTextFile(`${home}/installed.json`).catch(() => "{}")) || "{}"); shipped = new Set(Object.keys(inst).filter((k) => !k.startsWith("layout:"))); } catch { /* keep empty */ }
-    const rows = [];
-    for (const name of names) {
+    const rows = await Promise.all(names.map(async (name) => {
       let title = name, version = null, place = null;
       try { const j = JSON.parse((await readTextFile(`${home}/mods/${name}/mod.json`).catch(() => "{}")) || "{}"); title = j.title || name; version = j.version ?? null; place = j.place ?? null; } catch { /* keep defaults */ }
       const source = shipped.has(name) ? "herdr" : (name.startsWith("vnh-") || name === "claude-limits-status") ? "vnh" : "other";
-      rows.push({ name, title, version, place, used: used.has(name), source });
-    }
+      return { name, title, version, place, used: used.has(name), source };
+    }));
     this.modsData = { layoutName, rows };
   }
 
@@ -1193,6 +1210,8 @@ export default class Settings extends View {
             .on_click((_e, cx) => {
               this.section = s.id;
               this.picking = null;
+              this.capturing = null;
+              this.keysAdding = false;
               this.machineEdit = null;
               this.handle.focus();
               if (s.id === "machines") cx.spawn(async (cx) => { await this.loadMachines(); cx.notify(); });
@@ -1207,8 +1226,10 @@ export default class Settings extends View {
     return h_flex()
       .id("settings")
       .track_focus(this.handle)
-      .when(Boolean(this.picking), (el) => el.on_action("overlay.close", (_e, cx) => {
-        this.picking = null;
+      .when(Boolean(this.picking || this.capturing || this.machineEdit), (el) => el.on_action("overlay.close", (_e, cx) => {
+        if (this.capturing) this.capturing = null;
+        else if (this.machineEdit) this.machineEdit = null;
+        else this.picking = null;
         this.handle.focus();
         cx.stop_propagation();
         cx.notify();

@@ -107,22 +107,38 @@ export default class Spaces extends View {
     cx.timer.every(500, (cx) => { if (ANIM) { ANIM = false; cx.notify(); } });
   }
 
-  // VNH: a worktree space whose folder was deleted (an agent removed the worktree) is closed with its agents, once its folder has
-  // been gone for 15 s, no agent in it is working or waiting for you, and you are not in it. Only spaces seen as worktrees.
-  reap() {
+  // VNH: a local worktree space whose own folder (`w.folder`, not merely a terminal's subdir cwd) was deleted is closed
+  // after 15 s only when it is inactive, has no active/done/sleeping agents or running foreground programs, and a direct
+  // existence check confirms `w.folder` is actually gone.
+  reap(cx) {
     const now = Date.now();
-    if (now - this.reapAt < 5000) return;
+    if (this.reaping || now - this.reapAt < 5000) return;
     this.reapAt = now;
-    const sp = spaces(), ps = panes(), ags = agents();
+    const sp = spaces(), ps = panes(), ags = agents(), asleep = shared("vnh.asleep") ?? [];
     for (const w of sp) {
-      if (!this.gone?.has(where(w, ps)) || !this.wasLinked.has(w.id) || w.active) { this.goneSince.delete(w.id); continue; }
+      if (w.machine || !w.folder || !this.gone?.has(where(w, ps)) || !this.wasLinked.has(w.id) || w.active) { this.goneSince.delete(w.id); continue; }
       const since = this.goneSince.get(w.id) ?? now;
       this.goneSince.set(w.id, since);
       if (now - since < 15000) continue;
-      if (ags.some((a) => a.space === w.id && a.status !== "idle" && a.status !== "done")) continue;
-      try { const z = shared("vnh.asleep") ?? []; if (z.some((r) => r.space === w.id)) setShared("vnh.asleep", z.filter((r) => r.space !== w.id)); } catch {}
-      this.goneSince.delete(w.id); this.wasLinked.delete(w.id);
-      run("space.close", { id: w.id, confirmed: true });
+      if (ags.some((a) => a.space === w.id && a.status !== "idle")) continue;
+      if (asleep.some((r) => r.space === w.id)) continue;
+      const tabs = new Set((w.tabs ?? []).map((t) => t.id));
+      const busyPane = ps.some((p) => tabs.has(p.tab) && (p.mod === "vnh-cover" || (p.terminal && !(p.program?.shell || p.program?.agent))));
+      if (busyPane) continue;
+      this.reaping = true;
+      const id = w.id, folder = w.folder;
+      cx.spawn(async () => {
+        try {
+          const exists = await exec("test", ["-e", folder], { timeout: 3000 }).catch(() => null);
+          if (!exists || exists.code === 0) { this.goneSince.delete(id); return; } // folder still exists (e.g. only a subdir was deleted) or check failed
+          const cur = spaces().find((x) => x.id === id);
+          if (!cur || cur.active || cur.machine) return;
+          if (agents().some((a) => a.space === id && a.status !== "idle")) return;
+          if ((shared("vnh.asleep") ?? []).some((r) => r.space === id)) return;
+          this.goneSince.delete(id); this.wasLinked.delete(id);
+          run("space.close", { id, confirmed: true });
+        } finally { this.reaping = false; }
+      });
       break; // one per pass
     }
   }
@@ -131,7 +147,7 @@ export default class Spaces extends View {
     // Herdr in the background: a look every 2 s instead of every 250 ms.
     if (window()?.active === false && ((this.bgTick = (this.bgTick ?? 0) + 1) % 8)) return;
     const now = Date.now();
-    this.reap();
+    this.reap(cx);
     const sp = spaces();
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
     const due = this.due(now, sp, panes());
@@ -176,7 +192,7 @@ export default class Spaces extends View {
     }
     if (window().active) {
       for (const k of keys) {
-        const asks = this.git[k] || this.unsure.has(k);
+        const asks = this.git[k] || this.unsure.has(k) || this.gone?.has(k);
         if (asks && !this.folded.has(JSON.parse(k)[0]) && now - (this.checked[k] ?? 0) > FALLBACK) due.add(k);
       }
     }
@@ -362,7 +378,7 @@ export default class Spaces extends View {
 
   orderingDue(now) {
     return this.ordering && now - this.ordering.at >= 1000
-      && this.ordering.machines.every(name => machines().some(m => m.name === name && m.layout === "ready"));
+      && this.ordering.machines.every(name => name === null || machines().some(m => m.name === name && m.layout === "ready"));
   }
 
   // Spaces in order, each worktree space moved under its main checkout's.
@@ -376,6 +392,7 @@ export default class Spaces extends View {
       const k = where(w, ps);
       if (k in this.git) this.lastG[w.id] = this.git[k] ?? null;
       if (this.git[k]?.linked) this.wasLinked.add(w.id);
+      else if (this.git[k] && !this.git[k].linked) this.wasLinked.delete(w.id);
       return { w, i, g: k in this.git ? this.git[k] ?? null : this.lastG[w.id] ?? null, gone: Boolean(this.gone?.has(k)) };
     });
     const mains = new Set(list.filter((r) => r.g && !r.g.linked).map((r) => r.g.repo));

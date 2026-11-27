@@ -8,7 +8,7 @@ import json, os, subprocess, sys
 path = sys.argv[1]
 back = sys.argv[2] if len(sys.argv) > 2 else ""
 try:
-    subprocess.call(["nvim", "-c", "nnoremap <silent> <Esc> <Cmd>q<CR>", path])
+    subprocess.call(["nvim", "-c", "nnoremap <silent> <Esc> <Cmd>q<CR>", "--", path])
 except FileNotFoundError:
     print("Neovim (nvim) is not installed or not on the PATH. Press Enter to close.")
     try: input()
@@ -18,12 +18,11 @@ if back:
 term = os.environ.get("HC_TERMINAL_ID")
 if term:
     subprocess.call(["hc", "kill", term], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-# Herdr runs this inside `zsh -lic "$@"; exec zsh -li`: killing the terminal leaves that shell behind as an orphan, so end it too.
-try:
-    parent = os.getppid()
-    cmd = subprocess.run(["ps", "-o", "command=", "-p", str(parent)], capture_output=True, text=True).stdout
-    if parent > 1 and "zsh" in cmd and "-lic" in cmd:
-        os.kill(parent, 9)
-except Exception:
-    pass
+    # Herdr runs this inside `zsh -lic "$@"; exec zsh -li`: killing the terminal leaves that shell behind as an orphan, so end it too.
+    try:
+        parent = os.getppid()
+        cmd = subprocess.run(["ps", "-o", "command=", "-p", str(parent)], capture_output=True, text=True).stdout
+        if parent > 1 and "zsh" in cmd and "-lic" in cmd:
+            os.kill(parent, 9)
+    except Exception:
+        pass

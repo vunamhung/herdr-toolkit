@@ -15,8 +15,11 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { theme, exec, home, appHome, focused, agents, panes, readTextFile, hc, run, spaces, setShared } from "herdr";
+import { theme, exec, home, appHome, focused, agents, panes, readTextFile, hc, run, spaces, setShared, layout, window, checking } from "herdr";
 import { loadConvos, repoRoot, ago, AGENT_ICON } from "./convos.js";
+
+const findNode = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((h, c) => h ?? findNode(c, id), null));
+const tilde = (p) => { const h = home(); return p && h && (p === h || p.startsWith(h + "/")) ? "~" + p.slice(h.length) : p ?? ""; };
 
 // Python 3 runs as "python3", else "python" (as on Windows): found once.
 let PY = null;
@@ -77,8 +80,17 @@ export default class Prompts extends View {
     let saved = null; try { saved = localStorage.getItem("vnh-timeline-mode"); } catch {}
     this.mode = saved === "convos" ? "convos" : "timeline";
     this.convos = null; this.convosAt = 0; this.convosBusy = false; this.convosRoot = null; this.convoShown = 50; this.curSession = null; this.rootOf = new Map(); this.spaceCwd = new Map();
+    if (checking()) return;
     this.follow(cx);
-    cx.timer.every(2000, (cx) => { this.follow(cx); this.viewCwd(); if (this.mode === "convos") this.loadConvos(cx); if (agents().find((x) => x.address === this.agent)?.status === "working") this.readLive(cx); else this.live = null; });
+    cx.timer.every(2000, (cx) => {
+      if (window()?.active === false) return;
+      const tl = findNode(layout(), "timeline");
+      if (tl?.hidden) return;
+      this.follow(cx);
+      this.viewCwd();
+      if (this.mode === "convos") this.loadConvos(cx);
+      if (agents().find((x) => x.address === this.agent)?.status === "working") this.readLive(cx); else this.live = null;
+    });
   }
 
   // The agent you're in (else the last one), its transcript, re-read when it grows.
@@ -86,37 +98,36 @@ export default class Prompts extends View {
     const f = focused();
     const here = f?.agent ?? (f?.terminal && agents().some((a) => a.address === f.terminal) ? f.terminal : null);
     if (here && here !== this.agent) { this.agent = here; this.transcript = null; this.size = null; this.open = null; this.at = 0; this.prompts = []; this.shown = PAGE; cx.notify(); }
-    if (!this.agent || this.busy) return;
-    // The reader (python) runs while the agent works (every 2 s, as the transcript grows) and otherwise only every 30 s: an idle
-    // agent's transcript doesn't change.
-    const working = agents().find((x) => x.address === this.agent)?.status === "working";
-    const justStopped = this.wasWorking && !working; // the turn that just ended is read at once
+    const target = this.agent;
+    if (!target || this.busy) return;
+    const working = agents().find((x) => x.address === target)?.status === "working";
+    const justStopped = this.wasWorking && !working;
     this.wasWorking = working;
     if (this.transcript && !justStopped && Date.now() - (this.readAt ?? 0) < (working ? 2000 : 30000)) return;
     this.readAt = Date.now();
     this.busy = true;
     cx.spawn(async (cx) => {
       try {
-        let info = await readTextFile(`${home()}/.cache/over9k/agents/${this.agent}.json`).catch(() => null);
-        // On its own (no sidebar keeps those files): run claude-info.py here.
-        if (!info && this.infoCache?.agent === this.agent && Date.now() - this.infoCache.at < 60000) info = this.infoCache.info; // not run again for a minute
-        if (!info) {
+        let info = await readTextFile(`${home()}/.cache/over9k/agents/${target}.json`).catch(() => null);
+        if (!info && this.infoCache?.agent === target && Date.now() - this.infoCache.at < (this.infoCache.info ? 60000 : 5000)) info = this.infoCache.info;
+        if (info == null) {
           const own = `${appHome()}/mods/vnh-prompts/claude-info.py`;
           const r = await python(["-I", (await readTextFile(own).catch(() => null)) != null ? own : `${appHome()}/mods/over9k/claude-info.py`]).catch(() => null);
-          try { info = JSON.stringify(JSON.parse(r?.stdout || "{}")[this.agent] ?? null); } catch {}
-          this.infoCache = { agent: this.agent, info, at: Date.now() };
+          let parsed = null;
+          try { parsed = JSON.parse(r?.stdout || "{}")[target] ?? null; } catch {}
+          info = parsed ? JSON.stringify(parsed) : null;
+          this.infoCache = { agent: target, info, at: Date.now() };
         }
+        if (this.agent !== target) return;
         let path = null;
         try { path = info && JSON.parse(info)?.transcript; } catch {}
-        // Without that file: Claude Code's folder for the agent's
-        // working directory (the reader takes its newest conversation).
-        const a = agents().find((x) => x.address === this.agent);
-        const cwd = panes().find((p) => p.terminal === this.agent)?.cwd;
+        const a = agents().find((x) => x.address === target);
+        const cwd = panes().find((p) => p.terminal === target)?.cwd;
         const claude = a && (a.app === "claude-code" || a.program?.key === "claude" || /claude/i.test(a.program?.name ?? ""));
         if (!path && claude && cwd) path = `${home()}/.claude/projects/${cwd.replace(/[^A-Za-z0-9]/g, "-")}`;
         if (!path) { this.note = "The timeline shows Claude Code agents"; this.prompts = []; this.transcript = null; cx.notify(); return; }
-        // Read only when it has grown (the reader checks its size).
         const r = await python(["-I", READER(), path, this.transcript && this.size != null ? `${this.transcript}\t${this.size}` : ""]).catch(() => null);
+        if (this.agent !== target) return;
         let got = null;
         try { got = JSON.parse(r?.stdout ?? ""); } catch {}
         const list = got?.prompts;
@@ -196,18 +207,22 @@ export default class Prompts extends View {
 
   // The ▶ on a row: back to the pane that already runs it, else start it again in a new tab at its folder.
   async resumeConvo(s) {
-    for (const a of agents()) {
-      const st = await readTextFile(`${home()}/.cache/herdr-status/${a.address}.json`).then((x) => JSON.parse(x ?? "null")).catch(() => null);
-      if (st?.session && st.session === s.id) {
-        const p = panes().find((x) => x.terminal === a.address);
-        const sp = spaces().find((x) => (x.tabs ?? []).some((t) => t.id === p?.tab));
-        if (sp) run("space.select", { id: sp.id });
-        if (p) { run("tab.select", { id: p.tab }); run("pane.focus", { pane: p.pane }); }
-        return;
+    if (this.resuming || !s?.id) return;
+    this.resuming = true;
+    try {
+      for (const a of agents()) {
+        const st = await readTextFile(`${home()}/.cache/herdr-status/${a.address}.json`).then((x) => JSON.parse(x ?? "null")).catch(() => null);
+        if (st?.session && st.session === s.id) {
+          const p = panes().find((x) => x.terminal === a.address);
+          const sp = spaces().find((x) => (x.tabs ?? []).some((t) => t.id === p?.tab));
+          if (sp) run("space.select", { id: sp.id });
+          if (p) { run("tab.select", { id: p.tab }); run("pane.focus", { pane: p.pane }); }
+          return;
+        }
       }
-    }
-    const space = spaces().find((x) => x.active);
-    run("tab.new", { space: space?.id, folder: s.cwd ?? undefined, name: (s.title || s.prompt || s.agent || "claude").slice(0, 40), argv: ["sh", "-lc", RESUME[s.agent ?? "claude"] ?? RESUME.claude, "resume", s.id] });
+      const space = spaces().find((x) => x.active);
+      run("tab.new", { space: space?.id, folder: s.cwd ?? undefined, name: (s.title || s.prompt || s.agent || "claude").slice(0, 40), argv: ["sh", "-lc", RESUME[s.agent ?? "claude"] ?? RESUME.claude, "resume", s.id] });
+    } finally { this.resuming = false; }
   }
 
   // `plain(text)` and the reply's summary cost a few regular expressions over text that can be long; they are worked out once per prompt
@@ -227,13 +242,17 @@ export default class Prompts extends View {
   // The working agent's own counter, from the bottom of its screen: Claude Code's
   // "(2m 5s · ↓ 11.4k tokens · …)". Null when it isn't showing.
   readLive(cx) {
+    if (this.liveBusy) return;
     const at = this.agent;
+    this.liveBusy = true;
     cx.spawn(async (cx) => {
-      const r = await hc(["read", at]).catch(() => null);
-      const lines = (r?.stdout ?? "").split("\n").filter((l) => /\(\s*(?:\d+h\s*)?(?:\d+m\s*)?\d+s\s*·\s*↓\s*[\d.]+k?\s*tokens/.test(l));
-      const m = /\(\s*(?:(\d+)h\s*)?(?:(\d+)m\s*)?(\d+)s\s*·\s*↓\s*([\d.]+)(k?)\s*tokens/.exec(lines.pop() ?? "");
-      const live = at === this.agent && m ? { secs: (+(m[1] ?? 0)) * 3600 + (+(m[2] ?? 0)) * 60 + +m[3], tokens: Math.round(parseFloat(m[4]) * (m[5] ? 1000 : 1)) } : null;
-      if (JSON.stringify(live) !== JSON.stringify(this.live)) { this.live = live; cx.notify(); }
+      try {
+        const r = await hc(["read", at]).catch(() => null);
+        const lines = (r?.stdout ?? "").split("\n").filter((l) => /\(\s*(?:\d+h\s*)?(?:\d+m\s*)?\d+s\s*·\s*↓\s*[\d.]+k?\s*tokens/.test(l));
+        const m = /\(\s*(?:(\d+)h\s*)?(?:(\d+)m\s*)?(\d+)s\s*·\s*↓\s*([\d.]+)(k?)\s*tokens/.exec(lines.pop() ?? "");
+        const live = at === this.agent && m ? { secs: (+(m[1] ?? 0)) * 3600 + (+(m[2] ?? 0)) * 60 + +m[3], tokens: Math.round(parseFloat(m[4]) * (m[5] ? 1000 : 1)) } : null;
+        if (JSON.stringify(live) !== JSON.stringify(this.live)) { this.live = live; cx.notify(); }
+      } finally { this.liveBusy = false; }
     });
   }
 
@@ -327,7 +346,8 @@ export default class Prompts extends View {
               .child(div().flex_none().text_size(10.5).text_color(t.dim).pt(1).child(hhmm(m.at)))
               .child(div().flex_1().min_w(0).whitespace_normal().text_color(t.foreground).child(m.text))))))
           .when(facts.length > 0, (el) => el.child(div().text_size(11).text_color(t.dim).truncate()
-            .when(live, (el) => el.child(h_flex().gap(0).child(div().text_color(t.working).child(facts[0])).child(div().child(` · ${facts.slice(1).join(" · ")}`))))
+            .when(live, (el) => el.child(h_flex().gap(0).child(div().text_color(t.working).child(facts[0]))
+              .when(facts.length > 1, (x) => x.child(div().child(` · ${facts.slice(1).join(" · ")}`)))))
             .when(!live, (el) => el.child(facts.join(" · ")))))
           .when(!on && Boolean(p.reply), (el) => el.child(div().text_size(11.5).line_height("16px").text_color(t.muted).truncate().child(p.sm)))
           // Read in full: the reply as Markdown, then what it changed.
@@ -335,7 +355,7 @@ export default class Prompts extends View {
             .child(p.reply ? TextView.markdown(`reply-${list.length - i}`, p.reply).selectable(true).text_size(12.5) : div().text_size(12).text_color(t.dim).child(live ? "Working…" : "(no reply text)"))
             .when(p.edits.length > 0, (el) => el.child(v_flex().gap(1).text_size(11).text_color(t.dim)
               .child(div().child("Changed"))
-              .children(p.edits.map((x) => div().truncate().text_color(t.muted).child(x.replace(home(), "~")))))))));
+              .children(p.edits.map((x) => div().truncate().text_color(t.muted).child(tilde(x)))))))));
     };
     return v_flex().id("over9k-prompts").track_focus(this.handle).size_full().min_h(0).rounded(10).overflow_hidden()
       .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)

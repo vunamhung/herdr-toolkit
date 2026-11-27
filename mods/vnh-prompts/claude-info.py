@@ -18,6 +18,8 @@ TAIL = 4 * 1024 * 1024  # enough of the conversation's end for the last reply an
 
 
 def alive(pid):
+    if not isinstance(pid, int) or pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
         return True
@@ -33,7 +35,7 @@ def terminal_of(pid):
         with open(f"/proc/{pid}/environ", "rb") as f:
             for kv in f.read().split(b"\0"):
                 if kv.startswith(b"HC_TERMINAL_ID="):
-                    return kv.split(b"=", 1)[1].decode()
+                    return kv.split(b"=", 1)[1].decode("utf-8", "replace")
         return None
     except FileNotFoundError:
         pass
@@ -48,18 +50,19 @@ def terminal_of(pid):
 
 
 def transcript_of(session, cwd):
-    if not session:
+    if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", session):
         return None
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")
     if cwd:
-        p = os.path.join(HOME, ".claude", "projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{session}.jsonl")
+        p = os.path.join(cfg, "projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{session}.jsonl")
         if os.path.isfile(p):
             return p
-    found = glob.glob(os.path.join(HOME, ".claude", "projects", "*", f"{session}.jsonl"))
+    found = glob.glob(os.path.join(cfg, "projects", "*", f"{session}.jsonl"))
     if found:
         return found[0]
     # A new conversation (just after /clear) has no file until its first message:
     # its path still says which one it is.
-    return os.path.join(HOME, ".claude", "projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{session}.jsonl") if cwd else None
+    return os.path.join(cfg, "projects", re.sub(r"[^A-Za-z0-9]", "-", cwd), f"{session}.jsonl") if cwd else None
 
 
 def seconds(ts):
@@ -104,7 +107,7 @@ def read(path):
             break
         if not raw.strip():
             continue
-        if ultra is None and b"Ultracode o" in raw and b'"content":"<local-command-stdout>' in raw:
+        if ultra is None and b"Ultracode o" in raw and b"<local-command-stdout>" in raw:
             # Only /effort's own output counts: a user entry whose content is
             # the command's stdout as a plain string. The same words inside a
             # tool result (a file that quotes it) or assistant text don't.
@@ -117,7 +120,7 @@ def read(path):
                 hit = re.findall(r"Ultracode o(n|ff)", text)
                 if hit:
                     ultra = hit[-1] == "n"
-        if (reply is None and b'"type":"assistant"' in raw) or (request is None and b'"type":"api-request"' in raw):
+        if (reply is None and b'"assistant"' in raw and b'"type"' in raw) or (request is None and b'"api-request"' in raw and b'"type"' in raw):
             try:
                 j = json.loads(raw)
             except Exception:
@@ -131,7 +134,9 @@ def read(path):
     mid = params.get("model") or ((reply or {}).get("message") or {}).get("model")
     info["id"] = mid
     info["model"] = model_name(mid)
-    effort = (params.get("output_config") or {}).get("effort") or (params.get("effort") or {}).get("effort")
+    out_cfg = params.get("output_config")
+    eff_obj = params.get("effort")
+    effort = (out_cfg.get("effort") if isinstance(out_cfg, dict) else None) or (eff_obj.get("effort") if isinstance(eff_obj, dict) else eff_obj)
     info["effort"] = effort if isinstance(effort, str) else None
     if reply:
         u = reply["message"]["usage"]
@@ -148,9 +153,11 @@ def read(path):
 def main():
     os.makedirs(OUT, exist_ok=True)
     found = {}
-    for f in glob.glob(os.path.join(HOME, ".claude", "sessions", "*.json")):
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(HOME, ".claude")
+    for f in glob.glob(os.path.join(cfg, "sessions", "*.json")):
         try:
-            s = json.load(open(f))
+            with open(f, encoding="utf-8") as fh:
+                s = json.load(fh)
             pid = int(s.get("pid"))
         except Exception:
             continue
@@ -171,21 +178,23 @@ def main():
         dest = os.path.join(OUT, f"{term}.json")
         text = json.dumps(info, separators=(",", ":"))
         try:
-            if open(dest).read() == text:
-                continue
+            with open(dest, encoding="utf-8") as fh:
+                if fh.read() == text:
+                    continue
         except OSError:
             pass
-        tmp = dest + ".tmp"
-        with open(tmp, "w") as f:
+        tmp = f"{dest}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             f.write(text)
         os.replace(tmp, dest)
     # Terminals no Claude Code runs in any more: their file goes (only this
     # script's: Antigravity's status line keeps its own here too).
     for dest in glob.glob(os.path.join(OUT, "*.json")):
-        if os.path.basename(dest)[:-5] in found or time.time() - os.path.getmtime(dest) <= 60:
-            continue
         try:
-            mine = "/.claude/projects/" in (json.load(open(dest)).get("transcript") or "").replace(os.sep, "/")
+            if os.path.basename(dest)[:-5] in found or time.time() - os.path.getmtime(dest) <= 60:
+                continue
+            with open(dest, encoding="utf-8") as fh:
+                mine = "/.claude/projects/" in (json.load(fh).get("transcript") or "").replace(os.sep, "/")
         except Exception:
             mine = False
         if mine:
@@ -196,4 +205,5 @@ def main():
     json.dump(found, sys.stdout, separators=(",", ":"))
 
 
-main()
+if __name__ == "__main__":
+    main()

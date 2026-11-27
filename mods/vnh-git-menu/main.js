@@ -11,20 +11,21 @@ import { v_flex, h_flex, InputState, Input, ScrollHandle } from "gpui-base";
 import { theme, props, closeOverlay, exec, run, notify, shared, setShared } from "herdr";
 
 const ICON = (name) => `mods/vnh-git-menu/${name}.svg`;
+const SEC = "@@{sec}:";
 const READ_SCRIPT = [
-  'cd "$1" || exit 2',
-  'echo "@@head"; git symbolic-ref -q --short HEAD || git rev-parse --short HEAD',
-  'echo "@@up"; git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null',
-  'echo "@@counts"; git rev-list --left-right --count "HEAD...@{u}" 2>/dev/null',
-  "echo \"@@local\"; git for-each-ref --sort=-committerdate --format='%(refname:short)%09%(upstream:short)' refs/heads",
-  "echo \"@@remote\"; git for-each-ref --sort=-committerdate --format='%(refname:short)' refs/remotes",
+  'cd -- "$1" || exit 2',
+  `echo "${SEC}head"; git symbolic-ref -q --short HEAD || git rev-parse --short HEAD`,
+  `echo "${SEC}up"; git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null`,
+  `echo "${SEC}counts"; git rev-list --left-right --count "HEAD...@{u}" 2>/dev/null`,
+  `echo "${SEC}local"; git for-each-ref --sort=-committerdate --format='%(refname:short)%09%(upstream:short)' refs/heads`,
+  `echo "${SEC}remote"; git for-each-ref --sort=-committerdate --format='%(refname:short)' refs/remotes`,
 ].join("\n");
 
 function sections(text) {
   const out = {};
   let key = null;
   for (const line of text.split("\n")) {
-    if (line.startsWith("@@")) { key = line.slice(2); out[key] = []; continue; }
+    if (line.startsWith(SEC)) { key = line.slice(SEC.length); out[key] = []; continue; }
     if (key && line.trim()) out[key].push(line);
   }
   return out;
@@ -175,7 +176,7 @@ export default class GitMenu extends View {
       if (this.mode === "branch") this.act("Creating branch", ["switch", "-c", v], `On the new branch ${v}`);
       else if (this.mode === "from") this.act("Creating branch", ["switch", "-c", v, this.target.name], `On the new branch ${v}, from ${this.target.name}`);
       else if (this.mode === "rename") { if (v !== this.target.name) this.act("Renaming", ["branch", "-m", this.target.name, v], `Renamed ${this.target.name} to ${v}`); else this.close(); }
-      else this.act("Checking out", ["checkout", v], `Checked out ${v}`);
+      else this.act("Checking out", ["checkout", v, "--"], `Checked out ${v}`);
       return;
     }
     const item = this.items().filter((x) => x.select)[this.at];

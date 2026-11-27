@@ -54,20 +54,24 @@ UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-
 
 def argv_of(pid):
     if sys.platform == "darwin":
-        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-        mib = (ctypes.c_int * 3)(1, 49, int(pid))  # CTL_KERN, KERN_PROCARGS2
-        size = ctypes.c_size_t(0)
-        if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0: return None
-        buf = ctypes.create_string_buffer(size.value)
-        if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0: return None
-        raw = buf.raw[:size.value]
-        argc = struct.unpack("i", raw[:4])[0]
-        rest = raw[4:]
-        i = rest.index(b"\0")
-        while i < len(rest) and rest[i] == 0: i += 1
-        return [p.decode("utf-8", "replace") for p in rest[i:].split(b"\0")[:argc]]
+        try:
+            libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+            mib = (ctypes.c_int * 3)(1, 49, int(pid))  # CTL_KERN, KERN_PROCARGS2
+            size = ctypes.c_size_t(0)
+            if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0 or size.value < 5: return None
+            buf = ctypes.create_string_buffer(size.value)
+            if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0: return None
+            raw = buf.raw[:size.value]
+            argc = struct.unpack("i", raw[:4])[0]
+            rest = raw[4:]
+            i = rest.index(b"\0")
+            while i < len(rest) and rest[i] == 0: i += 1
+            return [p.decode("utf-8", "replace") for p in rest[i:].split(b"\0")[:argc]]
+        except Exception:
+            return None
     try:
-        return open(f"/proc/{pid}/cmdline", "rb").read().decode("utf-8", "replace").split("\0")[:-1]
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return fh.read().decode("utf-8", "replace").split("\0")[:-1]
     except Exception:
         return None
 
@@ -82,7 +86,9 @@ def session_of(kind, pid):
     """The conversation the process has open, from what the agent itself keeps, or None."""
     try:
         if kind == "claude":
-            return json.load(open(f"{HOME}/.claude/sessions/{pid}.json")).get("sessionId")
+            cfg = os.environ.get("CLAUDE_CONFIG_DIR") or f"{HOME}/.claude"
+            with open(f"{cfg}/sessions/{pid}.json", encoding="utf-8") as fh:
+                return json.load(fh).get("sessionId")
         files = open_files(pid)
         if kind == "codex":
             for f in files:
@@ -92,7 +98,12 @@ def session_of(kind, pid):
             conv = f"{HOME}/.gemini/antigravity-cli/conversations"
             for f in files:
                 if re.search(r"antigravity-cli/log/cli-.*\.log$", f):
-                    count = collections.Counter(UUID.findall(open(f, errors="replace").read()))
+                    with open(f, "rb") as fh:
+                        fh.seek(0, 2)
+                        sz = fh.tell()
+                        fh.seek(max(0, sz - 262144))
+                        tail = fh.read().decode("utf-8", "replace")
+                    count = collections.Counter(UUID.findall(tail))
                     for cid, _ in count.most_common(5):
                         if os.path.exists(f"{conv}/{cid}.db"): return cid
     except Exception:
@@ -162,6 +173,7 @@ const patch = (id, fields) => save(sleepers().map((r) => (r.id === id ? { ...r, 
 
 /** What the agent in a terminal wrote for the status bar: { provider, session, title, ... }, or null. */
 export async function statusOf(terminal) {
+  if (!/^[A-Za-z0-9._-]+$/.test(String(terminal ?? ""))) return null;
   try { return JSON.parse((await readTextFile(`${home()}/.cache/herdr-status/${terminal}.json`)) ?? "null"); } catch { return null; }
 }
 
@@ -184,11 +196,11 @@ async function agentLeft(address) {
     return SHELLS.test(j.foreground?.name ?? "");
   } catch { return false; }
 }
-const sleep = (ms) => exec("sleep", [String(ms / 1000)]).catch(() => null);
+const sleep = (ms, cx) => (cx?.timer ? new Promise((ok) => cx.timer.after(ms, () => ok(null))) : exec("sleep", [String(ms / 1000)]).catch(() => null));
 const paneOf = (terminal) => panes().find((p) => p.terminal === terminal)?.pane ?? null;
 const paneExists = (pane) => Boolean(pane) && panes().some((p) => p.pane === pane);
-async function until(fn, ms = 3000, step = 60) {
-  for (let t = 0; t < ms; t += step) { const v = fn(); if (v) return v; await sleep(step); }
+async function until(fn, ms = 3000, step = 60, cx = null) {
+  for (let t = 0; t < ms; t += step) { const v = fn(); if (v) return v; await sleep(step, cx); }
   return fn() || null;
 }
 /** The terminal's screen as text for the cover: no trailing blank lines, long lines cut. */
@@ -230,12 +242,12 @@ export function repairSpaces() {
 }
 
 /** Puts the cover where the terminal's pane is and parks the terminal. false: left as it was (the terminal stays at its shell). */
-async function coverUp(rec) {
+async function coverUp(rec, cx) {
   const P = paneOf(rec.terminal);
   if (!P) return false;
   const before = new Set(panes().map((p) => p.pane));
   run("pane.split", { pane: P, direction: "right", mod: "vnh-cover", props: { id: rec.id } });
-  const C = await until(() => panes().find((p) => !before.has(p.pane) && p.mod === "vnh-cover")?.pane ?? null);
+  const C = await until(() => panes().find((p) => !before.has(p.pane) && p.mod === "vnh-cover")?.pane ?? null, 3000, 60, cx);
   if (!C) return false;
   const pin = pinSpace(rec.space);
   run("pane.swap", { pane: C, target: P });
@@ -244,19 +256,19 @@ async function coverUp(rec) {
   return true;
 }
 /** Takes the cover away: the parked terminal comes back into its slot (Herdr adopts a terminal that carries its tab's labels). -> its pane, or null. */
-async function uncover(rec) {
+async function uncover(rec, cx) {
   if (!rec.cover || !paneExists(rec.cover)) return null;
   const tab = panes().find((p) => p.pane === rec.cover)?.tab ?? rec.tab;
   await hc(["label", rec.terminal, `herdr.space=${rec.space}`, `herdr.tab=${tab}`]).catch(() => null);
-  const np = await until(() => paneOf(rec.terminal));
+  const np = await until(() => paneOf(rec.terminal), 3000, 60, cx);
   if (!np) return null;
   run("pane.swap", { pane: np, target: rec.cover });
   run("pane.close", { pane: rec.cover });
   return np;
 }
 /** Drops a sleeper without waking it (the x in the list): the cover goes, the terminal comes back at its shell. */
-export async function dismiss(rec) {
-  const np = await uncover(rec);
+export async function dismiss(rec, cx = null) {
+  const np = await uncover(rec, cx);
   if (!np && rec.cover && paneExists(rec.cover)) run("pane.close", { pane: rec.cover });
   forget(rec.id);
   unpinSpace(rec);
@@ -276,7 +288,7 @@ async function hasConversation(provider, session) {
 
 /** Puts the agent of terminal `a.address` to sleep. -> { ok, why? }. Nothing is killed: the agent is asked to exit and,
  *  if it doesn't within 10 s, left running (the record is dropped again). */
-export async function sleepAgent(a, label, dry = false) {
+export async function sleepAgent(a, label, dry = false, cx = null) {
   const st = await statusOf(a.address);
   // The flags it was started with come back at wake: if they can't be read, it isn't put to sleep.
   const probe = await launchArgv(a.address);
@@ -296,63 +308,70 @@ export async function sleepAgent(a, label, dry = false) {
   rec.screen = await screenOf(a.address);
   save([rec, ...sleepers().filter((r) => r.id !== id)]);
   // The cover goes up at once; the agent exits behind it (the terminal is only hidden, `hc send` still reaches it).
-  const covered = await coverUp(rec).catch(() => false);
+  const covered = await coverUp(rec, cx).catch(() => false);
   await hc(["send", a.address, "/exit"]).catch(() => null);
   for (let i = 0; i < 40; i++) {
     if (await agentLeft(a.address)) return { ok: true };
-    await sleep(250);
+    await sleep(250, cx);
   }
   // It didn't exit: the cover comes off, the terminal is as it was.
-  const fresh = sleepers().find((r) => r.id === id) ?? rec;
-  if (covered) await dismiss(fresh); else { forget(id); unpinSpace(fresh); }
+  const freshRec = sleepers().find((r) => r.id === id) ?? rec;
+  if (covered) await dismiss(freshRec, cx); else { forget(id); unpinSpace(freshRec); }
   return { ok: false, why: "it didn't exit (it may be asking something)" };
 }
 
+const waking = new Set();
+
 /** Wakes a sleeping session: its resume command goes into the terminal it left (still a shell at a prompt), else a new tab of its space. */
-export async function wake(rec) {
-  const t = terminals().find((x) => x.address === rec.terminal);
-  const command = RESUME[rec.agent](rec.bin || rec.agent, rec.session, rec.flags ?? []).map((x, i) => (i === 0 ? x : shq(x))).join(" ");
-  // Under a cover: the terminal comes back into the slot first, then it resumes.
-  if (rec.cover) {
-    // The agent starts first, in the terminal that is still hidden; the cover stays up (it says "Waking…") until the agent
-    // has reported itself, and only then does the terminal take the slot: the plain shell is never on screen.
-    patch(rec.id, { waking: true });
+export async function wake(rec, cx = null) {
+  if (!rec || waking.has(rec.id)) return;
+  waking.add(rec.id);
+  try {
+    const argv = RESUME[rec.agent](rec.bin || rec.agent, rec.session, (rec.flags ?? []).filter((f) => !/[\r\n]/.test(String(f))));
+    const command = argv.map(shq).join(" ");
+    // Under a live cover: start the agent in the parked terminal first, then swap it into the cover's slot.
+    if (rec.cover && paneExists(rec.cover)) {
+      patch(rec.id, { waking: true });
+      wokeAt.set(rec.terminal, Date.now());
+      woke.push({ terminal: rec.terminal, space: rec.space, at: Date.now() });
+      await hc(["send", rec.terminal, command]).catch(() => null);
+      for (let i = 0; i < 100; i++) { if (await agentUp(rec.terminal)) break; await sleep(150, cx); }
+      const inCover = focused()?.pane === rec.cover;
+      const np = await uncover(rec, cx);
+      if (np) {
+        forget(rec.id); unpinSpace(rec);
+        if (inCover) run("pane.focus", { pane: np }); else fresh.add(rec.terminal);
+        return;
+      }
+      const curTerm = terminals().find((x) => x.address === rec.terminal);
+      if (curTerm && curTerm.state === "live") run("terminal.kill", { terminal: rec.terminal });
+      if (paneExists(rec.cover)) run("pane.close", { pane: rec.cover });
+      unpinSpace(rec);
+    } else if (rec.cover) {
+      unpinSpace(rec);
+    }
+    forget(rec.id);
+    const t = terminals().find((x) => x.address === rec.terminal);
     wokeAt.set(rec.terminal, Date.now());
-    woke.push({ terminal: rec.terminal, space: rec.space, at: Date.now() });
-    await hc(["send", rec.terminal, command]).catch(() => null);
-    for (let i = 0; i < 100; i++) { if (await agentUp(rec.terminal)) break; await sleep(150); }
-    // Waking it doesn't take you to it: only if you were in the cover itself (you clicked it) does the agent get the keyboard.
-    const inCover = focused()?.pane === rec.cover;
-    const np = await uncover(rec);
-    if (np) {
-      forget(rec.id); unpinSpace(rec);
-      if (inCover) run("pane.focus", { pane: np }); else fresh.add(rec.terminal);
+    const reuse = Boolean(t && t.state === "live" && !t.program?.agent && t.program?.shell && rec.pane);
+    woke.push({ terminal: reuse ? rec.terminal : null, space: rec.space, at: Date.now() });
+    if (reuse) {
+      await hc(["send", rec.terminal, command]).catch(() => null);
       return;
     }
-    // The cover or the terminal is gone: nothing to put back; a terminal still parked is let go, and a tab opens.
-    if (t && t.state === "live") run("terminal.kill", { terminal: rec.terminal });
-    if (paneExists(rec.cover)) run("pane.close", { pane: rec.cover });
-    unpinSpace(rec);
+    const sp = spaces().find((s) => s.id === rec.space) ?? spaces().find((s) => s.active);
+    run("tab.new", { space: sp?.id, focus: false, folder: rec.cwd ?? undefined, name: (rec.title || NAME[rec.agent]).slice(0, 40), argv: ["sh", "-lc", 'exec "$@"', "wake", ...argv] });
+    notify({ title: "Woke in a new tab", body: rec.title || NAME[rec.agent], level: "info", timeout: 3000 });
+  } finally {
+    waking.delete(rec.id);
   }
-  forget(rec.id);
-  wokeAt.set(rec.terminal, Date.now());
-  woke.push({ terminal: t && t.state === "live" && !t.program?.agent && t.program?.shell && rec.pane ? rec.terminal : null, space: rec.space, at: Date.now() });
-  if (t && t.state === "live" && !t.program?.agent && t.program?.shell && rec.pane) {
-    await hc(["send", rec.terminal, command]).catch(() => null);
-    return;
-  }
-  const sp = spaces().find((s) => s.id === rec.space) ?? spaces().find((s) => s.active);
-  run("tab.new", { space: sp?.id, focus: false, folder: rec.cwd ?? undefined, name: (rec.title || NAME[rec.agent]).slice(0, 40), argv: ["sh", "-lc", `exec ${command}`] });
-  notify({ title: "Woke in a new tab", body: rec.title || NAME[rec.agent], level: "info", timeout: 3000 });
 }
 
-/** Drops sleepers that are running again somewhere else (resumed by hand): an agent's status file names the same session
- *  in another terminal. The sleeper's own terminal doesn't count: that is a wake in progress. */
-export async function prune(liveAddresses) {
-  const list = sleepers();
-  if (!list.length) return;
+/** Drops sleepers that are running again somewhere else (resumed by hand), closing any orphaned cover and parked terminal. */
+export async function prune(liveAddresses, cx = null) {
+  if (!sleepers().length) return;
   const running = new Map();
   for (const address of liveAddresses) { const st = await statusOf(address); if (st?.provider && st.session) running.set(`${st.provider}:${st.session}`, address); }
-  const keep = list.filter((r) => r.waking || !running.has(r.id) || running.get(r.id) === r.terminal);
-  if (keep.length !== list.length) save(keep);
+  const stale = sleepers().filter((r) => !r.waking && !waking.has(r.id) && running.has(r.id) && running.get(r.id) !== r.terminal);
+  for (const r of stale) await dismiss(r, cx);
 }

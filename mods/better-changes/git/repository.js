@@ -80,7 +80,7 @@ export const gitMethods = {
     cx.spawn(async (cx) => {
       try {
         await this.readRepository(cwd, on, context, cx);
-        await this.readStashes(on, context);
+        if (this.mode === "sidebar") await this.readStashes(on, context);
       } catch (error) {
         if (this.isCurrent(context)) this.error = error.message;
       } finally {
@@ -103,7 +103,10 @@ export const gitMethods = {
     this.selection = null;
     this.error = null;
     this.note = null;
+    this.watchHandle?.cancel?.();
+    this.watchHandle = null;
     this.watched = null;
+    this.rowCap = {};
     this.resetCommits();
     this.resetPulls?.();
     this.sessionSet = null; this.sessionKey = "";
@@ -170,15 +173,20 @@ export const gitMethods = {
   // Remote repositories rely on the poll: watchFolder is local only.
   watch(root, cx) {
     if (this.on || this.watched === root) return;
+    this.watchHandle?.cancel?.();
     this.watched = root;
     cx.spawn(async (cx) => {
       try {
         while (this.watched === root) {
-          await watchFolder(root);
-          if (this.watched === root) this.refresh(cx);
+          const pending = watchFolder(root);
+          this.watchHandle = pending;
+          await pending;
+          if (this.watched === root && this.watchHandle === pending) this.refresh(cx);
         }
       } catch {
         if (this.watched === root) this.watched = null;
+      } finally {
+        if (this.watched !== root) this.watchHandle?.cancel?.();
       }
     });
   },
@@ -221,7 +229,22 @@ export const gitMethods = {
 
   indexAction(action, path, cx) {
     if (!this.root || this.busy || this.contextKey() !== this.context) return;
-    const commands = path ? [this.indexArgs(action, path)] : this.bulkIndexCommands(action);
+    let commands;
+    if (Array.isArray(path)) {
+      if (!path.length) return;
+      const stage = action === "stage";
+      commands = [];
+      for (let i = 0; i < path.length; i += BULK_PATHS) {
+        const chunk = path.slice(i, i + BULK_PATHS);
+        commands.push(
+          stage ? ["--literal-pathspecs", "add", "--", ...chunk]
+            : this.hasHead ? ["--literal-pathspecs", "reset", "-q", "HEAD", "--", ...chunk]
+            : ["--literal-pathspecs", "rm", "--cached", "-r", "-f", "--", ...chunk],
+        );
+      }
+    } else {
+      commands = path ? [this.indexArgs(action, path)] : this.bulkIndexCommands(action);
+    }
     const root = this.root;
     const on = this.on;
     this.busy = true;
@@ -441,7 +464,7 @@ export const gitMethods = {
     if (!this.isCurrent(context)) return;
     this.stashes = r.code !== 0 ? [] : r.stdout.split("\n").filter(Boolean).map((l) => {
       const [ref, message, at] = l.split("\0");
-      return { ref, message: (message ?? "").replace(/^(WIP on|On) [^:]+: /, ""), full: message ?? "", at: Number(at) * 1000 };
+      return { ref, message: (message ?? "").replace(/^(WIP on|On) [^:]+: /, ""), full: message ?? "", at: Number(at) };
     });
   },
 

@@ -135,7 +135,8 @@ export async function untracked(exec, top) {
  * @returns {Promise<{ path: string, i: number, stamp: string, size: number }[]>}
  */
 async function stamps(exec, top, paths) {
-  const stats = await exec("sh", ["-c", "for f; do s=$(stat -c '%s %.9Y' \"$f\" 2>/dev/null || stat -f '%z %Fm' \"$f\" 2>/dev/null) || s=-1; echo \"${s:--1}\"; done", "sh", ...paths], { cwd: top });
+  const script = 'if stat -c "%s" /dev/null >/dev/null 2>&1; then for f; do s=$(stat -c "%s %.9Y" -- "$f" 2>/dev/null) || s=-1; echo "${s:--1}"; done; else for f; do s=$(stat -f "%z %Fm" -- "$f" 2>/dev/null) || s=-1; echo "${s:--1}"; done; fi';
+  const stats = await exec("sh", ["-c", script, "sh", ...paths], { cwd: top });
   const lines = (stats.stdout ?? "").split("\n");
   return paths.map((path, i) => {
     const stamp = (lines[i] ?? "-1").trim();
@@ -185,7 +186,7 @@ export async function snapshotTree(exec, top, { index, objects }) {
  * list grows with the number of new files, and no process runs per file.
  */
 async function largeUntracked(exec, top) {
-  const script = `git ${READ.join(" ")} ls-files --others --exclude-standard -z | xargs -0 sh -c '[ $# -gt 0 ] && find "$@" -prune -type f -size +${MAX_UNTRACKED_BYTES}c' sh; exit 0`;
+  const script = `git ${READ.join(" ")} ls-files --others --exclude-standard -z | xargs -0 sh -c '[ $# -gt 0 ] || exit 0; n=$#; while [ "$n" -gt 0 ]; do set -- "$@" "./$1"; shift; n=$((n-1)); done; find "$@" -prune -type f -size +${MAX_UNTRACKED_BYTES}c | sed "s|^\\./||"' sh; exit 0`;
   const r = await exec("sh", ["-c", script], { cwd: top });
   return (r.stdout ?? "").split("\n").filter(Boolean);
 }

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"$HOME/.config/herdr-app/mods/walkthrough/hooks/turn.sh\" start",
+            "command": "f=\"${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/walkthrough/hooks/turn.sh\"; [ -f \"$f\" ] && sh \"$f\" start || true",
             "timeout": 30
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"$HOME/.config/herdr-app/mods/walkthrough/hooks/turn.sh\" stop",
+            "command": "f=\"${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/walkthrough/hooks/turn.sh\"; [ -f \"$f\" ] && sh \"$f\" stop || true",
             "timeout": 30
           }
         ]

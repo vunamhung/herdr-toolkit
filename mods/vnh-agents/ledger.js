@@ -7,9 +7,10 @@ import { exec, home, panes } from "herdr";
 import { statusOf } from "./sleep.js";
 
 const DIR = () => `${home()}/.local/state/herdr-ledger`;
-const SCRIPT = 'd="$1"; mkdir -p "$d"; printf "%s\\n" "$2" >> "$d/runs.jsonl"; n=$(wc -l < "$d/runs.jsonl"); [ "$n" -gt 6000 ] && { tail -n 3000 "$d/runs.jsonl" > "$d/runs.tmp" && mv "$d/runs.tmp" "$d/runs.jsonl"; }; true';
+const SCRIPT = 'd="$1"; mkdir -p "$d"; printf "%s\\n" "$2" >> "$d/runs.jsonl"; n=$(wc -l < "$d/runs.jsonl"); if [ "$n" -gt 6000 ]; then tmp="$d/runs.tmp.$$"; tail -n 3000 "$d/runs.jsonl" > "$tmp" && mv -f "$tmp" "$d/runs.jsonl" || rm -f "$tmp"; fi; true';
 let queue = Promise.resolve();
-const write = (rec) => { queue = queue.then(() => exec("sh", ["-c", SCRIPT, "x", DIR(), JSON.stringify(rec)], { timeout: 8000 })).catch(() => null); };
+const enqueue = (fn) => { queue = queue.then(fn).catch(() => null); };
+const writeRec = (rec) => exec("sh", ["-c", SCRIPT, "x", DIR(), JSON.stringify(rec)], { timeout: 8000 });
 
 const open = new Map(); // terminal -> { sid } of a run that was started and not stopped
 let booted = false;
@@ -17,20 +18,22 @@ let booted = false;
 /** Called with the agents list on every poll: logs the moment an agent starts or stops working (any provider). */
 export function trackRuns(list) {
   const now = Date.now();
-  if (!booted) { booted = true; write({ t: now, ev: "boot" }); }
+  if (!booted) { booted = true; enqueue(() => writeRec({ t: now, ev: "boot" })); }
   const live = new Set();
+  let paneCwd = null;
   for (const a of list) {
     live.add(a.address);
     const working = a.status === "working";
     if (working && !open.has(a.address)) {
       const rec = { sid: null };
       open.set(a.address, rec);
-      const cwd = panes().find((p) => p.terminal === a.address)?.cwd ?? "";
-      queue = queue.then(async () => {
+      paneCwd ??= new Map(panes().map((p) => [p.terminal, p.cwd ?? ""]));
+      const cwd = paneCwd.get(a.address) ?? "";
+      enqueue(async () => {
         const st = await statusOf(a.address);
         rec.sid = st?.session ?? null;
-        write({ t: now, ev: "start", term: a.address, sid: rec.sid, cwd, prov: st?.provider ?? null });
-      }).catch(() => null);
+        await writeRec({ t: now, ev: "start", term: a.address, sid: rec.sid, cwd, prov: st?.provider ?? null });
+      });
     } else if (!working && open.has(a.address)) stop(a.address, now);
   }
   for (const address of [...open.keys()]) if (!live.has(address)) stop(address, now); // the terminal is gone
@@ -39,8 +42,8 @@ export function trackRuns(list) {
 function stop(address, t) {
   const rec = open.get(address);
   open.delete(address);
-  queue = queue.then(async () => {
+  enqueue(async () => {
     const st = await statusOf(address); // the session id may only have appeared during the turn (a new conversation)
-    write({ t, ev: "stop", term: address, sid: st?.session ?? rec.sid ?? null });
-  }).catch(() => null);
+    await writeRec({ t, ev: "stop", term: address, sid: st?.session ?? rec.sid ?? null });
+  });
 }

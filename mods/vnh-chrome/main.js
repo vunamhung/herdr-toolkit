@@ -1,7 +1,7 @@
 // Derived from Herdr's `workspace-chrome` 0.1.16 (Apache-2.0, Herdr, https://github.com/ogulcancelik/herdr); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
-import { View, div, image, svg } from "gpui-kit";
-import { h_flex, v_flex } from "gpui-base";
-import { theme, run, props, window, shared, setShared, updates, layout, spaces, panes, focused, exec, readTextFile, openOverlay, checking } from "herdr";
+import { View, div, svg } from "gpui-kit";
+import { h_flex } from "gpui-base";
+import { theme, run, window, shared, setShared, layout, spaces, panes, focused, exec, openOverlay, checking } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -55,7 +55,7 @@ const BRANCH_SCRIPT = 'top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) 
 export default class WorkspaceChrome extends View {
   init(_props, cx) {
     this.repo = null; // { key, root, on, space, branch }
-    if (checking() || props()?.footer) return;
+    if (checking()) return;
     this.loadBranch(cx);
     // Follow focus quickly; re-read every 10 s while the window is active, and at once after a git
     // action from the branch popup (shared "vnh.git.changed").
@@ -78,10 +78,14 @@ export default class WorkspaceChrome extends View {
           if (root) repo = { root, on: target.on, space: target.space, branch: branch || "HEAD" };
         }
       } finally {
-        this.loadedKey = key;
-        this.loadedAt = Date.now();
         this.loading = false;
-        if (JSON.stringify(repo) !== JSON.stringify(this.repo)) { this.repo = repo; cx.notify(); }
+        const nowTarget = runTarget();
+        const nowKey = nowTarget ? `${nowTarget.on ?? ""}:${nowTarget.cwd}` : null;
+        if (nowKey === key) {
+          this.loadedKey = key;
+          this.loadedAt = Date.now();
+          if (JSON.stringify(repo) !== JSON.stringify(this.repo)) { this.repo = repo; cx.notify(); }
+        }
       }
     });
   }
@@ -112,19 +116,6 @@ export default class WorkspaceChrome extends View {
   render() {
     const t = theme();
     const collapsed = narrow();
-    if (props()?.footer) {
-      const row = (id, icon, label, dim, action) => h_flex().id(id).h(28).px(8).gap(9).items_center().rounded(8)
-        .when(collapsed, el => el.relative().w(32).px(0).justify_center().tooltip(label))
-        .text_color(dim ? t.dim : t.muted).hover(s => s.bg(t.hover).text_color(t.foreground)).cursor_pointer()
-        .on_click(action).child(svg(`mods/vnh-chrome/${icon}.svg`).size(14))
-        .when(!collapsed, el => el.child(label));
-      const ready = div().size(6).rounded_full().bg(t.accent);
-      return v_flex().size_full().bg(t.chrome).border_t(1).border_color(t.border).px(8).pt(4).pb(8).text_size(13)
-        .when(collapsed, el => el.px(0).items_center())
-        .child(row("settings", "settings", "Settings", false, () => run("app.settings"))
-          .when(Boolean(updates().app.ready), el => el.child(collapsed ? ready.absolute().top(5).right(6) : ready)))
-        .child(row("machine", "plus", "Add machine", true, () => run("mod.open", { name: "machine-add" })));
-    }
     return h_flex().size_full().bg(t.chrome).pl(collapsed ? 6 : 14).pr(10).gap(4).items_center().text_size(13.5)
       .when(window()?.platform === "macos" && !window()?.fullscreen && !collapsed, el => el.pl(76))
       // VNH: the branch button replaces the logo, search (⌘P) and the sidebar toggle (⌘B).

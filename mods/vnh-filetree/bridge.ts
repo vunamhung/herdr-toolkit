@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-// Claude Code hook -> herdr filetree mod. Appends one JSON line per file activity to
+// Claude Code hook -> herdr vnh-filetree mod. Appends one JSON line per file activity to
 // ~/.local/state/herdr-filetree/activity.jsonl; the mod watches that folder.
 // Command parsing is a trimmed port of claude-code-filetree's hooks/git.ts (MIT, Kurt Buhler).
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { spawnSync } from "child_process";
 
 const HOME = process.env.HOME ?? "";
@@ -124,8 +124,12 @@ function resolve(cwd: string, p: string): string {
   return parts.join("/") || "/";
 }
 
+function stripQuoted(command: string): string {
+  return command.replace(/'[^']*'|"([^"\\]|\\.)*"/g, " ");
+}
+
 function readOnly(command: string): boolean {
-  const bare = ` ${command}`.replace(/\d*>&\d/g, " ").replace(/(\d*|&)>>?\s*\/dev\/null/g, " ");
+  const bare = ` ${stripQuoted(command)}`.replace(/\d*>&\d/g, " ").replace(/(\d*|&)>>?\s*\/dev\/null/g, " ");
   if (/[^>]>[^>&]|>>/.test(bare)) return false;
   return segments(command).every(raw => {
     const tokens = stripGlobals(raw), head = tokens[0]?.split("/").pop() ?? "";
@@ -138,14 +142,14 @@ function readOnly(command: string): boolean {
 }
 
 function readTargets(command: string, start: string, stdout: string): string[] {
-  let cwd = start, listsPaths = false;
+  let cwd = start, listCwd: string | null = null;
   const out = new Set<string>();
   for (const raw of segments(command)) {
     const tokens = stripGlobals(raw).map(t => t.replace(/^["']|["']$/g, ""));
     const head = tokens[0]?.split("/").pop() ?? "";
     if (head === "cd" && tokens[1]) { cwd = resolve(cwd, tokens[1]); continue; }
     if (!READERS.has(head) || (head === "sed" && tokens.some(t => /^-i/.test(t)))) continue;
-    if (OUTPUT_PATHS.has(head)) listsPaths = true;
+    if (OUTPUT_PATHS.has(head)) listCwd = cwd;
     const args = tokens.slice(1);
     let skipPattern = PATTERN_FIRST.has(head) && !args.some(t => t === "-e" || t === "-f" || t === "--files");
     for (let i = 0; i < args.length; i++) {
@@ -156,15 +160,15 @@ function readTargets(command: string, start: string, stdout: string): string[] {
       out.add(resolve(cwd, a));
     }
   }
-  if (listsPaths) for (const line of stdout.split("\n").slice(0, 400)) {
+  if (listCwd) for (const line of stdout.split("\n").slice(0, 400)) {
     const path = line.match(/^([^:\0]+?)(?::\d+[:-]|$|:)/)?.[1]?.trim();
-    if (path && !path.includes(" ")) out.add(resolve(cwd, path));
+    if (path && !path.includes(" ")) out.add(resolve(listCwd, path));
   }
   return [...out].slice(0, 60);
 }
 
 function git(cwd: string, args: string[]): string {
-  const r = spawnSync("git", ["--no-optional-locks", ...args], { cwd, encoding: "utf8", timeout: 3000 });
+  const r = spawnSync("git", ["--no-optional-locks", "-c", "core.quotePath=false", ...args], { cwd, encoding: "utf8", timeout: 3000 });
   return r.status === 0 ? r.stdout.trim() : "";
 }
 
@@ -173,7 +177,11 @@ function emit(events: Record<string, unknown>[]) {
   mkdirSync(DIR, { recursive: true });
   appendFileSync(FILE, events.map(e => JSON.stringify(e)).join("\n") + "\n");
   try {
-    if (statSync(FILE).size > 256 * 1024) writeFileSync(FILE, readFileSync(FILE, "utf8").trimEnd().split("\n").slice(-KEEP).join("\n") + "\n");
+    if (statSync(FILE).size > 256 * 1024) {
+      const tmp = `${FILE}.${process.pid}.tmp`;
+      writeFileSync(tmp, readFileSync(FILE, "utf8").trimEnd().split("\n").slice(-KEEP).join("\n") + "\n");
+      renameSync(tmp, FILE);
+    }
   } catch {}
 }
 

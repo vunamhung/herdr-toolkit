@@ -33,7 +33,7 @@ backup() {
 # Our own mods, then the third-party ones this repo carries (each with its LICENSE; the ones we changed say so in
 # their first lines), so one clone is the whole UI. herdr-chat (chat, new-chat, chat-menu, chat-agents and its
 # host) is installed from vendor/herdr-chat below.
-MODS="claude-limits-status vnh-chrome vnh-tabs vnh-tabswitch vnh-prompts vnh-convo vnh-files vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-files-menu vnh-weather vnh-spaces vnh-sessions vnh-agents vnh-cover vnh-changes-menu vnh-filetree vnh-scripts vnh-timeline file-icons better-changes cloudflare-deploys insights filetree portal run walkthrough"
+MODS="claude-limits-status vnh-chrome vnh-tabs vnh-tabswitch vnh-prompts vnh-convo vnh-worktree-sync vnh-git-menu vnh-command vnh-markdown vnh-pane vnh-weather vnh-spaces vnh-sessions vnh-agents vnh-cover vnh-changes-menu vnh-filetree vnh-scripts vnh-timeline file-icons better-changes cloudflare-deploys insights portal run walkthrough"
 for mod in $MODS; do
   echo "mod: $mod"
   backup "$HERDR/mods/$mod"
@@ -42,8 +42,26 @@ for mod in $MODS; do
   # mod or you wrote there (config.json, runtime.json) and Herdr's generated typings.
   ( cd "$HERDR/mods/$mod" && find . -type f ! -name config.json ! -name runtime.json ! -name gpui-kit.d.ts ! -name jsconfig.json ! -name '*.error' ) |
     while IFS= read -r f; do [ -e "$ROOT/mods/$mod/$f" ] || { rm -f "$HERDR/mods/$mod/$f"; echo "  removed stale $f"; }; done
-  cp -R "$ROOT/mods/$mod/." "$HERDR/mods/$mod/"
+  # Copy tracked mod files only: never copy generated typings or overwrite an existing user config.json / runtime.json.
+  ( cd "$ROOT/mods/$mod" && find . -type f ! -name gpui-kit.d.ts ! -name jsconfig.json ! -name '*.error' ! -name .DS_Store ) |
+    while IFS= read -r f; do
+      case "$f" in ./config.json|./runtime.json) [ -e "$HERDR/mods/$mod/$f" ] && continue ;; esac
+      mkdir -p "$(dirname "$HERDR/mods/$mod/$f")"
+      cp "$ROOT/mods/$mod/$f" "$HERDR/mods/$mod/$f"
+    done
 done
+
+# Shared Python helpers used by multiple VNH mods (installed under $HERDR/lib).
+if [ -f "$ROOT/lib/sessions.py" ]; then
+  mkdir -p "$HERDR/lib"
+  cp "$ROOT/lib/sessions.py" "$HERDR/lib/sessions.py"
+  chmod +x "$HERDR/lib/sessions.py"
+fi
+# Backwards compatibility for existing Claude Code hooks that still reference mods/filetree/bridge.ts.
+if [ -f "$ROOT/mods/vnh-filetree/bridge.ts" ] && { [ -d "$HERDR/mods/filetree" ] || grep -q 'mods/filetree/bridge\.ts' "$HOME/.claude/settings.json" 2>/dev/null; }; then
+  mkdir -p "$HERDR/mods/filetree"
+  cp "$ROOT/mods/vnh-filetree/bridge.ts" "$HERDR/mods/filetree/bridge.ts"
+fi
 
 # herdr-chat, from the release archive in vendor/ (checked against its SHA256SUMS): the host, the chat mods, the
 # hc templates. Needs node 20+. Its installer wants the Herdr home to exist (start Herdr once).
@@ -55,9 +73,9 @@ fi
 
 # Overlays: files of herdr-chat's mods (made by its installer) and of Herdr's own app frame, which this repo
 # cannot ship whole, re-applied here because an update overwrites them. chat/: publishes its model for the
-# status bar. chat-agents/: the breathing working dot. frame/settings/: the read-only "Mods" tab. Re-run install after such an update.
+# status bar. frame/settings/: the read-only "Mods" tab. Re-run install after such an update.
 if [ -d "$ROOT/overlays" ]; then
-  echo "overlays: chat, chat-agents, Settings Mods tab"
+  echo "overlays: chat, Settings Mods tab"
   ( cd "$ROOT/overlays" && find . -type f ) | sed 's#^\./##' | while IFS= read -r rel; do
     # An overlay changes a mod or a frame that is already there (mods/walkthrough, frame/settings): on a
     # machine without it, copying the few changed files would leave a half mod behind.
@@ -133,14 +151,15 @@ if want --gestures; then
   # Signed by the certificate "VNH Local" when it exists (gestures/make-signing-cert.sh makes it once): the apps then keep their
   # Accessibility grant across rebuilds. Without it, ad hoc: macOS forgets the grant at every rebuild.
   SIGN="-"; security find-identity -v -p codesigning 2>/dev/null | grep -q '"VNH Local"' && SIGN="VNH Local"
+  HERDR_BIN="$(command -v herdr-app 2>/dev/null || echo "$HOME/.local/bin/herdr-app")"
   HAPP="$HOME/Applications/HerdrPad.app"
   mkdir -p "$HAPP/Contents/MacOS" "$HOME/Library/LaunchAgents"
-  clang -O2 -o "$HAPP/Contents/MacOS/herdr-pad" "$ROOT/gestures/HerdrPad.m" -framework Cocoa -framework ApplicationServices
+  clang -O2 -fobjc-arc -o "$HAPP/Contents/MacOS/herdr-pad" "$ROOT/gestures/HerdrPad.m" -framework Cocoa -framework ApplicationServices
   cp "$ROOT/gestures/Info-herdr-pad.plist" "$HAPP/Contents/Info.plist"
   codesign -f -s "$SIGN" --identifier dev.vnh.herdr-pad "$HAPP"
   PL="$HOME/Library/LaunchAgents/dev.vnh.herdr-pad.plist"
-  [ -f "$PL" ] && { launchctl bootout "gui/$(id -u)" "$PL" 2>/dev/null; backup "$PL"; }
-  sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.herdr-pad.plist" > "$PL"
+  if [ -f "$PL" ]; then launchctl bootout "gui/$(id -u)" "$PL" 2>/dev/null || true; backup "$PL"; fi
+  sed -e "s#HOME_DIR#$HOME#g" -e "s#HERDR_APP_BIN#$HERDR_BIN#g" "$ROOT/gestures/dev.vnh.herdr-pad.plist" > "$PL"
   launchctl bootstrap "gui/$(id -u)" "$PL"
 
   # Trackpad actions in every app (gestures/PadActions.m): four fingers swiping down = cmd-W, up = cmd-T, tapping = cmd-shift-T;
@@ -149,13 +168,13 @@ if want --gestures; then
   # own four-finger vertical swipe off (Trackpad > More Gestures > Mission Control / App Expose), or it fires too.
   PADAPP="$HOME/Applications/PadActions.app"
   mkdir -p "$PADAPP/Contents/MacOS"
-  clang -O2 -o "$PADAPP/Contents/MacOS/pad-actions" "$ROOT/gestures/PadActions.m" -F/System/Library/PrivateFrameworks \
+  clang -O2 -fobjc-arc -o "$PADAPP/Contents/MacOS/pad-actions" "$ROOT/gestures/PadActions.m" -F/System/Library/PrivateFrameworks \
     -framework MultitouchSupport -framework DisplayServices -framework Cocoa -framework AudioToolbox -framework CoreAudio -framework ApplicationServices
   cp "$ROOT/gestures/Info-pad-actions.plist" "$PADAPP/Contents/Info.plist"
   codesign -f -s "$SIGN" --identifier dev.vnh.pad-actions "$PADAPP"
   PF="$HOME/Library/LaunchAgents/dev.vnh.pad-actions.plist"
-  [ -f "$PF" ] && { launchctl bootout "gui/$(id -u)" "$PF" 2>/dev/null; backup "$PF"; }
-  sed "s#HOME_DIR#$HOME#g" "$ROOT/gestures/dev.vnh.pad-actions.plist" > "$PF"
+  if [ -f "$PF" ]; then launchctl bootout "gui/$(id -u)" "$PF" 2>/dev/null || true; backup "$PF"; fi
+  sed -e "s#HOME_DIR#$HOME#g" -e "s#HERDR_APP_BIN#$HERDR_BIN#g" "$ROOT/gestures/dev.vnh.pad-actions.plist" > "$PF"
   launchctl bootstrap "gui/$(id -u)" "$PF"
 fi
 

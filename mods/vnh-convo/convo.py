@@ -3,19 +3,22 @@
 #   convo.py <agent> <id> <file> <prompts.py>
 # prints {"turns": [{"at": iso or null, "text": your prompt, "reply": the agent's last words before your next prompt}], "note": ""}
 # claude: the transcript `file` through prompts.py (vnh-prompts); agy: its conversation database (your prompts and its replies); codex: the rollout file.
-import glob, json, os, re, subprocess, sys
+import contextlib, glob, json, os, re, subprocess, sys
+from pathlib import Path
 
-agent, cid, path = sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""
-prompts_py = sys.argv[4] if len(sys.argv) > 4 else ""
+agent = sys.argv[1] if len(sys.argv) > 1 else ""
+cid = sys.argv[2] if len(sys.argv) > 2 else ""
+path = sys.argv[3] if len(sys.argv) > 3 else ""
+prompts_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "vnh-prompts", "prompts.py")
 home = os.path.expanduser("~")
 turns, note = [], ""
 
 def clean(t): return re.sub(r"[ \t]+\n", "\n", t or "").strip()
 
 if agent == "claude":
-    if path and os.path.exists(path) and prompts_py and os.path.exists(prompts_py):
-        r = subprocess.run([sys.executable, "-I", prompts_py, path, ""], capture_output=True, text=True)
+    if path and os.path.isfile(path) and os.path.isfile(prompts_py):
         try:
+            r = subprocess.run([sys.executable, "-I", prompts_py, path, ""], capture_output=True, text=True, timeout=25)
             for p in json.loads(r.stdout).get("prompts", []):
                 turns.append({"at": p.get("at"), "text": p.get("text") or "", "reply": p.get("reply") or ""})
         except Exception:
@@ -60,51 +63,63 @@ elif agent == "agy":
         except Exception:
             pass
         return None
-    db = os.path.join(home, ".gemini/antigravity-cli/conversations", cid + ".db")
-    if os.path.exists(db):
+    valid_cid = bool(re.fullmatch(r"[0-9a-fA-F-]{8,80}", cid))
+    db = os.path.join(home, ".gemini/antigravity-cli/conversations", cid + ".db") if valid_cid else ""
+    db_exists = bool(db) and os.path.isfile(db)
+    if not valid_cid:
+        note = "Invalid conversation id."
+    elif db_exists:
         try:
-            con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=2)
-            cur = None
-            for idx, md, st, pl in con.execute("select idx, metadata, step_type, step_payload from steps where step_type in (14, 15) order by idx"):
-                pl = bytes(pl or b"")
-                if st == 14:
-                    t = sub(pl, [19, 2])
-                    if t:
-                        cur = {"at": when(md), "text": t.decode("utf8", "replace"), "reply": ""}
-                        turns.append(cur)
-                elif cur is not None:
-                    t = sub(pl, [20, 1])
-                    if t and t.strip(): cur["reply"] = t.decode("utf8", "replace")
+            with contextlib.closing(sqlite3.connect(f"{Path(db).resolve().as_uri()}?mode=ro", uri=True, timeout=2)) as con:
+                cur = None
+                for idx, md, st, pl in con.execute("select idx, metadata, step_type, step_payload from steps where step_type in (14, 15) order by idx"):
+                    pl = bytes(pl or b"")
+                    if st == 14:
+                        t = sub(pl, [19, 2])
+                        if t:
+                            cur = {"at": when(md), "text": t.decode("utf8", "replace"), "reply": ""}
+                            turns.append(cur)
+                    elif cur is not None:
+                        t = sub(pl, [20, 1])
+                        if t and t.strip(): cur["reply"] = t.decode("utf8", "replace")
         except Exception:
             note = "Could not read this conversation."
-    if not turns and not note:
+    if valid_cid and not db_exists and not note:
         hist = os.path.join(home, ".gemini/antigravity-cli/history.jsonl")
-        if os.path.exists(hist):
-            for line in open(hist, encoding="utf-8", errors="replace"):
-                try: j = json.loads(line)
-                except Exception: continue
-                if j.get("conversationId") != cid: continue
-                ts = j.get("timestamp")
-                at = datetime.datetime.fromtimestamp(ts / 1000, datetime.timezone.utc).isoformat() if ts else None
-                turns.append({"at": at, "text": j.get("display") or "", "reply": ""})
-            note = "Only your prompts are left of this conversation: its file is gone."
+        if os.path.isfile(hist):
+            with open(hist, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try: j = json.loads(line)
+                    except Exception: continue
+                    if j.get("conversationId") != cid: continue
+                    ts = j.get("timestamp")
+                    at = None
+                    if isinstance(ts, (int, float)):
+                        try: at = datetime.datetime.fromtimestamp(ts / 1000, datetime.timezone.utc).isoformat()
+                        except Exception: at = None
+                    turns.append({"at": at, "text": j.get("display") or "", "reply": ""})
+            if turns:
+                note = "Only your prompts are left of this conversation: its file is gone."
 elif agent == "codex":
-    files = glob.glob(os.path.join(home, ".codex/sessions/**/rollout-*%s*.jsonl" % re.sub(r"[^0-9a-f-]", "", cid)), recursive=True)
+    safe_cid = re.sub(r"[^0-9a-fA-F-]", "", cid)
+    codex_home = os.environ.get("CODEX_HOME") or os.path.join(home, ".codex")
+    files = glob.glob(os.path.join(codex_home, "sessions", "**", f"rollout-*{safe_cid}*.jsonl"), recursive=True) if len(safe_cid) >= 6 else []
     if files:
         cur = None
-        for line in open(files[0], encoding="utf-8", errors="replace"):
-            try: j = json.loads(line)
-            except Exception: continue
-            p = j.get("payload") or {}
-            if j.get("type") != "response_item" or p.get("type") != "message": continue
-            text = clean("\n".join(x.get("text", "") for x in p.get("content", []) if isinstance(x, dict)))
-            if not text: continue
-            if p.get("role") == "user":
-                if text.startswith("<"): continue
-                cur = {"at": j.get("timestamp"), "text": text, "reply": ""}
-                turns.append(cur)
-            elif p.get("role") == "assistant" and cur is not None:
-                cur["reply"] = text
+        with open(files[0], encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try: j = json.loads(line)
+                except Exception: continue
+                p = j.get("payload") or {}
+                if j.get("type") != "response_item" or p.get("type") != "message": continue
+                text = clean("\n".join((x.get("text") or "") for x in (p.get("content") or []) if isinstance(x, dict)))
+                if not text: continue
+                if p.get("role") == "user":
+                    if text.startswith("<"): continue
+                    cur = {"at": j.get("timestamp"), "text": text, "reply": ""}
+                    turns.append(cur)
+                elif p.get("role") == "assistant" and cur is not None:
+                    cur["reply"] = text
     else:
         note = "The conversation file is gone."
 print(json.dumps({"turns": turns, "note": note}))

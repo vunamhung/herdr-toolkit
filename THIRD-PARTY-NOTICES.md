@@ -1,6 +1,6 @@
 # Third-party notices
 
-`LICENSE` (MIT) covers the original work in this repository: `mods/vnh-command`, `vnh-files-menu`, `vnh-git-menu`, `vnh-markdown`, `vnh-sessions`, `vnh-weather`, `vnh-worktree-sync`, `status/`, `themes/`, `karabiner/`, `gestures/`, `keys/`, the install scripts, `RECIPE.md` and this documentation.
+`LICENSE` (MIT) covers the original work in this repository: `mods/vnh-command`, `vnh-git-menu`, `vnh-markdown`, `vnh-sessions`, `vnh-weather`, `vnh-worktree-sync`, `lib/`, `status/`, `themes/`, `karabiner/`, `gestures/`, `keys/`, `tests/`, the install scripts, `RECIPE.md` and this documentation.
 
 Everything below is derived from other projects. Those files stay under their original license, which is reproduced further down; the changes are this repository's. Modified source files start with a comment saying what they were derived from, and each `.patch` starts with a line naming the mod it changes.
 
@@ -10,24 +10,22 @@ Everything below is derived from other projects. Those files stay under their or
 |---|---|---|---|
 | `mods/claude-limits-status/` | Herdr `workspace-status` 0.1.16 ([ogulcancelik/herdr](https://github.com/ogulcancelik/herdr)) | Apache-2.0 | The status bar: git and PR state, the agent in front of you (Claude Code, Codex, agy) with its usage, prices |
 | `mods/vnh-chrome/` | Herdr `workspace-chrome` 0.1.16 | Apache-2.0 | Branch button and popup, Cloudflare icon beside it |
-| `mods/vnh-files/` | Herdr `files` 0.1.16 | Apache-2.0 | Git colors, filters, drag to terminal, Markdown preview |
 | `mods/vnh-pane/` | Herdr `pane` 0.1.16 | Apache-2.0 | Readable titles for VNH mod panes |
 | `mods/vnh-spaces/` | Herdr `spaces` 0.1.16 | Apache-2.0 | Working tree status per space, dropped folders, a tile and a worktree icon that breathe while an agent works |
 | `mods/vnh-tabs/` | Herdr `tabs` 0.1.16 | Apache-2.0 | Timeline and Insights buttons, one right-hand view at a time |
 | `layouts/VNH.json` | Herdr layout `main` 0.1.16 | Apache-2.0 | The VNH layout |
 | `overlays/frame/settings/` | Herdr's Settings window (`frame/settings`) | Apache-2.0 | A Mods tab, a shortcut editor in Keyboard |
 | `mods/vnh-agents/` | `chat-agents` of [ChmaraX/herdr-chat](https://github.com/ChmaraX/herdr-chat) (Adam Chmara) | MIT | A bar on every agent of the shown space; the in-process sub-agent rows (`recordKids`, the `records` field) follow [jbped/herdr-mods](https://github.com/jbped/herdr-mods) `agents-plus` (Jake Pedigo), MIT; the idea of putting idle agents to sleep and waking the same conversation (`sleep.js`, a much smaller design) is from [fakie-dev/herdr-suspender](https://github.com/fakie-dev/herdr-suspender), MIT |
-| `overlays/mods/chat/main.js`, `overlays/mods/chat-agents/agents-base.js`, `vendor/herdr-chat/` | `chat`, `chat-agents` and the release archive of herdr-chat 0.5.0 (unchanged, with its checksums) | MIT | The chat publishes its model for the status bar; a breathing dot instead of a spinner |
+| `overlays/mods/chat/main.js`, `vendor/herdr-chat/` | `chat` and the release archive of herdr-chat 0.5.0 (unchanged, with its checksums) | MIT | The chat publishes its model for the status bar |
 | `mods/vnh-filetree/` | `filetree` of [cybertron288/herdr-mods](https://github.com/cybertron288/herdr-mods), a port of [data-goblin/claude-code-filetree](https://github.com/data-goblin/claude-code-filetree) (Kurt Buhler) | MIT | Markdown tab, ignored-files toggle, extra folders in a space, drag to agents |
 | `mods/file-icons/` | Herdr `files` ([ogulcancelik/herdr](https://github.com/ogulcancelik/herdr)) with Material Icon Theme icons | Apache-2.0; icons MIT (`LICENSE-material-icon-theme.txt`) | File and folder icons in the rows and preview header |
-| `mods/filetree/` | `filetree` of cybertron288/herdr-mods | MIT | Show or hide ignored files, draggable rows, no reading while hidden |
 | `mods/vnh-prompts/` | `over9k-prompts` of [herunan/herdr-over9k](https://github.com/herunan/herdr-over9k) (the Over9k authors) | MIT | No "Timeline" title of its own |
 | `mods/walkthrough/` | [dmazlum/herdr-walkthrough](https://github.com/dmazlum/herdr-walkthrough) (Devrim Mazlum) | MIT | Vietnamese and its default language, dropdowns anchored under their button |
 | `mods/cloudflare-deploys/` | [SaifHarding/herdr-cloudflare](https://github.com/SaifHarding/herdr-cloudflare) (Saif) | MIT | At most 3 wrangler fetches at once, no border under the icon |
 | `mods/portal/`, `mods/run/` | `portal` and `run` of [CodeyPacker/herdr-mods](https://github.com/CodeyPacker/herdr-mods) (Cody Packer) | MIT | `portal`: a port parser for macOS 14. `run`: unchanged |
 | `mods/better-changes/` | `better-changes` of [munza/herdr-mods](https://github.com/munza/herdr-mods) | Apache-2.0 | Esc closes the diff, a view dropdown, split staging |
 | `mods/insights/` | `analytics` of [posquit0/herdr-mods](https://github.com/posquit0/herdr-mods) (installed here as `insights`; its file names match) | Apache-2.0 with the Commons Clause | The toolbar button calls `vnh-tabs.insights` |
-| `mods/vnh-chrome/`, `vnh-command/`, `vnh-files/`, `vnh-files-menu/`, `vnh-filetree/` (the `.svg` files whose class is `lucide`) | [Lucide](https://lucide.dev) icons | ISC (and MIT for the Feather ones) | Used as they are |
+| `mods/vnh-chrome/`, `vnh-command/`, `vnh-filetree/` (the `.svg` files whose class is `lucide`) | [Lucide](https://lucide.dev) icons | ISC (and MIT for the Feather ones) | Used as they are |
 | `mods/vnh-filetree/LICENSE-material-icon-theme.txt` | [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (Material Extensions) | MIT | The notice that goes with the file icons `filetree` draws |
 
 `themes/orca.json` uses the colors of the `custom:orca` theme that Orca installs for Claude Code; no code is copied.

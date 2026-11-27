@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test -x \"$HOME/.bun/bin/bun\" && \"$HOME/.bun/bin/bun\" \"$HOME/.config/herdr-app/mods/filetree/bridge.ts\" || true",
+            "command": "BUN=$(command -v bun || echo \"$HOME/.bun/bin/bun\"); f=\"${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/vnh-filetree/bridge.ts\"; [ -x \"$BUN\" ] && [ -f \"$f\" ] && \"$BUN\" \"$f\" || true",
             "timeout": 5
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test -x \"$HOME/.bun/bin/bun\" && \"$HOME/.bun/bin/bun\" \"$HOME/.config/herdr-app/mods/filetree/bridge.ts\" || true",
+            "command": "BUN=$(command -v bun || echo \"$HOME/.bun/bin/bun\"); f=\"${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/vnh-filetree/bridge.ts\"; [ -x \"$BUN\" ] && [ -f \"$f\" ] && \"$BUN\" \"$f\" || true",
             "timeout": 5
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test -x \"$HOME/.bun/bin/bun\" && \"$HOME/.bun/bin/bun\" \"$HOME/.config/herdr-app/mods/filetree/bridge.ts\" || true",
+            "command": "BUN=$(command -v bun || echo \"$HOME/.bun/bin/bun\"); f=\"${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/vnh-filetree/bridge.ts\"; [ -x \"$BUN\" ] && [ -f \"$f\" ] && \"$BUN\" \"$f\" || true",
             "timeout": 5
           }
         ]
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test -x \"$HOME/.bun/bin/bun\" && \"$HOME/.bun/bin/bun\" \"$HOME/.config/herdr-app/mods/filetree/bridge.ts\" || true",
+            "command": "BUN=$(command -v bun || echo \"$HOME/.bun/bin/bun\"); f=\"${HERDR_APP_HOME:-$HOME/.config/herdr-app}/mods/vnh-filetree/bridge.ts\"; [ -x \"$BUN\" ] && [ -f \"$f\" ] && \"$BUN\" \"$f\" || true",
             "timeout": 5
           }
         ]

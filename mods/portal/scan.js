@@ -170,8 +170,8 @@ export async function readProcs(pids) {
   const list = pids.join(",");
   // comm and args each go last so neither is cut to the column width.
   const [a, b] = await Promise.all([
-    run("ps", ["-ww", "-o", "pid=,user=,lstart=,comm=", "-p", list]),
-    run("ps", ["-ww", "-o", "pid=,args=", "-p", list]),
+    run("env", ["LC_ALL=C", "ps", "-ww", "-o", "pid=,user=,lstart=,comm=", "-p", list]),
+    run("env", ["LC_ALL=C", "ps", "-ww", "-o", "pid=,args=", "-p", list]),
   ]);
   if (a.code === -1 || (!a.stdout.trim() && a.code !== 0 && a.code !== 1)) return { procs, error: `ps: ${(a.stderr || "failed").trim()}` };
   for (const line of a.stdout.split("\n")) {
@@ -209,6 +209,7 @@ export async function scan() {
   const pids = [...new Set(bindings.map((b) => b.pid).filter((p) => p !== null))];
   const { procs, error } = await readProcs(/** @type {number[]} */ (pids));
   if (error) errors.push(error);
+  for (const b of bindings) if (!b.pname && b.pid !== null) b.pname = procs[b.pid]?.path.split("/").pop() ?? "";
   return { bindings, procs, complete: errors.length === 0, errors, at: Date.now() };
 }
 

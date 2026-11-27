@@ -33,7 +33,7 @@ const rowsOf = (w, cols) => Math.max(1, Math.ceil(w / cols));
 export default class Rail extends View {
   init(_props, cx) {
     this.term = null; this.total = 0; this.offset = 0; this.len = 0; this.items = []; this.scrolledAt = 0;
-    this.built = { term: null, total: -1 }; this.busy = false; this.hist = { at: 0, list: [] };
+    this.built = { term: null, total: -1, at: 0 }; this.busy = false; this.hist = { at: 0, sig: "", list: [] };
     if (checking()) return;
     cx.timer.every(400, (cx) => this.tick(cx));
   }
@@ -43,14 +43,16 @@ export default class Rail extends View {
     if (window()?.active === false && ((this.bgTick = (this.bgTick ?? 0) + 1) % 8)) return;
     const f = focused(), term = f?.terminal ?? null;
     const p = term ? panes().find((x) => x.terminal === term) : null;
-    const s = p?.scroll ?? null;
+    const s = p?.program?.agent ? (p.scroll ?? null) : null;
     let changed = false;
-    if (!s) { if (this.items.length || this.term !== term) { this.items = []; this.term = term; this.total = 0; this.built = { term, total: -1 }; changed = true; } if (changed) cx.notify(); return; }
+    if (!s) { if (this.items.length || this.term !== term) { this.items = []; this.term = term; this.total = 0; this.built = { term, total: -1, at: 0 }; changed = true; } if (changed) cx.notify(); return; }
     if (this.term !== term) { this.term = term; changed = true; }
     if (s.offset !== this.offset) { this.scrolledAt = Date.now(); changed = true; }
     Object.assign(this, { offset: s.offset, len: s.len });
     if (s.total !== this.total) { this.total = s.total; changed = true; }
-    if ((this.built.term !== term || this.built.total !== s.total) && !this.busy) this.build(term, s.total, cx);
+    const sameTerm = this.built.term === term;
+    const due = !sameTerm || (this.built.total !== s.total && Date.now() - this.built.at >= 1500);
+    if (due && !this.busy) this.build(term, s.total, cx);
     // shown while it scrolls (and a moment after) or while the pointer is on it; else nothing is drawn
     const show = Date.now() - this.scrolledAt < 2500 || Boolean(placement()?.hovered);
     if (show !== this.lit) { this.lit = show; changed = true; }
@@ -58,40 +60,50 @@ export default class Rail extends View {
   }
 
   async prompts(cwd) {
+    const cleanDir = (d) => (d ? String(d).replace(/\/+$/, "") : null);
     if (Date.now() - this.hist.at >= 4000) {
-      const all = [];
-      for (const rel of HISTORIES) {
-        const path = `${home()}/${rel}`;
-        let raw = await readTextFile(path).catch(() => null);
-        if (raw == null) {
-          const r = await exec("tail", ["-n", "3000", path]).catch(() => null);
-          if (!r || r.code !== 0) continue;
-          raw = String(r.stdout ?? "");
+      const paths = HISTORIES.map((rel) => `${home()}/${rel}`);
+      const st = await exec("sh", ["-c", 'for p; do [ -f "$p" ] && (stat -f "%m:%z" -- "$p" 2>/dev/null || stat -c "%Y:%s" -- "$p" 2>/dev/null) || echo "-"; done', "st", ...paths], { timeout: 5000 }).catch(() => null);
+      const lines = (st?.stdout ?? "").split("\n");
+      const sig = lines.slice(0, paths.length).join("|");
+      this.hist.at = Date.now();
+      if (sig !== this.hist.sig) {
+        const all = [];
+        for (let idx = 0; idx < paths.length; idx++) {
+          if (!lines[idx] || lines[idx] === "-") continue;
+          const path = paths[idx];
+          let raw = await readTextFile(path).catch(() => null);
+          if (raw == null) {
+            const r = await exec("tail", ["-n", "3000", path]).catch(() => null);
+            if (!r || r.code !== 0) continue;
+            raw = String(r.stdout ?? "");
+          }
+          for (const line of raw.split("\n")) {
+            if (!line.trim()) continue;
+            let j; try { j = JSON.parse(line); } catch { continue; }
+            const rawText = String(j.display ?? j.text ?? "");
+            const text = norm(rawText);
+            const rawLines = rawText.split(/\r?\n/).map(norm).filter(Boolean);
+            const firstLine = rawLines[0] ?? text;
+            const nextLine = rawLines[1] ?? "";
+            const dir = cleanDir(j.workspace ?? j.project ?? null);
+            if (text.length < 6 || text.startsWith("/")) continue;
+            all.push({
+              text,
+              key: (firstLine.length >= 6 ? firstLine : text).slice(0, 30),
+              next: firstLine.length < 25 && nextLine ? nextLine.slice(0, 16) : "",
+              exact: !nextLine && firstLine.length < 30,
+              dir,
+              at: j.timestamp ?? (j.ts ? j.ts * 1000 : 0),
+            });
+          }
         }
-        for (const line of raw.split("\n")) {
-          if (!line.trim()) continue;
-          let j; try { j = JSON.parse(line); } catch { continue; }
-          const rawText = String(j.display ?? j.text ?? "");
-          const text = norm(rawText);
-          const rawLines = rawText.split(/\r?\n/).map(norm).filter(Boolean);
-          const firstLine = rawLines[0] ?? text;
-          const nextLine = rawLines[1] ?? "";
-          const dir = j.workspace ?? j.project ?? null;
-          if (text.length < 6 || text.startsWith("/")) continue;
-          all.push({
-            text,
-            key: (firstLine.length >= 6 ? firstLine : text).slice(0, 30),
-            next: firstLine.length < 25 && nextLine ? nextLine.slice(0, 16) : "",
-            exact: !nextLine && firstLine.length < 30,
-            dir,
-            at: j.timestamp ?? (j.ts ? j.ts * 1000 : 0),
-          });
-        }
+        all.sort((a, b) => a.at - b.at);
+        this.hist = { at: Date.now(), sig, list: all };
       }
-      all.sort((a, b) => a.at - b.at);
-      this.hist = { at: Date.now(), list: all };
     }
-    return cwd ? this.hist.list.filter((p) => !p.dir || p.dir === cwd) : this.hist.list;
+    const want = cleanDir(cwd);
+    return want ? this.hist.list.filter((p) => !p.dir || p.dir === want) : this.hist.list;
   }
 
   async build(term, total, cx) {
@@ -99,22 +111,22 @@ export default class Rail extends View {
     try {
       const pane = panes().find((x) => x.terminal === term);
       const [r, g, list] = await Promise.all([
-        hc(["read", term, "--lines", String(Math.max(total, 50)), "--json"]),
+        hc(["read", term, "--lines", String(Math.max(total, 50)), "--json"]).catch(() => null),
         hc(["get", term, "--json"]).catch(() => null),
         this.prompts(pane?.cwd ?? null),
       ]);
-      if (r?.code !== 0) return;
-      let text; try { text = JSON.parse(r.stdout).text ?? ""; } catch { return; }
+      if (r?.code !== 0) { this.built = { term, total, at: Date.now() }; return; }
+      let text; try { text = JSON.parse(r.stdout).text ?? ""; } catch { this.built = { term, total, at: Date.now() }; return; }
       let best = 0;
       if (g?.code === 0) { try { best = Number(JSON.parse(g.stdout).cols) || 0; } catch {} }
       const lines = text.split("\n"), widths = lines.map((l) => cells(l));
       if (!best) {
-        // fallback: the column count whose wrapped height best matches the terminal's row count
-        best = 80; let bestDiff = Infinity;
-        for (let cols = 30; cols <= 400; cols++) {
-          let sum = 0; for (const w of widths) sum += rowsOf(w, cols);
-          const d = Math.abs(sum - total); if (d < bestDiff) { bestDiff = d; best = cols; }
-        }
+        // fallback: wrapped height decreases monotonically with cols, so binary search finds the best fit in O(log C * L).
+        let lo = 30, hi = 400;
+        const height = (cols) => { let sum = 0; for (const w of widths) sum += rowsOf(w, cols); return sum; };
+        while (lo < hi) { const mid = (lo + hi) >> 1; if (height(mid) > total) lo = mid + 1; else hi = mid; }
+        const h1 = height(lo), h0 = lo > 30 ? height(lo - 1) : Infinity;
+        best = Math.abs(h0 - total) < Math.abs(h1 - total) ? lo - 1 : lo;
       }
       const start = []; let acc = 0;
       for (const w of widths) { start.push(acc); acc += rowsOf(w, best); }
@@ -135,7 +147,7 @@ export default class Rail extends View {
         if (hit >= 0) { found.push({ row: offsetFix + start[hit], text: p.text }); from = hit + 1; }
       }
       if (this.term !== term) return;
-      this.items = found; this.built = { term, total };
+      this.items = found; this.built = { term, total, at: Date.now() };
     } finally { this.busy = false; cx.notify(); }
   }
 

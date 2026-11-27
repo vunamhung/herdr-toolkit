@@ -6,7 +6,7 @@
 // show up. Links: web URLs open in the browser; a relative .md link opens in another tab like this.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { theme, props, readTextFile, run, spaces, window, exec, panes, nextCommand, layout, shared, setShared } from "herdr";
+import { theme, props, readTextFile, run, spaces, window, exec, panes, nextCommand, layout, shared, setShared, checking } from "herdr";
 
 const MAX = 1_000_000; // readTextFile's limit
 const FONT = "PragmataPro";
@@ -34,7 +34,8 @@ export default class MarkdownView extends View {
     // This copy's own pane. A mod pane isn't told its id, so each copy claims an unclaimed
     // vnh-markdown pane (the one in the active tab first) in shared "vnh.markdown.panes", retrying
     // until its tab exists. Closing uses it, never "whichever Markdown pane is focused".
-    this.myPane = null; this.showing = false;
+    this.myPane = null; this.showing = false; this.loadSeq = 0;
+    if (checking()) return;
     const claim = () => {
       const all = panes().filter((p) => p.mod === "vnh-markdown"), live = new Set(all.map((p) => p.pane));
       const taken = Object.fromEntries(Object.entries(shared("vnh.markdown.panes") ?? {}).filter(([pane]) => live.has(pane)));
@@ -64,7 +65,7 @@ export default class MarkdownView extends View {
       }
     });
     cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); if (c === "focus") { this.kb.focus(); cx.notify(); } else if (c === "close" && this.showing) this.close(); } });
-    this.load(cx);
+    this.load(cx, true);
     cx.timer.every(2000, (cx) => { if (window()?.active) this.load(cx); });
   }
 
@@ -76,24 +77,26 @@ export default class MarkdownView extends View {
     const me = this.myPane && panes().find((p) => p.pane === this.myPane);
     if (me) { run("tab.rename", { id: me.tab, name: path.split("/").pop() }); run("tab.select", { id: me.tab }); }
     this.kb.focus();
-    this.load(cx);
+    this.load(cx, true);
     cx.notify();
   }
 
-  load(cx) {
+  load(cx, force = false) {
     const { path, on } = this.doc;
-    if (!path || this.loading) return;
+    if (!path || (this.loading && !force)) return;
     this.loading = true;
+    const seq = ++this.loadSeq;
     cx.spawn(async (cx) => {
       try {
         const text = await readTextFile(path, { on: on ?? null });
-        const next = text === null ? null : text;
+        if (seq !== this.loadSeq) return;
         const error = text === null ? "This file is no longer available" : null;
-        if (next !== this.text || error !== this.error) { this.text = next; this.error = error; cx.notify(); }
+        if (text !== this.text || error !== this.error) { this.text = text; this.error = error; cx.notify(); }
       } catch (e) {
+        if (seq !== this.loadSeq) return;
         const error = String(e).includes("too large") ? "File too large to render (over 1 MiB)" : "Cannot read this file";
         if (error !== this.error) { this.error = error; cx.notify(); }
-      } finally { this.loading = false; }
+      } finally { if (seq === this.loadSeq) this.loading = false; }
     });
   }
 
@@ -108,22 +111,25 @@ export default class MarkdownView extends View {
     run("tab.close", { id: me.tab, confirmed: true });
     const back = this.doc.back;
     if (back) run("tab.select", { id: back });
-    // The Files panel (vnh-files or filetree) takes the keyboard back.
+    // The Files panel takes the keyboard back.
     const has = (mod) => { const walk = (n) => n?.content?.mod === mod || (n?.children ?? []).some(walk); return walk(layout()); };
     if (has("vnh-filetree")) run("vnh-filetree.focus");
-    else if (has("vnh-files")) run("vnh-files.focus");
-    else if (has("filetree")) run("filetree.focus");
   }
 
   openLink(url, cx) {
     const { path, on } = this.doc;
-    if (/^[a-z][a-z0-9+.-]*:/i.test(url)) { exec("open", [url]).catch(() => {}); return; } // http(s), mailto…
-    const [file] = url.split("#");
+    if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
+      if (/^(https?|mailto):/i.test(url)) cx.open_url(url);
+      return;
+    }
+    const file = url.split(/[?#]/)[0];
     if (!file) return; // an in-page anchor
-    const target = resolve(dirOf(path), decodeURIComponent(file));
+    let decoded = file;
+    try { decoded = decodeURIComponent(file); } catch {}
+    const target = resolve(dirOf(path), decoded);
     if (/\.(md|markdown|mdx)$/i.test(target)) {
       this.switchTo(target, on ?? null, null, cx); // the same tab, as every preview
-    } else {
+    } else if (!on) {
       exec("open", [target]).catch(() => {});
     }
   }

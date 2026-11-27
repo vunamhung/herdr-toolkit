@@ -43,9 +43,9 @@ snapshot() {
     real=$(git rev-parse --path-format=absolute --git-path index) || return 1
     [ -f "$real" ] && cp -p "$real" "$index"
   fi
-  # New files over the limit, as pathspecs that leave them out.
+  # New files over the limit, as pathspecs that leave them out. Prefixing `./` keeps filenames starting with `-` (e.g. `-delete`) from being parsed as `find` flags.
   big=$(git -c core.quotePath=false ls-files --others --exclude-standard -z \
-    | xargs -0 sh -c '[ $# -gt 0 ] && find "$@" -prune -type f -size +'"$MAX_BYTES"'c' sh 2>/dev/null)
+    | xargs -0 sh -c '[ $# -gt 0 ] || exit 0; n=$#; while [ "$n" -gt 0 ]; do set -- "$@" "./$1"; shift; n=$((n-1)); done; find "$@" -prune -type f -size +'"$MAX_BYTES"'c | sed "s|^\./||"' sh 2>/dev/null)
   printf '%s\n' "$big" | grep -v '^$' > "$list"
   set -- .
   while IFS= read -r path; do

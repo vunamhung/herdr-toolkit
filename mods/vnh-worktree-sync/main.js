@@ -29,12 +29,24 @@ async function mainCheckout(cwd) {
   return common.slice(0, -"/.git".length);
 }
 
-// Worktree paths of `top` that live in `top/.worktrees/`.
+// Worktree paths of `top` that live in `top/.worktrees/` (returns null on transient git error so `seen` isn't wiped).
+export function parseDotWorktrees(out, top) {
+  if (out == null) return null;
+  const outPaths = [];
+  for (const stanza of out.split(/\n\n+/)) {
+    const lines = stanza.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (!lines.length || lines.some((l) => l === "prunable" || l.startsWith("prunable "))) continue;
+    const wt = lines.find((l) => l.startsWith("worktree "));
+    if (!wt) continue;
+    const p = wt.slice(9).trim();
+    if (under(p, `${top}/.worktrees`) && p !== `${top}/.worktrees`) outPaths.push(p);
+  }
+  return outPaths;
+}
+
 async function dotWorktrees(top) {
   const out = await git(top, ["worktree", "list", "--porcelain"]);
-  if (!out) return [];
-  return out.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9).trim())
-    .filter((p) => under(p, `${top}/.worktrees`) && p !== `${top}/.worktrees`);
+  return parseDotWorktrees(out, top);
 }
 
 export default class WorktreeSync extends View {
@@ -79,7 +91,9 @@ export default class WorktreeSync extends View {
         const known = new Set();
         let changed = false;
         for (const top of tops) {
-          for (const path of await dotWorktrees(top)) {
+          const paths = await dotWorktrees(top);
+          if (paths === null) continue;
+          for (const path of paths) {
             known.add(path);
             if (isOpen(path)) {
               if (!this.seen[path]) { this.seen[path] = true; changed = true; }
@@ -95,7 +109,7 @@ export default class WorktreeSync extends View {
             if (under(path, `${top}/.worktrees`) && !known.has(path)) { delete this.seen[path]; changed = true; }
           }
         }
-        if (changed) localStorage.setItem(SEEN_KEY, JSON.stringify(this.seen));
+        if (changed) { try { localStorage.setItem(SEEN_KEY, JSON.stringify(this.seen)); } catch {} }
       } finally {
         this.busy = false;
       }

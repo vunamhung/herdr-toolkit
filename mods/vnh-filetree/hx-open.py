@@ -4,7 +4,7 @@
 # Esc in Helix's normal mode quits it (a copy of your ~/.config/helix/config.toml with `esc = ":quit"` under [keys.normal], unless you
 # bound esc yourself; a buffer with unsaved changes refuses to quit, as with :q). When Helix ends, the tab you came from is shown again
 # and this terminal (so this tab) is closed.
-import json, os, re, subprocess, sys
+import json, os, re, shlex, subprocess, sys
 
 path = sys.argv[1]
 back = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -39,20 +39,45 @@ text = "\n".join(out)
 if not seen:
     text += '\n[keys.normal]\nesc = ":quit"\n'
 # Space m: the rendered Markdown of the open file in a tab of Herdr (hx-md.py), unless you bound space m yourself.
+# Arguments are shell-quoted and encoded as a TOML basic string so filenames with $(), backticks, spaces, or quotes cannot inject commands.
 md = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hx-md.py")
-bind = "m = '" + ":sh python3 -I " + md + ' "%{buffer_name}"' + "'"
-if not re.search(r"^\s*m\s*=", text, re.M) or not re.search(r"^\s*\[keys\.normal\.space\]", text, re.M):
-    if re.search(r"^\s*\[keys\.normal\.space\]\s*$", text, re.M):
-        text = re.sub(r"^(\s*\[keys\.normal\.space\]\s*)$", lambda m: m.group(1) + "\n" + bind, text, count=1, flags=re.M)
+bind = "m = " + json.dumps(f":sh python3 -I {shlex.quote(md)} {shlex.quote(path)}")
+out2, sec2, has_space_sec, has_space_m = [], "", False, False
+for line in text.split("\n"):
+    stripped = line.strip()
+    sm = re.match(r"^\[([^\]]+)\]\s*(#.*)?$", stripped)
+    if sm:
+        sec2 = sm.group(1).strip()
+        if sec2 == "keys.normal.space": has_space_sec = True
+    elif sec2 == "keys.normal.space" and re.match(r"^m\s*=", stripped):
+        has_space_m = True
+    out2.append(line)
+if not has_space_m:
+    if has_space_sec:
+        final, inserted = [], False
+        for line in out2:
+            final.append(line)
+            sm = re.match(r"^\[([^\]]+)\]\s*(#.*)?$", line.strip())
+            if not inserted and sm and sm.group(1).strip() == "keys.normal.space":
+                final.append(bind)
+                inserted = True
+        text = "\n".join(final)
     else:
-        text += "\n[keys.normal.space]\n" + bind + "\n"
+        text = "\n".join(out2) + "\n[keys.normal.space]\n" + bind + "\n"
 # Helix's background is Herdr's: your theme (theme = "..." in the config) is copied as `vnh-herdr` with every `bg` that was the theme's
 # main background replaced by Herdr's, so only that colour changes (the file is written next to your themes and rewritten at each start).
 def toml_style(v):
-    if isinstance(v, str): return '"%s"' % v.replace("\\", "\\\\").replace('"', '\\"')
+    if isinstance(v, bool): return "true" if v else "false"
+    if isinstance(v, str): return json.dumps(v)
     if isinstance(v, list): return "[" + ", ".join(toml_style(x) for x in v) + "]"
-    if isinstance(v, dict): return "{ " + ", ".join("%s = %s" % (k, toml_style(x)) for k, x in v.items()) + " }"
+    if isinstance(v, dict): return "{ " + ", ".join("%s = %s" % (json.dumps(str(k)), toml_style(x)) for k, x in v.items()) + " }"
     return str(v)
+
+def atomic_write(dst, content):
+    tmp = f"{dst}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    os.replace(tmp, dst)
 
 m = re.match(r"^#?([0-9a-fA-F]{6})", bg or "")
 tm = re.search(r'^\s*theme\s*=\s*"([^"]+)"', text, re.M)
@@ -63,7 +88,8 @@ if m and tm and tm.group(1) != "vnh-herdr":
         for d in (os.path.join(cfg_home, "helix", "themes"), os.path.join(cfg_home, "helix", "runtime", "themes"), os.path.join(home, ".local", "share", "helix", "runtime", "themes")):
             f = os.path.join(d, name + ".toml")
             if os.path.exists(f):
-                theme = tomllib.load(open(f, "rb"))
+                with open(f, "rb") as tf:
+                    theme = tomllib.load(tf)
                 pal = theme.get("palette", {})
                 col = lambda c: pal.get(c, c) if isinstance(c, str) else c
                 base = col((theme.get("ui.background") or {}).get("bg"))
@@ -74,7 +100,7 @@ if m and tm and tm.group(1) != "vnh-herdr":
                             lines.append('"%s" = %s' % (key, toml_style({**val, "bg": "#" + m.group(1)})))
                     tdir = os.path.join(cfg_home, "helix", "themes")
                     os.makedirs(tdir, exist_ok=True)
-                    open(os.path.join(tdir, "vnh-herdr.toml"), "w", encoding="utf-8").write("\n".join(lines) + "\n")
+                    atomic_write(os.path.join(tdir, "vnh-herdr.toml"), "\n".join(lines) + "\n")
                     text = text.replace(tm.group(0), tm.group(0).split("=")[0] + '= "vnh-herdr"', 1)
                 break
     except Exception:
@@ -82,11 +108,10 @@ if m and tm and tm.group(1) != "vnh-herdr":
 cache = os.path.join(home, ".cache", "vnh-hx")
 os.makedirs(cache, exist_ok=True)
 cfg = os.path.join(cache, "config.toml")
-with open(cfg, "w", encoding="utf-8") as f:
-    f.write(text)
+atomic_write(cfg, text)
 
 try:
-    subprocess.call(["hx", "-c", cfg, path])
+    subprocess.call(["hx", "-c", cfg, "--", path])
 except FileNotFoundError:
     print("Helix (hx) is not installed or not on the PATH. Press Enter to close.")
     try: input()
@@ -97,12 +122,11 @@ if back:
 term = os.environ.get("HC_TERMINAL_ID")
 if term:
     subprocess.call(["hc", "kill", term], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-# Herdr runs this inside `zsh -lic "$@"; exec zsh -li`: killing the terminal leaves that shell behind as an orphan, so end it too.
-try:
-    parent = os.getppid()
-    cmd = subprocess.run(["ps", "-o", "command=", "-p", str(parent)], capture_output=True, text=True).stdout
-    if parent > 1 and "zsh" in cmd and "-lic" in cmd:
-        os.kill(parent, 9)
-except Exception:
-    pass
+    # Herdr runs this inside `zsh -lic "$@"; exec zsh -li`: killing the terminal leaves that shell behind as an orphan, so end it too.
+    try:
+        parent = os.getppid()
+        cmd = subprocess.run(["ps", "-o", "command=", "-p", str(parent)], capture_output=True, text=True).stdout
+        if parent > 1 and "zsh" in cmd and "-lic" in cmd:
+            os.kill(parent, 9)
+    except Exception:
+        pass

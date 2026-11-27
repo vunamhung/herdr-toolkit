@@ -18,14 +18,27 @@ HIST="$HOME/.gemini/antigravity-cli/history.jsonl"
 prev='{}'
 [ -r "$FILE" ] && { prev=$(cat "$FILE" 2>/dev/null); [ -n "$prev" ] || prev='{}'; }
 
+input=$(cat)
 tmp="$DIR/.agy.$$.tmp"
-if [ -r "$HIST" ]; then
+# Only load history.jsonl when prev has no cached title for the current conversation_id (avoids reading multi-MB history on every tick).
+need_hist=1
+case "$prev" in
+  *'"provider":"agy"'*)
+    prev_cid=$(printf '%s' "$prev" | sed -n 's/.*"session":"\([^"]*\)".*/\1/p')
+    cur_cid=$(printf '%s' "$input" | sed -n 's/.*"conversation_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    case "$prev" in
+      *'"title":null'*|*'"title":""'*) ;;
+      *'"title":"'*) [ -n "$cur_cid" ] && [ "$prev_cid" = "$cur_cid" ] && need_hist=0 ;;
+    esac
+    ;;
+esac
+if [ "$need_hist" -eq 1 ] && [ -r "$HIST" ]; then
   set -- --rawfile hist "$HIST"
 else
   set -- --arg hist ""
 fi
 
-"$JQ" -c --argjson prev "$prev" "$@" '
+printf '%s' "$input" | "$JQ" -c --argjson prev "$prev" "$@" '
   def used: if . == null then null else ((1 - .) * 100 | round) end;
   def epoch: if . == null then null else (try (sub("\\.[0-9]+";"") | sub("Z$";"") | strptime("%Y-%m-%dT%H:%M:%S") | mktime) catch null) end;
   def keep($k; $new): if $new != null then $new elif $prev.provider == "agy" then $prev[$k] else null end;

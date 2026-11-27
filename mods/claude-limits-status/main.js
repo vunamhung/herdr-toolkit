@@ -1,7 +1,7 @@
 // Derived from Herdr's `workspace-status` 0.1.16 (Apache-2.0, Herdr, https://github.com/ogulcancelik/herdr); modified for herdr-toolkit. See THIRD-PARTY-NOTICES.md.
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, agents, panes, theme, window, keys, home, readTextFile, exec, checking, shared, focused } from "herdr";
+import { spaces, agents, panes, theme, window, home, readTextFile, exec, checking, shared, focused } from "herdr";
 
 // What the bar shows for the agent in front of you — Claude Code, Codex or Antigravity (agy) — comes from
 // one small file per terminal: ~/.cache/herdr-status/<terminal>.json, written by that agent's own hook
@@ -336,17 +336,6 @@ export default class ClaudeLimitsStatus extends View {
     });
   }
 
-  // The palette key as actually bound, not a hardcoded one; without a
-  // binding the hint stays useful ("commands") instead of lying.
-  hint(t) {
-    const mac = window()?.platform === "macos";
-    const mod = { cmd: mac ? "⌘" : "Ctrl+", ctrl: mac ? "⌃" : "Ctrl+", shift: mac ? "⇧" : "Shift+", alt: mac ? "⌥" : "Alt+", option: mac ? "⌥" : "Alt+" };
-    const b = keys().find((k) => k.section === "global" && k.action === "app.palette");
-    const parts = b && b.keys.endsWith("--") ? [...b.keys.slice(0, -2).split("-"), "-"] : b?.keys.split("-");
-    const key = parts && parts.map((p) => mod[p.toLowerCase()] ?? p.toUpperCase()).join("");
-    return key ? `${key}  commands` : "commands";
-  }
-
   // "14%/5h 3h47m": only the percentage is colored (green / yellow >=60 / red >=85); the rest
   // inherits the bar's text color and size like the other segments.
   limit(t, pct, windowLabel, reset) {
@@ -357,12 +346,11 @@ export default class ClaudeLimitsStatus extends View {
       .when(Boolean(reset), (el) => el.child(div().child(untilReset(reset))));
   }
 
-  // The chat in front of you, if the shown tab is a chat: the patched chat mod publishes its provider,
-  // model, effort and context under its tab id in shared "vnh.chat" while that tab is shown
-  // (overlays/mods/chat/main.js), since a chat runs the agent headless and no hook or status line runs.
+  // The chat in front of you, if the focused pane is a chat: the patched chat mod publishes its provider,
+  // model, effort and context under its pane id in shared "vnh.chat" (overlays/mods/chat/main.js).
   liveChat() {
-    const tab = focused()?.tab;
-    return (tab ? (shared("vnh.chat") ?? {})[tab] : null) ?? null;
+    const f = focused(), map = shared("vnh.chat") ?? {};
+    return (f?.pane && map[f.pane]) || (!f?.terminal && f?.tab && map[f.tab]) || null;
   }
 
   // What to show now: { model, effort, ctx, five, five_reset, seven, seven_reset } or null for nothing.
@@ -424,6 +412,7 @@ export default class ClaudeLimitsStatus extends View {
     const head = this.git?.info?.head;
     const branch = space?.branch ?? (head && head !== "(detached)" ? head : null);
     const prStatus = this.prStatus(t);
+    const prices = this.priceRow(t);
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
       .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
       // A mod pane (Markdown viewer…) gives the space no branch; use the one git reported for the work folder.
@@ -435,6 +424,6 @@ export default class ClaudeLimitsStatus extends View {
       .when(Boolean(claude), el => el.child(claude))
       .child(div().flex_1())
       // VNH: crypto and gold prices where the palette hint was (⌘⇧P still opens the palette).
-      .when(Boolean(this.priceRow(t)), (el) => el.child(this.priceRow(t)));
+      .when(Boolean(prices), (el) => el.child(prices));
   }
 }

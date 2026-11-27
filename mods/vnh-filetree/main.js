@@ -8,95 +8,28 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, InputState, Input, Scrollbar, v_virtual_list, VirtualListScrollHandle, TextView } from "gpui-base";
 import ICONS from "./icons.js"; // copied from the file-icons mod (mods cannot import across folders)
-import { spaces, panes, agents, focused, exec, readTextFile, writeTextFile, watchFolder, theme, settings, window, layout, home, appHome, props, run, notify, openOverlay, closeOverlay, shared, setShared, nextCommand, hc } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, layout, appHome, props, run, notify, openOverlay, closeOverlay, shared, setShared, nextCommand, checking } from "herdr";
+import { openInHelix, openInNvim, openExternal, revealExternal, copy, sendToAgent } from "./editors.js";
+import { NAME, PER_FOLDER, PRUNE, READ, dirOf, baseOf, join, ancestors, relTo, windows, collator, listDir, buildIndex, emptyGit, parseStatus, parseNumstat } from "./git.js";
+import { FOLDERS, MAX_ROOTS, keyOf, headKey, parseKey, activeSpace, addSpaceFolders, removeSpaceFolder } from "./roots.js";
+import { watchActivity, pollAgy, readMine } from "./activity.js";
 
-const NAME = "vnh-filetree"; // VNH clone of filetree (the hook bridge stays in mods/filetree)
+// VNH clone of filetree (owns bridge.ts)
 const ICON = (name) => `mods/${NAME}/${name}.svg`;
-// VNH: a file in Helix, in a tab of its own, started in the project's root (not in the file's folder: the tab's folder is what the other
-// panels follow): Space on a file, or a press on the blank after its name (see onEye). hx-open.py starts it so that Esc quits
-// Helix, shows the tab you came from again and closes this one.
-function openInHelix(abs, on, root) {
-  if (on) { notify({ title: "Helix opens the files of this computer only", level: "info", timeout: 3000 }); return; }
-  const space = spaces().find((s) => s.active);
-  if (!space || !abs) return;
-  const back = space.tabs.find((t) => t.active)?.id ?? "";
-  run("tab.new", { space: space.id, folder: root || abs.slice(0, abs.lastIndexOf("/")) || "/", name: abs.split("/").pop().slice(0, 40),
-    argv: ["sh", "-lc", 'exec python3 -I "$1" "$2" "$3" "$4"', "hx", `${appHome()}/mods/vnh-filetree/hx-open.py`, abs, back, String(theme().background ?? "")] });
-}
-// VNH: a double press on a file opens it in Neovim, in a tab of its own started in the project's root (nvim-open.py: when nvim ends the tab
-// closes and the one you came from is shown again).
-function openInNvim(abs, on, root) {
-  if (on) { notify({ title: "Neovim opens the files of this computer only", level: "info", timeout: 3000 }); return; }
-  const space = spaces().find((s) => s.active);
-  if (!space || !abs) return;
-  const back = space.tabs.find((t) => t.active)?.id ?? "";
-  run("tab.new", { space: space.id, folder: root || abs.slice(0, abs.lastIndexOf("/")) || "/", name: abs.split("/").pop().slice(0, 40),
-    argv: ["sh", "-lc", 'exec python3 -I "$1" "$2" "$3"', "nvim", `${appHome()}/mods/vnh-filetree/nvim-open.py`, abs, back] });
-}
-// VNH: Markdown is previewed from inside Helix (Space m, see hx-open.py), which opens it as a rendered tab (vnh-markdown).
-const MARKDOWN = /\.(md|markdown|mdx)$/i;
-// VNH: the space's Markdown tab, reused for every preview: ask it to switch (shared
-// "vnh.markdown.open", read by that pane's copy) and show it; open one only when there is none.
-function openMarkdownTab(path, on) {
-  const space = spaces().find((s) => s.active);
-  if (!space || !path) return;
-  const ids = new Set(space.tabs.map((t) => t.id)), current = space.tabs.find((t) => t.active)?.id ?? null;
-  const md = panes().find((p) => p.mod === "vnh-markdown" && ids.has(p.tab));
-  if (md) {
-    setShared("vnh.markdown.open", { pane: md.pane, path, on: on ?? null, back: current !== md.tab ? current : null, n: Date.now() });
-    run("tab.select", { id: md.tab });
-  } else {
-    run("tab.new", { space: space.id, name: path.split("/").pop(), mod: "vnh-markdown", props: { path, on: on ?? null, back: current } });
-  }
-}
 
 // Width of a character of the 13 px UI font: PragmataPro is narrow (0.5 em, 6.5 px, checked on screen),
 // the other monospaced UI fonts Herdr ships about 0.6 em.
 const charWidth = () => (/pragmata/i.test(String(settings().ui_font ?? "")) ? 6.5 : 7.8);
 const ROW = 26;
-const PER_FOLDER = 2000;
 const FIND_LIMIT = 200;
+const DOUBLE_MS = 450;
 const FLASH_MS = 2700, TINT_MS = 45000, RUNNING_MS = 600000, CHIP_MS = 45000;
-const READ_REVEAL = 12, SEARCH_REVEAL = 60;
-const PRUNE = [".git", "node_modules", "target", ".venv", "__pycache__", "dist", ".next"];
-const HOME_PRUNE = ["Library", "AppData", ".Trash"];
+const READ_REVEAL = 12;
 const DEFAULTS = { activity: "reads and writes", follow: true, column: "date", open: "preview" };
-// Reads write nothing under .git (no index refresh or lock, no fsmonitor cookie): the folder
-// watch would see it, and every refresh would start the next one.
-const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"];
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", cjs: "js", toml: "yaml", yml: "yaml", jsonc: "json", svelte: "html", vue: "html", htm: "html", sh: "bash", zsh: "bash" };
-const RANK = { "?": 1, A: 2, C: 2, R: 3, T: 3, M: 3, D: 4, U: 5 };
-// Natural order, case-insensitive ("file2" before "file10"); this runtime has no Intl.
-const collator = {
-  compare(a, b) {
-    const x = a.toLowerCase().match(/\d+|\D+/g) ?? [], y = b.toLowerCase().match(/\d+|\D+/g) ?? [];
-    for (let i = 0; i < Math.min(x.length, y.length); i++) {
-      if (x[i] === y[i]) continue;
-      const nx = /^\d/.test(x[i]), ny = /^\d/.test(y[i]);
-      if (nx && ny) return Number(x[i]) - Number(y[i]) || x[i].length - y[i].length;
-      return x[i] < y[i] ? -1 : 1;
-    }
-    return x.length - y.length || (a < b ? -1 : a > b ? 1 : 0);
-  },
-};
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-// ── paths ──────────────────────────────────────────────────────────────────────────────
-const dirOf = (rel) => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
-const baseOf = (path) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
-const join = (root, rel) => (rel ? (/[\\/]$/.test(root) ? root + rel : `${root}/${rel}`) : root);
-function ancestors(rel) {
-  const out = [];
-  for (let d = dirOf(rel); d; d = dirOf(d)) out.push(d);
-  return out;
-}
-function relTo(root, abs) {
-  if (!root || !abs) return null;
-  const a = abs.replace(/\\/g, "/"), r = root.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (a === r) return "";
-  return a.startsWith(r + "/") ? a.slice(r.length + 1) : null;
-}
-const stronger = (a, b) => (!a ? b : (RANK[b] ?? 0) > (RANK[a] ?? 0) ? b : a);
+const VIEWS = [["tree", "Tree", "folder"], ["recent", "Recent", "clock"]];
+const findNode = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((h, c) => h ?? findNode(c, id), null));
 
 // ── formatting ─────────────────────────────────────────────────────────────────────────
 function formatSize(bytes) {
@@ -152,41 +85,6 @@ function alpha(color, a) {
 const tones = (t) => ({ purple: t.ansi5, orange: t.ansi3, green: t.ansi2, teal: t.ansi6, blue: t.ansi4, red: t.ansi1, cyan: t.ansi14 ?? t.ansi6, yellow: t.ansi11 ?? t.ansi3 });
 const gitColor = (t, s) => (!s ? null : s === "D" || s === "U" ? t.ansi1 : s === "?" || s === "A" || s === "C" ? t.ansi2 : s === "R" ? t.ansi4 : t.ansi11 ?? t.ansi3);
 const KIND = { purple: "read", orange: "write", green: "commit" };
-// VNH: Antigravity (agy) has no tool hooks, but it records every step of a conversation in a SQLite file named after the session.
-// This reads the steps after the last one seen (read_file, edit_file, write_file: their "Path") and prints one JSON line each.
-const AGY_PY = String.raw`
-import sqlite3, sys, os, re, json
-base = os.path.expanduser("~/.gemini/antigravity-cli/conversations")
-for arg in sys.argv[1:]:
-    sid, _, last = arg.rpartition(":")
-    if not re.fullmatch(r"[0-9a-f-]{36}", sid): continue
-    try:
-        last = int(last)
-        db = sqlite3.connect("file:%s/%s.db?mode=ro" % (base, sid), uri=True, timeout=1)
-        rows = db.execute("select idx, status, step_payload from steps where step_type=132 and idx>? order by idx", (last,)).fetchall()
-        top = db.execute("select max(idx) from steps").fetchone()[0]
-    except Exception:
-        continue
-    if last < 0:
-        print(json.dumps({"session": sid, "max": top if top is not None else -1})); continue
-    new = last
-    for idx, status, pl in rows:
-        if status != 3: break
-        new = idx
-        b = bytes(pl or b"")
-        for tool, kind in ((b"read_file", "read"), (b"edit_file", "write"), (b"write_file", "write")):
-            i = b.find(tool + b"\x1a")
-            if i < 0: continue
-            m = re.search(rb'"Path":"((?:[^"\\]|\\.)*)"', b[i:i + 400000])
-            if m:
-                try: path = json.loads(b'"' + m.group(1) + b'"')
-                except Exception: break
-                if path.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", path):
-                    print(json.dumps({"session": sid, "kind": kind, "path": path}))
-            break
-    print(json.dumps({"session": sid, "max": new}))
-`;
-const VIEWS = [["tree", "Tree", "folder"], ["recent", "Recent", "clock"]];
 function ago(ms) {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   return s < 10 ? "now" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
@@ -213,79 +111,6 @@ function fileIcon(path, dir, open, dark) {
   return `${ICON_DIR}/${id ?? ICONS.file}.svg`;
 }
 
-// ── VNH: more folders in a space (multi-root, as VS Code's "Add Folder to Workspace") ──────
-// A folder dropped on the panel joins the active space as another root, listed under the space's
-// own folder; right-click a root to remove it. Roots are kept per space in shared FOLDERS. Claude
-// sees them too: new agents through the project's .claude/settings.local.json
-// (permissions.additionalDirectories, only entries we added are ever removed), idle running ones
-// through `/add-dir` (Claude then asks to trust the folder in that agent).
-const FOLDERS = "vnh.space.folders";              // { [spaceId]: [absolute folder, …] }
-const CLAUDE_DIRS = "vnh.space.folders.claude";   // { [settings file]: [folders we added there] }
-const MAX_ROOTS = 8;
-// Row keys of the extra roots; the space's own folder keeps plain relative keys.
-const keyOf = (rid, rel) => `\u0001${rid}\u0002${rel}`;
-const headKey = (rid) => `\u0001${rid}\u0003`;
-function parseKey(k) {
-  const m = typeof k === "string" ? /^\u0001(\d+)([\u0002\u0003])(.*)$/s.exec(k) : null;
-  return m ? { rid: Number(m[1]), head: m[2] === "\u0003", rel: m[3] } : null;
-}
-const activeSpace = () => spaces().find((s) => s.active) ?? null;
-
-async function claudeDirs(project, add, remove) {
-  if (!project || (!add.length && !remove.length)) return;
-  const file = `${project}/.claude/settings.local.json`;
-  const before = await readTextFile(file).catch(() => null);
-  let json = {};
-  try { json = before ? JSON.parse(before) : {}; } catch { notify({ title: "Not shared with Claude", body: `${file} is not valid JSON`, level: "warning", timeout: 5000 }); return; }
-  if (!before && !add.length) return;
-  const mine = new Set((shared(CLAUDE_DIRS) ?? {})[file] ?? []);
-  const dirs = new Set(Array.isArray(json.permissions?.additionalDirectories) ? json.permissions.additionalDirectories : []);
-  for (const p of add) if (!dirs.has(p)) { dirs.add(p); mine.add(p); }
-  for (const p of remove) if (mine.has(p)) { dirs.delete(p); mine.delete(p); }
-  const permissions = { ...(json.permissions ?? {}), additionalDirectories: [...dirs] };
-  if (!dirs.size) delete permissions.additionalDirectories;
-  const next = { ...json, permissions };
-  if (!Object.keys(permissions).length) delete next.permissions;
-  try {
-    await exec("mkdir", ["-p", `${project}/.claude`]);
-    await writeTextFile(file, JSON.stringify(next, null, 2) + "\n", before);
-    setShared(CLAUDE_DIRS, { ...(shared(CLAUDE_DIRS) ?? {}), [file]: [...mine] });
-  } catch (e) { notify({ title: "Not shared with Claude", body: String(e?.message ?? e), level: "warning", timeout: 5000 }); }
-}
-
-// Idle Claude agents of the space get `/add-dir <folder>` typed in (hc waits for an unfinished draft).
-function tellAgents(spaceId, folders) {
-  for (const a of agents()) {
-    if (a.space !== spaceId || a.status !== "idle" || a.app !== "claude-code") continue;
-    for (const p of folders) hc(["send", "--if", "idle", a.address, `/add-dir ${p}`]).catch(() => {});
-  }
-}
-
-async function addSpaceFolders(dirs, primary, project) {
-  const sp = activeSpace();
-  if (!sp) return [];
-  const all = shared(FOLDERS) ?? {}, list = [...(all[sp.id] ?? [])], added = [];
-  for (let p of dirs) {
-    p = p.replace(/\/+$/, "") || "/";
-    if (p === primary || list.includes(p)) continue;
-    if (list.length >= MAX_ROOTS - 1) { notify({ title: `A space holds at most ${MAX_ROOTS} folders`, level: "warning", timeout: 4000 }); break; }
-    list.push(p); added.push(p);
-  }
-  if (!added.length) return added;
-  setShared(FOLDERS, { ...all, [sp.id]: list });
-  await claudeDirs(project, added, []);
-  tellAgents(sp.id, added);
-  notify({ title: added.length > 1 ? `Added ${added.length} folders to ${sp.name}` : `Added ${baseOf(added[0])} to ${sp.name}`, body: "Claude agents in this space can use it too.", level: "success", timeout: 3000 });
-  return added;
-}
-
-async function removeSpaceFolder(spaceId, path, project) {
-  const all = shared(FOLDERS) ?? {}, list = (all[spaceId] ?? []).filter((p) => p !== path);
-  setShared(FOLDERS, { ...all, [spaceId]: list });
-  await claudeDirs(project, [], [path]);
-  notify({ title: `Removed ${baseOf(path)} from the space`, body: "Its files are untouched.", level: "info", timeout: 3000 });
-}
-
 // ── where to look ──────────────────────────────────────────────────────────────────────
 // The focused pane's folder; when the focused pane is a mod (this tree opened as a pane,
 // say), the first terminal beside it.
@@ -300,139 +125,13 @@ function location() {
   const last = !pane?.cwd && !f?.cwd ? (shared("vnh.lastCwd") ?? {})[space?.id] : null;
   return { cwd: pane?.cwd || f?.cwd || last || space?.folder || null, on };
 }
-const windows = (on) => !on && window()?.platform === "windows";
-const psQuote = (s) => "'" + s.replaceAll("'", "''") + "'";
-
-async function listDir(path, on) {
-  if (windows(on)) {
-    const r = await exec("powershell", ["-NoProfile", "-Command", `& { param($p) @(Get-ChildItem -LiteralPath $p -Force -ErrorAction Stop | Where-Object Name -ne '.git' | Select-Object -First ${PER_FOLDER + 1} | ForEach-Object { $rp = [bool]($_.Attributes -band [IO.FileAttributes]::ReparsePoint); @{ name=$_.Name; dir=($_.PSIsContainer -and -not $rp); link=$rp; size=$(if ($_.PSIsContainer) {0} else {$_.Length}); mtime=[DateTimeOffset]::new($_.LastWriteTimeUtc).ToUnixTimeMilliseconds() } }) | ConvertTo-Json -Compress } ${psQuote(path)}`]);
-    if (r.code !== 0) throw new Error(r.stderr || "Cannot list this folder");
-    const raw = JSON.parse(r.stdout || "[]"), list = Array.isArray(raw) ? raw : [raw];
-    return { entries: sortEntries(list.slice(0, PER_FOLDER)), more: list.length > PER_FOLDER };
-  }
-  // One stat call for the folder: GNU's -c, else BSD's -f. "/" can't be in a name, so it splits.
-  const script = `cd "$1" 2>/dev/null || exit 3; set --; for p in * .[!.]* ..?*; do [ -e "$p" ] || [ -L "$p" ] || continue; [ "$p" = .git ] && continue; set -- "$@" "$p"; [ $# -gt ${PER_FOLDER} ] && break; done; [ $# -eq 0 ] && exit 0; if stat -c %s . >/dev/null 2>&1; then stat -c '%F/%s/%Y/%n' -- "$@"; else stat -f '%HT/%z/%m/%N' -- "$@"; fi; exit 0`;
-  const r = await exec("sh", ["-c", script, NAME, path], { on });
-  if (r.code === 3) throw new Error("Cannot open this folder");
-  const list = [];
-  for (const line of r.stdout.split("\n")) {
-    const m = /^([^/]*)\/(\d+)\/(\d+)\/(.+)$/.exec(line);
-    if (!m) continue;
-    const kind = m[1].toLowerCase();
-    list.push({ name: m[4], dir: kind === "directory", link: kind.includes("link"), size: Number(m[2]), mtime: Number(m[3]) * 1000 });
-  }
-  return { entries: sortEntries(list.slice(0, PER_FOLDER)), more: list.length > PER_FOLDER };
-}
-const sortEntries = (list) => list.sort((a, b) => Number(b.dir) - Number(a.dir) || collator.compare(a.name, b.name));
-
-async function buildIndex(root, on) {
-  const atHome = root === home() || root === "/";
-  const depth = atHome ? 5 : 12;
-  if (windows(on)) {
-    const r = await exec("powershell", ["-NoProfile", "-Command", `& { param($p) $b = (Resolve-Path -LiteralPath $p).Path.TrimEnd('\\'); Get-ChildItem -LiteralPath $b -Recurse -Force -Depth ${depth} -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '[\\\\/](\\.git|node_modules|target|\\.venv|__pycache__|dist|\\.next)([\\\\/]|$)' } | Select-Object -First 40000 | ForEach-Object { $(if ($_.PSIsContainer) {'d'} else {'f'}) + ($_.FullName.Substring($b.Length + 1) -replace '\\\\', '/') } } ${psQuote(root)}`]);
-    const dirs = new Set(), all = [];
-    for (const line of r.stdout.split(/\r?\n/)) if (line.length > 1) { const rel = line.slice(1); all.push(rel); if (line[0] === "d") dirs.add(rel); }
-    return { dirs, all };
-  }
-  const names = [...PRUNE, ...(atHome ? HOME_PRUNE : [])].map((n) => `-name '${n}'`).join(" -o ");
-  const script = `cd "$1" || exit 3; find . -maxdepth ${depth} \\( ${names} \\) -prune -o -type d -print 2>/dev/null | head -n 20000; echo //; find . -maxdepth ${depth} \\( ${names} \\) -prune -o ! -type d -print 2>/dev/null | head -n 40000`;
-  const r = await exec("sh", ["-c", script, NAME, root], { on });
-  const dirs = new Set(), all = [];
-  let inDirs = true;
-  for (const line of r.stdout.split("\n")) {
-    if (line === "//") { inDirs = false; continue; }
-    if (!line.startsWith("./")) continue;
-    const rel = line.slice(2);
-    all.push(rel);
-    if (inDirs) dirs.add(rel);
-  }
-  return { dirs, all };
-}
-
-// ── git ────────────────────────────────────────────────────────────────────────────────
-const emptyGit = () => ({ top: "", prefix: "", branch: null, status: new Map(), files: new Map(), ignored: new Set(), untracked: new Set(), diff: new Map(), counts: new Map() });
-
-function parseBranch(record) {
-  const body = record.replace(/^## /, "");
-  if (body.startsWith("HEAD (no branch)")) return { head: "detached", upstream: "", ahead: 0, behind: 0 };
-  return {
-    head: body.match(/^(?:No commits yet on |Initial commit on )?(.+?)(?:\.\.\.|\s|$)/)?.[1] ?? body,
-    upstream: body.match(/\.\.\.(\S+)/)?.[1] ?? "",
-    ahead: Number(body.match(/ahead (\d+)/)?.[1] ?? 0),
-    behind: Number(body.match(/behind (\d+)/)?.[1] ?? 0),
-  };
-}
-
-function parseStatus(stdout, git) {
-  const map = (p) => (p.startsWith(git.prefix) ? p.slice(git.prefix.length).replace(/\/$/, "") : null);
-  const up = (rel, fn) => { for (const d of [...ancestors(rel), ""]) fn(d); };
-  for (const rec of stdout.split("\0")) {
-    if (rec.startsWith("## ")) { git.branch = parseBranch(rec); continue; }
-    if (rec.length < 4) continue;
-    const xy = rec.slice(0, 2), raw = rec.slice(3), rel = map(raw);
-    if (!rel) continue;
-    if (xy === "!!") { if (git.ignored.size < 5000) git.ignored.add(rel); continue; }
-    const change = xy === "??" || (xy.includes("A") && !xy.includes("D")) ? 0 : xy.includes("D") && !xy.includes("U") ? 2 : 1;
-    if (xy === "??" && raw.endsWith("/")) git.untracked.add(rel);
-    else git.files.set(rel, change);
-    up(rel, (d) => { const c = git.counts.get(d) ?? [0, 0, 0]; c[change]++; git.counts.set(d, c); });
-    const letter = xy === "??" ? "?" : /U/.test(xy) || xy === "AA" || xy === "DD" ? "U" : ["D", "M", "R", "C", "A", "T"].find((c) => xy.includes(c)) ?? "";
-    if (!letter) continue;
-    git.status.set(rel, stronger(git.status.get(rel), letter));
-    up(rel, (d) => git.status.set(d, stronger(git.status.get(d), letter)));
-  }
-}
-
-function parseNumstat(stdout, git) {
-  for (const rec of stdout.split("\0")) {
-    const m = /^(-|\d+)\t(-|\d+)\t(.+)$/s.exec(rec);
-    if (!m || !m[3].startsWith(git.prefix)) continue;
-    const rel = m[3].slice(git.prefix.length), add = Number(m[1]) || 0, del = Number(m[2]) || 0;
-    for (const d of [rel, ...ancestors(rel), ""]) { const v = git.diff.get(d) ?? [0, 0]; git.diff.set(d, [v[0] + add, v[1] + del]); }
-  }
-}
-
-// ── opening files ──────────────────────────────────────────────────────────────────────
-async function openExternal(abs) {
-  const platform = window()?.platform;
-  const r = platform === "macos" ? await exec("open", ["--", abs])
-    : platform === "windows" ? await exec("powershell", ["-NoProfile", "-Command", `Invoke-Item -LiteralPath ${psQuote(abs)}`])
-    : await exec("xdg-open", [abs]);
-  if (r.code !== 0) throw new Error(r.stderr.trim() || "No app opens this file");
-}
-async function revealExternal(abs) {
-  const platform = window()?.platform;
-  if (platform === "macos") await exec("open", ["-R", "--", abs]);
-  else if (platform === "windows") await exec("explorer.exe", [`/select,${abs.replace(/\//g, "\\")}`]);
-  else await exec("xdg-open", [abs.replace(/\/[^/]*$/, "") || "/"]);
-}
-function copy(cx, text) {
-  cx.write_to_clipboard(text);
-  notify({ title: "Copied", body: text, level: "info", timeout: 2000 });
-}
-// Types "@path " into the agent of the shown tab, through the clipboard, then puts the
-// clipboard back. The agent's pane takes the keyboard so the question can follow.
-function sendToAgent(cx, abs) {
-  const f = focused(), fp = f?.pane ? panes().find((p) => p.pane === f.pane) : null;
-  const inTab = agents().filter((a) => a.tab === f?.tab);
-  const address = (fp?.status && fp.terminal) || (inTab.find((a) => a.focused) ?? inTab[0])?.address || agents().find((a) => a.focused)?.address;
-  if (!address) { notify({ title: "No agent in this tab", body: "Start one, then send the path again", level: "warning", timeout: 3000 }); return; }
-  const cwd = panes().find((p) => p.terminal === address)?.cwd;
-  const rel = relTo(cwd, abs), path = rel || abs;
-  const text = `@${/\s/.test(path) ? `"${path}"` : path} `;
-  const before = cx.read_from_clipboard();
-  cx.write_to_clipboard(text);
-  run("pane.focus", { terminal: address });
-  run("terminal.paste");
-  cx.timer.after(600, (cx) => { if (before !== undefined) cx.write_to_clipboard(before); });
-}
-
-// VNH: a stepped blink (twice a second) instead of `.loop("opacity")`, which repaints the whole window at the display's rate while it is on
-// screen. ANIM is set while one is drawn, and a 500 ms timer redraws this view only then.
-let ANIM = false;
-const breath = (from, to) => { ANIM = true; return Math.floor(Date.now() / 500) % 2 ? from : to; };
 
 export default class FileTree extends View {
+  breath(from, to) {
+    (this.parent ?? this).anim = true;
+    return Math.floor(Date.now() / 500) % 2 ? from : to;
+  }
+
   init(_props, cx) {
     this.menu = props()?.menu ?? null;
     if (this.menu) return;
@@ -451,14 +150,11 @@ export default class FileTree extends View {
     // VNH: Recent and the follow-scroll belong to the agent you are looking at (its Claude session), not to every agent in the repo.
     this.mine = null; this.mineKey = ""; this.mineAt = 0;
     this.agyLast = new Map(); this.agyBusy = false;
-    // VNH: the files each agent session wrote, published for the Changes panel's "only this session's files".
-    this.sessionFiles = new Map(); this.filesDirty = false;
-    for (const h of this.history) if (h.session && h.kind === "write") { if (!this.sessionFiles.has(h.session)) this.sessionFiles.set(h.session, new Set()); this.sessionFiles.get(h.session).add(h.abs); }
-    this.filesDirty = this.sessionFiles.size > 0;
     try { this.allAgents = localStorage.getItem("allAgents") === "1"; } catch { this.allAgents = false; }
     this.saved = new Map(); this.flashes = new Map(); this.bashStarts = new Map(); this.recent = [];
     this.sizes = new Map(); this.sizing = new Set(); this.visible = [];
     this.chip = null; this.branchFlash = null; this.width = 320; this.query = ""; this.hits = null; this.searchSeq = 0;
+    this.anim = false; this.watchHandle = null;
     this.seenAt = Date.now() - 2000; this.seenPreview = shared(`${NAME}.preview`)?.n ?? 0; this.seenView = shared(`${NAME}.view`)?.n ?? 0;
     this.input = InputState.new({ placeholder: "Filter files" });
     this.input.on("change", (_e, cx) => this.search(this.input.value(), cx));
@@ -466,6 +162,7 @@ export default class FileTree extends View {
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.reset(null, null);
+    if (checking()) return;
     cx.spawn(async (cx) => {
       try {
         const text = await readTextFile(`${appHome()}/mods/${NAME}/config.json`);
@@ -474,60 +171,30 @@ export default class FileTree extends View {
       this.showSize ??= this.config.column === "size";
       cx.notify();
     });
-    this.watchActivity(cx);
+    watchActivity(this, cx);
     // VNH: no reads while the side panel hides the tree; it catches up when it shows.
     cx.timer.every(10000, (cx) => { if (this.shownNow()) this.refreshAll(cx); else this.stale = true; });
     cx.timer.every(1000, (cx) => { if (this.stale && this.shownNow()) { this.stale = false; this.refreshAll(cx); } });
-    // "filetree.focus": the Markdown tab hands the keyboard back here when it closes.
-    cx.spawn(async (cx) => { for (;;) { if (String(await nextCommand()).replace(/^filetree\./, "") === "focus") this.handle?.focus(); cx.notify(); } });
+    // "vnh-filetree.focus" / "filetree.focus": the Markdown tab hands the keyboard back here when it closes.
+    cx.spawn(async (cx) => {
+      for (;;) {
+        try {
+          if (String(await nextCommand()).replace(/^(vnh-filetree|filetree)\./, "") === "focus") this.handle?.focus();
+          cx.notify();
+        } catch { break; }
+      }
+    });
     cx.timer.every(1000, (cx) => this.tick(cx));
-    cx.timer.every(500, (cx) => { if (ANIM) { ANIM = false; cx.notify(); } });
-    cx.timer.every(2000, (cx) => this.pollAgy(cx)); // VNH: agy's reads and writes
-  }
-
-  // agy's reads and writes, from its conversation files (see AGY_PY): lit in the tree and listed in Recent like Claude's, per session.
-  async pollAgy(cx) {
-    if (this.agyBusy) return;
-    this.agyBusy = true;
-    try {
-      // Only agents that are working write files: their status files are read, and python started, for those (and for 10 s after one
-      // stops, to catch its last writes). An idle agent costs nothing.
-      const sessions = new Set(), now = Date.now();
-      this.agyHot ??= new Map();
-      for (const a of agents()) {
-        if (a.status !== "working") continue;
-        const text = await readTextFile(`${home()}/.cache/herdr-status/${a.address}.json`).catch(() => null);
-        try { const j = JSON.parse(text ?? "{}"); if (j.provider === "agy" && j.session) this.agyHot.set(j.session, now); } catch {}
-      }
-      for (const [sid, at] of this.agyHot) { if (now - at < 10000) sessions.add(sid); else this.agyHot.delete(sid); }
-      for (const sid of [...this.agyLast.keys()]) if (!sessions.has(sid)) this.agyLast.delete(sid);
-      if (!sessions.size) return;
-      const r = await exec("python3", ["-I", "-c", AGY_PY, ...[...sessions].map((sid) => `${sid}:${this.agyLast.get(sid) ?? -1}`)]).catch(() => null);
-      if (!r || r.code !== 0) return;
-      const mode = this.config.activity, reads = mode === "reads and writes" || mode === "reads", writes = mode === "reads and writes" || mode === "writes";
-      for (const line of r.stdout.split("\n")) {
-        let e; try { e = JSON.parse(line); } catch { continue; }
-        if (e.max != null) this.agyLast.set(e.session, e.max);
-        else if (e.kind === "read" && reads) this.flash([e.path], "purple", cx, READ_REVEAL, e.session);
-        else if (e.kind === "write" && writes) this.flash([e.path], "orange", cx, READ_REVEAL, e.session);
-      }
-    } finally { this.agyBusy = false; }
+    cx.timer.every(500, (cx) => { if (this.anim) { this.anim = false; cx.notify(); } });
+    cx.timer.every(2000, (cx) => pollAgy(this, cx)); // VNH: agy's reads and writes
   }
 
   // VNH: on screen? Only while the layout's side panel shows this block; anywhere else always.
   shownNow() {
-    const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((hit, c) => hit ?? find(c, id), null));
-    const root = layout(), body = find(root, "panel-body"), panel = find(root, "panel");
+    const root = layout(), body = findNode(root, "panel-body"), panel = findNode(root, "panel");
     const block = body?.children?.find((c) => c.content?.mod === NAME);
     if (!block) return true;
     return Boolean(panel && !panel.hidden && body.active === block.id);
-  }
-
-  // VNH: a rendered Markdown tab; Esc or Space there closes it and comes back to the tab it came from.
-  openMarkdown(rel) {
-    if (!rel || !this.root) return;
-    if (rel === this.file && this.fileAbs) { openMarkdownTab(this.fileAbs, null); return; }
-    openMarkdownTab(join(this.root, rel), this.on);
   }
 
   savePrefs() {
@@ -553,6 +220,7 @@ export default class FileTree extends View {
 
   reset(root, on) {
     if (this.ctx?.root) this.saved.set(this.ctx.key, { folders: this.folders, cursor: this.cursor });
+    this.watchHandle?.cancel?.(); this.watchHandle = null;
     const key = JSON.stringify([root, on]), s = this.saved.get(key);
     this.ctx = { key, root, on }; this.root = root; this.on = on;
     this.entries = new Map(); this.folders = new Set(s?.folders); this.pending = new Set();
@@ -581,17 +249,18 @@ export default class FileTree extends View {
     const want = this.extraPaths(), have = this.subs ?? [];
     if (want.length === have.length && want.every((p, i) => have[i].root === p)) return;
     const keep = new Map(have.map((s) => [s.root, s]));
-    for (const s of have) if (!want.includes(s.root)) s.ctx = { gone: true };
+    for (const s of have) if (!want.includes(s.root)) { s.watchHandle?.cancel?.(); s.watchHandle = null; s.ctx = { gone: true }; }
     this.subs = want.map((p, i) => { const s = keep.get(p) ?? this.makeSub(p, cx); s.rid = i + 1; return s; });
   }
 
   makeSub(path, cx) {
     const view = this, sub = Object.create(view);
-    sub.isSub = true; sub.view = view;
+    sub.isSub = true; sub.parent = view;
     sub.ctx = { key: JSON.stringify([path, null]), root: path, on: null }; sub.root = path; sub.on = null;
     sub.entries = new Map(); sub.folders = new Set(); sub.pending = new Set(); sub.git = emptyGit(); sub.index = null;
     sub.hits = null; sub.sizes = new Map(); sub.sizing = new Set(); sub.error = null; sub.limited = false;
-    sub.loading = false; sub.again = false; sub.watched = null; sub.visible = []; sub.recent = [];
+    sub.loading = false; sub.again = false; sub.watched = null; sub.watchHandle = null;
+    sub.refreshPending = false; sub.lastRefreshAt = 0; sub.visible = []; sub.recent = [];
     const map = (name) => Object.defineProperty(sub, name, {
       get() { const k = parseKey(view[name]); return k && !k.head && k.rid === sub.rid ? k.rel : view[name] == null ? view[name] : "\u0000"; },
       set(v) { view[name] = v == null ? v : v === "" ? headKey(sub.rid) : keyOf(sub.rid, v); },
@@ -614,7 +283,7 @@ export default class FileTree extends View {
 
   // Dropped from Finder: folders join the space (not ones already shown inside a root).
   dropFolders(paths, cx) {
-    if (!paths?.length || this.isSub) return;
+    if (!paths?.length || this.isSub || this.on || activeSpace()?.machine) return;
     cx.spawn(async () => {
       const r = await exec("sh", ["-c", 'for p in "$@"; do [ -d "$p" ] && printf "%s\\n" "$p"; done; true', "dirs", ...paths]).catch(() => null);
       const roots = [this.root, ...this.subList().map((s) => s.root)].filter(Boolean);
@@ -681,13 +350,13 @@ export default class FileTree extends View {
     if (!r) return;
     const x = this.downX; this.downX = null;
     const abs = join(R.root, k.rel);
-    const now = Date.now(), double = this.lastPress?.rel === key && now - this.lastPress.at < 450;
+    const now = Date.now(), double = this.lastPress?.rel === key && now - this.lastPress.at < DOUBLE_MS;
     this.lastPress = double ? null : { rel: key, at: now };
     if (!r.e?.dir) {
       if (double) { this.hxPending = null; openInNvim(abs, R.on ?? null, R.root); cx.notify(); return; }
       if (x !== null && x !== undefined && this.onEye(r, x)) {
         const token = (this.hxPending = {});
-        cx.timer.after(420, () => { if (this.hxPending === token) { this.hxPending = null; openInHelix(abs, R.on ?? null, R.root); } });
+        cx.timer.after(DOUBLE_MS + 20, () => { if (this.hxPending === token) { this.hxPending = null; openInHelix(abs, R.on ?? null, R.root); } });
         cx.notify(); return;
       }
     }
@@ -706,11 +375,15 @@ export default class FileTree extends View {
       return true;
     }
     const abs = join(R.root, k.rel), shift = e.modifiers?.shift;
-    if ((kk === "right" || kk === "l") && cur.e.dir && !cur.open) R.toggle(k.rel, cx);
-    else if (kk === "left" || kk === "h") { if (cur.e.dir && cur.open) R.toggle(k.rel, cx); else this.cursor = dirOf(k.rel) ? keyOf(k.rid, dirOf(k.rel)) : headKey(k.rid); this.scrollTo = this.cursor; }
-    else if (kk === "enter") { if (cur.e.dir) R.toggle(k.rel, cx); else this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx); }
+    const revealSub = () => { this.setView("tree", cx); if (this.query) this.clearSearch(cx); this.cursor = cur.rel; R.open(ancestors(k.rel), cx, () => { this.scrollTo = cur.rel; }); };
+    if (cur.flat && (kk === "right" || kk === "l")) revealSub();
+    else if (cur.flat && (kk === "left" || kk === "h")) return true;
+    else if (cur.flat && cur.e.dir && (kk === "enter" || kk === "space")) revealSub();
+    else if ((kk === "right" || kk === "l") && cur.e.dir && !cur.open) R.toggle(k.rel, cx);
+    else if (kk === "left" || kk === "h") { if (cur.e.dir && cur.open && !R.hits) R.toggle(k.rel, cx); else this.cursor = dirOf(k.rel) ? keyOf(k.rid, dirOf(k.rel)) : headKey(k.rid); this.scrollTo = this.cursor; }
+    else if (kk === "enter") { if (R.hits) this.jump(cx); else if (cur.e.dir) R.toggle(k.rel, cx); else this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx, R.root); }
     else if (kk === "space") { if (cur.e.dir) R.toggle(k.rel, cx); else openInHelix(abs, R.on ?? null, R.root); }
-    else if (kk === "p" && !cur.e.dir) this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx);
+    else if (kk === "p" && !cur.e.dir) this.showAbs(abs, `${baseOf(R.root)}/${k.rel}`, cx, R.root);
     else if (kk === "y") copy(cx, shift ? abs : k.rel);
     else if (kk === "a") sendToAgent(cx, abs);
     else return false;
@@ -718,8 +391,8 @@ export default class FileTree extends View {
   }
 
   // A file of another root in the preview: `abs` is read, `label` titles it.
-  showAbs(abs, label, cx) {
-    this.show(label, cx, false, abs);
+  showAbs(abs, label, cx, root = null) {
+    this.show(label, cx, false, abs, root);
   }
 
   sync(cx) {
@@ -783,14 +456,17 @@ export default class FileTree extends View {
 
   watch(cx) {
     if (this.on || this.watched === this.root) return;
+    this.watchHandle?.cancel?.();
     const ctx = this.ctx, root = this.root;
     this.watched = root;
     cx.spawn(async (cx) => {
       try {
         while (this.current(ctx)) {
-          const paths = await watchFolder(root);
+          const pending = watchFolder(root);
+          this.watchHandle = pending;
+          const paths = await pending;
           if (!this.current(ctx)) return;
-          this.changed(paths, cx);
+          if (paths?.length) this.changed(paths, cx);
         }
       } catch { if (this.current(ctx)) this.watched = null; }
     });
@@ -978,53 +654,7 @@ export default class FileTree extends View {
     return false;
   }
 
-  // ── Claude activity, from the hook bridge ────────────────────────────────────────────
-  watchActivity(cx) {
-    const dir = `${home()}/.local/state/herdr-filetree`;
-    cx.spawn(async (cx) => {
-      try { await exec("mkdir", ["-p", dir]); } catch {}
-      try {
-        for (;;) {
-          await watchFolder(dir);
-          await this.readActivity(`${dir}/activity.jsonl`, cx);
-        }
-      } catch {}
-    });
-  }
-
-  async readActivity(file, cx) {
-    const text = await readTextFile(file).catch(() => null);
-    if (!text) return;
-    const fresh = [];
-    for (const line of text.split("\n")) {
-      if (!line) continue;
-      try { const e = JSON.parse(line); if (e.at > this.seenAt) fresh.push(e); } catch {}
-    }
-    if (!fresh.length) return;
-    this.seenAt = Math.max(...fresh.map((e) => e.at));
-    const mode = this.config.activity, reads = mode === "reads and writes" || mode === "reads", writes = mode === "reads and writes" || mode === "writes";
-    for (const e of fresh) {
-      if (e.kind === "read" && reads) this.flash(e.paths ?? [], "purple", cx, e.paths?.length > 1 ? SEARCH_REVEAL : READ_REVEAL, e.session);
-      else if (e.kind === "write" && writes) this.flash(e.paths ?? [], "orange", cx, READ_REVEAL, e.session);
-      else if (e.kind === "mention") { if (this.isMine(e.session)) this.reveal(e.paths ?? [], cx); }
-      else if (e.kind === "bash-start") this.bashStarts.set(e.id, e.at);
-      else if (e.kind === "bash-end" && writes) {
-        const start = this.bashStarts.get(e.id) ?? e.at - 5000;
-        this.bashStarts.delete(e.id);
-        // The folder watch reports Bash's writes a moment later; take what changed while it ran.
-        cx.timer.after(1200, (cx) => {
-          const paths = new Set();
-          for (const r of this.recent) if (r.at >= start - 300 && r.at <= e.at + 1200) for (const p of r.paths) {
-            const rel = relTo(this.root, p);
-            if (rel && rel !== ".git" && !rel.startsWith(".git/") && !this.isIgnored(rel)) paths.add(p);
-          }
-          this.flash([...paths].slice(0, 60), "orange", cx, READ_REVEAL, e.session);
-        });
-      } else if (e.kind === "git") this.gitEvent(e, cx);
-    }
-    cx.notify();
-  }
-
+  // ── Claude & Antigravity activity (hook bridge + SQLite reader in ./activity.js) ────
   related(cwd) {
     const base = this.git.top || this.root;
     return Boolean(base && cwd && (relTo(base, cwd) !== null || relTo(cwd, base) !== null));
@@ -1050,11 +680,6 @@ export default class FileTree extends View {
       const path = abs.replace(/\\/g, "/");
       this.flashes.set(path, { tone, at: now });
       this.history.push({ abs: path, kind: KIND[tone] ?? "write", at: now, session: session ?? null });
-      if (session && tone === "orange") {
-        if (!this.sessionFiles.has(session)) this.sessionFiles.set(session, new Set());
-        this.sessionFiles.get(session).add(path);
-        this.filesDirty = true;
-      }
       const rel = relTo(this.root, abs);
       if (rel) inside.push(rel);
     }
@@ -1092,35 +717,13 @@ export default class FileTree extends View {
     return null;
   }
 
-  // Redraws only when a highlight changes state (bright → tinted → gone), not every second.
-  // The Claude session(s) of the agent in the focused pane (or, with a shell focused, of the agents of its tab), read from the
-  // status files the status line writes. null: unknown, so nothing is filtered.
-  async readMine() {
-    const f = focused();
-    if (!f?.tab) return;
-    const fp = f.pane ? panes().find((p) => p.pane === f.pane) : null;
-    const terms = fp?.status && fp.terminal ? [fp.terminal] : agents().filter((a) => a.tab === f.tab).map((a) => a.address);
-    const key = terms.join(",");
-    const now = Date.now();
-    if (key === this.mineKey && now - this.mineAt < 5000) return;
-    this.mineKey = key; this.mineAt = now;
-    const sessions = new Set();
-    this.lastSession ??= new Map(); // a half-written or session-less read keeps the session last seen (no flicker)
-    for (const t of terms) {
-      const text = await readTextFile(`${home()}/.cache/herdr-status/${t}.json`).catch(() => null);
-      try { const id = JSON.parse(text ?? "{}").session; if (id) this.lastSession.set(t, id); } catch {}
-      if (this.lastSession.has(t)) sessions.add(this.lastSession.get(t));
-    }
-    const next = sessions.size ? sessions : terms.length ? new Set() : null; // an agent without a session yet has nothing
-    if ((next?.size ?? 0) !== (this.mine?.size ?? 0) || [...(next ?? [])].some((x) => !this.mine?.has(x))) { this.mine = next; this.agoAt = 0; this.dirtyMine = true; }
-  }
   // Does an event of `session` belong to the agent in view? Unknown on either side: yes.
   isMine(session) { return !session || !this.mine || this.mine.has(session); }
 
   tick(cx) {
     const now = Date.now();
     let dirty = false;
-    this.readMine().then(() => { if (this.dirtyMine) { this.dirtyMine = false; cx.notify(); } }).catch(() => {});
+    readMine(this).then(() => { if (this.dirtyMine) { this.dirtyMine = false; cx.notify(); } }).catch(() => {});
     for (const [p, v] of this.flashes) {
       const age = now - v.at;
       if (age >= TINT_MS) { this.flashes.delete(p); dirty = true; }
@@ -1156,13 +759,13 @@ export default class FileTree extends View {
   // ── preview and opening ──────────────────────────────────────────────────────────────
   closePreview() {
     this.code?.release();
-    this.code = null; this.md = null; this.file = null; this.fileError = null; this.fileAbs = null;
+    this.code = null; this.md = null; this.file = null; this.fileError = null; this.fileAbs = null; this.fileRoot = null;
   }
 
   // inRender: called while drawing (a request from another mod), where notify is refused.
-  show(rel, cx, inRender = false, abs = null) {
+  show(rel, cx, inRender = false, abs = null, root = null) {
     this.closePreview();
-    this.file = rel; this.fileAbs = abs;
+    this.file = rel; this.fileAbs = abs; this.fileRoot = root;
     const ctx = this.ctx;
     cx.spawn(async (cx) => {
       try {
@@ -1241,14 +844,14 @@ export default class FileTree extends View {
     const r = this.rows().find((x) => x.rel === rel);
     if (!r) return;
     const x = this.downX; this.downX = null;
-    const now = Date.now(), double = this.lastPress?.rel === rel && now - this.lastPress.at < 450;
+    const now = Date.now(), double = this.lastPress?.rel === rel && now - this.lastPress.at < DOUBLE_MS;
     this.lastPress = double ? null : { rel, at: now };
     if (!r.e?.dir) {
       // A double press: Neovim. One press on the blank after the name: Helix, but only once no second press follows (else both would open).
       if (double) { this.hxPending = null; this.cursor = rel; openInNvim(join(this.root, rel), this.on, this.root); cx.notify(); return; }
       if (x !== null && x !== undefined && this.onEye(r, x)) {
         const token = (this.hxPending = {}); this.cursor = rel;
-        cx.timer.after(420, () => { if (this.hxPending === token) { this.hxPending = null; openInHelix(join(this.root, rel), this.on, this.root); } });
+        cx.timer.after(DOUBLE_MS + 20, () => { if (this.hxPending === token) { this.hxPending = null; openInHelix(join(this.root, rel), this.on, this.root); } });
         cx.notify(); return;
       }
     }
@@ -1286,7 +889,7 @@ export default class FileTree extends View {
     if (this.file) {
       if (k === "escape" || k === "left" || k === "h") this.closePreview();
       else if (k === "o" && !this.on) openExternal(this.fileAbs ?? join(this.root, this.file)).catch(() => {});
-      else if (k === "space") openInHelix(this.fileAbs ?? join(this.root, this.file), this.on, this.root);
+      else if (k === "space") openInHelix(this.fileAbs ?? join(this.root, this.file), this.on, this.fileRoot ?? this.root);
       else return;
       cx.stop_propagation(); cx.notify(); return;
     }
@@ -1348,7 +951,7 @@ export default class FileTree extends View {
   flatRow(r, t, R, now, key) {
     const { rel, e } = r, tone = tones(t), selected = rel === this.cursor;
     const fl = this.flashOf(rel, true, now), lit = fl ? tone[fl.tone] : null;
-    const pulse = (el) => el.opacity(breath(0.35, 1));
+    const pulse = (el) => el.opacity(this.breath(0.35, 1));
     const h = r.recent, color = h.kind === "read" ? tone.purple : h.kind === "commit" ? tone.green : tone.orange;
     return this.dragged(h_flex(), rel, Boolean(e?.dir)).id(`ft-${key ?? rel}`).h(ROW).flex_none().pl(8).pr(10).gap(7).items_center().rounded(R).cursor_pointer()
       .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
@@ -1375,7 +978,7 @@ export default class FileTree extends View {
       ? (e.dir ? (this.sizes.has(rel) ? formatSize(this.sizes.get(rel)) : "…") : formatSize(e.size))
       : (!e.dir && !loc && this.width > 250 ? stamp(e.mtime) : "");
     const selected = rel === this.cursor;
-    const pulse = (el) => el.opacity(breath(0.35, 1));
+    const pulse = (el) => el.opacity(this.breath(0.35, 1));
     return this.dragged(h_flex(), rel, e.dir).id(`ft-${key ?? rel}`).h(ROW).flex_none().pl(6 + depth * 14).pr(10).gap(6).items_center().rounded(R).cursor_pointer()
       .when(selected, (el) => el.bg(t.selected)).when(!selected, (el) => el.hover((s) => s.bg(t.hover)))
       .when(Boolean(fl?.bright), (el) => el.bg(alpha(lit, 0.13)))
@@ -1411,7 +1014,7 @@ export default class FileTree extends View {
     return v_flex().flex_none().px(10).pt(9).pb(8).gap(6)
       .child(h_flex().gap(6).items_center().text_size(12)
         .child(svg(ICON("git-branch")).size(12).flex_none().text_color(lit ?? t.foreground))
-        .child(div().min_w(0).truncate().font_medium().text_color(lit ?? t.foreground).when(Boolean(lit), (el) => el.opacity(breath(0.4, 1))).child(b?.head ?? "…"))
+        .child(div().min_w(0).truncate().font_medium().text_color(lit ?? t.foreground).when(Boolean(lit), (el) => el.opacity(this.breath(0.4, 1))).child(b?.head ?? "…"))
         .when(Boolean(b?.ahead), (el) => el.child(div().flex_none().text_color(tone.teal).child(`↑${b.ahead}`)))
         .when(Boolean(b?.behind), (el) => el.child(div().flex_none().text_color(tone.blue).child(`↓${b.behind}`)))
         .child(div().flex_1())
@@ -1437,7 +1040,7 @@ export default class FileTree extends View {
         return !this.cursor ? "" : !k ? this.cursor : R ? (k.head ? R.root : `${baseOf(R.root)}/${k.rel}`) : "";
       })()))
       .when(Boolean(c), (el) => el.child(h_flex().flex_none().gap(4).items_center().text_color(color)
-        .child(div().when(c.state === "running", (d) => d.font_semibold().opacity(breath(0.4, 1))).child(c.state === "running" ? `${c.label}…` : c.state === "done" ? `✓ ${c.label}` : c.label))
+        .child(div().when(c.state === "running", (d) => d.font_semibold().opacity(this.breath(0.4, 1))).child(c.state === "running" ? `${c.label}…` : c.state === "done" ? `✓ ${c.label}` : c.label))
         .when(Boolean(hash), (d) => d.child(div().text_color(t.dim).child(hash)))));
   }
 
@@ -1477,7 +1080,7 @@ export default class FileTree extends View {
       this.seenPreview = req.n;
       const S = this.subList().find((x) => x.root === req.root);
       if (req.root === this.root) this.show(req.rel, cx, true);
-      else if (S) this.show(`${baseOf(S.root)}/${req.rel}`, cx, true, join(S.root, req.rel));
+      else if (S) this.show(`${baseOf(S.root)}/${req.rel}`, cx, true, join(S.root, req.rel), S.root);
     }
     // Another mod (session-bar's changed chip) asks for a view.
     const want = shared(`${NAME}.view`);
@@ -1505,7 +1108,7 @@ export default class FileTree extends View {
       .child(div().flex_1().min_w(0).truncate().font_medium().text_color(this.file ? t.foreground : t.muted).child(title))
       .when(Boolean(this.file), (el) => el
         .when(!this.on, (el) => el.child(btn("ft-ext", "↗", "Open in default app (o)", false, () => openExternal(this.fileAbs ?? join(this.root, this.file)).catch(() => {}))))
-        .child(btn("ft-copy", "⧉", "Copy path", false, (cx) => copy(cx, this.file)))
+        .child(btn("ft-copy", "⧉", "Copy path", false, (cx) => copy(cx, this.fileAbs ?? this.file)))
         .child(btn("ft-send", "@", "Send to agent", false, (cx) => sendToAgent(cx, this.fileAbs ?? join(this.root, this.file)))))
       .when(!this.file, (el) => el.child(h_flex().flex_none().gap(2).items_center().children(VIEWS.map(([id, label, icon], i) => {
         const on = this.view === id;
@@ -1530,7 +1133,7 @@ export default class FileTree extends View {
     ];
 
     // VNH: in the side panel, a rounded, bordered card like the Changes panel's; a pane has Herdr's own frame.
-    const inPanel = (() => { const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((h, c) => h ?? find(c, id), null)); return Boolean(find(layout(), "panel-body")?.children?.some((c) => c.content?.mod === NAME)); })();
+    const inPanel = Boolean(findNode(layout(), "panel-body")?.children?.some((c) => c.content?.mod === NAME));
     const root = v_flex().id(NAME).size_full().min_h(0).overflow_hidden().bg(t.background).text_color(t.foreground).text_size(13)
       .when(inPanel, (el) => el.rounded(10).border_1().border_color(t.border))
       .track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))

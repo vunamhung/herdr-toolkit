@@ -12,6 +12,8 @@ import { theme, hc, exec, nextCommand, home, writeTextFile, focused, panes, spac
 const FONT = "PragmataPro";
 const JOBS = "vnh.scripts.jobs";
 const KEEP = 400;                       // lines of a log kept for drawing
+const SAFE_ENV = /^(PATH|NVM_DIR|PNPM_HOME|VOLTA_HOME|FNM_DIR|FNM_MULTISHELL_PATH|BUN_INSTALL|HOMEBREW_PREFIX|HOMEBREW_CELLAR|HOMEBREW_REPOSITORY|COREPACK_HOME|NODENV_ROOT|PYENV_ROOT|ASDF_DIR|ASDF_DATA_DIR|MISE_DATA_DIR|CARGO_HOME|GOPATH|GOROOT|LANG|LC_ALL)$/;
+const CACHE_VER = 2;
 const find = (n, id) => (n?.id === id ? n : (n?.children ?? []).reduce((h, c) => h ?? find(c, id), null));
 const MANAGERS = [["pnpm-lock.yaml", "pnpm"], ["yarn.lock", "yarn"], ["bun.lock", "bun"], ["bun.lockb", "bun"], ["package-lock.json", "npm"]];
 const slug = (x) => x.replace(/[^A-Za-z0-9._-]+/g, "_");
@@ -204,24 +206,27 @@ export default class Scripts extends View {
     this.git = rows.length ? { rows, authors } : null;
   }
 
-  // The PATH a login shell gives (nvm, pnpm, homebrew), asked once and kept for a day: a job then starts under a plain `sh` with it,
-  // not under `zsh -lic` (reading the whole zshrc costs about 0.8 s on every start).
+  // The PATH and runtime manager roots a login shell gives (nvm, pnpm, homebrew), asked once and kept for a day:
+  // only allowlisted non-secret variables are persisted so API keys and tokens never land on disk or in `ps`.
   async loginPath(cx) {
     const file = `${home()}/.cache/vnh-scripts/path.txt`;
     const old = await readTextFile(file).catch(() => null);
     let saved = null; try { saved = JSON.parse(old ?? "null"); } catch {}
-    if (saved?.path && saved?.env && Date.now() - saved.at < 86400000) { this.path = saved.path; this.env = saved.env; return; }
-    // `env` of a login shell: PATH and the rest (NVM_DIR, PNPM_HOME, COREPACK_*...), minus what belongs to the session that asked.
+    if (saved?.v === CACHE_VER && saved?.path && saved?.env && Date.now() - saved.at < 86400000) {
+      this.path = saved.path;
+      this.env = Object.fromEntries(Object.entries(saved.env).filter(([k]) => SAFE_ENV.test(k)));
+      return;
+    }
     const r = await exec("/bin/zsh", ["-lic", "env"], { timeout: 15000 }).catch(() => null);
     const env = {};
     for (const l of String(r?.stdout ?? "").split("\n")) {
       const m = l.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-      if (m && !/^(CLAUDE|AI_AGENT|OLDPWD|PWD|SHLVL|_|HC_|TERM_SESSION|ITERM|P9K|GITSTATUS)/.test(m[1])) env[m[1]] = m[2];
+      if (m && SAFE_ENV.test(m[1])) env[m[1]] = m[2];
     }
     if (r?.code === 0 && env.PATH?.includes("/")) {
       this.path = env.PATH; this.env = env;
       await exec("mkdir", ["-p", `${home()}/.cache/vnh-scripts`]).catch(() => {});
-      await writeTextFile(file, JSON.stringify({ path: env.PATH, env, at: Date.now() }), null).catch(() => {});
+      await writeTextFile(file, JSON.stringify({ v: CACHE_VER, path: env.PATH, env, at: Date.now() }), null).catch(() => {});
     }
   }
 
@@ -298,10 +303,12 @@ export default class Scripts extends View {
     if (old) { await hc(["rm", old.addr]).catch(() => {}); delete this.live[old.addr]; }
     const cmd = `${this.pm} run ${name}`;
     const log = `${home()}/.cache/vnh-scripts/${slug(root)}__${slug(name)}.log`;
-    // With the login PATH known: plain sh (fast). Without it yet: the login shell, as before.
-    const inner = this.path ? ["/usr/bin/env", ...Object.entries(this.env ?? { PATH: this.path }).map(([k, v]) => `${k}=${v}`), "/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q -t 0 "$0" /bin/sh -c "$1"']
-      : ["/bin/sh", "-c", 'mkdir -p "$(dirname "$0")" && exec script -q -t 0 "$0" /bin/zsh -lic "$1"'];
-    const r = await hc(["run", "--bg", "--no-parent", "--outlive-parent", "--label", "vnh.scripts=1", "--cwd", root, "--json", "--", ...inner, log, cmd]).catch(() => null);
+    // Pass pm and script name as argv directly (never through `sh -c "$cmd"`), so special characters in package.json script names cannot inject shell commands.
+    const inner = this.path
+      ? ["/usr/bin/env", ...Object.entries(this.env ?? { PATH: this.path }).filter(([k]) => SAFE_ENV.test(k)).map(([k, v]) => `${k}=${v}`),
+         "/bin/sh", "-c", 'mkdir -p "$(dirname "$1")" && exec script -q -t 0 "$1" "$2" run "$3"', "run", log, this.pm, name]
+      : ["/bin/sh", "-c", 'mkdir -p "$(dirname "$1")" && exec script -q -t 0 "$1" /bin/zsh -lic \'exec "$1" run "$2"\' run "$2" "$3"', "run", log, this.pm, name];
+    const r = await hc(["run", "--bg", "--no-parent", "--outlive-parent", "--label", "vnh.scripts=1", "--cwd", root, "--json", "--", ...inner]).catch(() => null);
     let addr = null; try { addr = JSON.parse(r?.stdout ?? "{}").address ?? null; } catch {}
     if (!addr) return;
     this.save((all) => [...all.filter((j) => !(j.root === root && j.name === name)), { root, name, addr, cmd, log }]);
@@ -346,7 +353,7 @@ export default class Scripts extends View {
     if (!j) return;
     await this.killTree(j.addr, cx);
     this.live[j.addr] = { ...(this.live[j.addr] ?? { raw: "", lines: [] }), state: "running", code: null };   // the next poll reads its end
-    this.polling = false; this.poll(cx);
+    this.burst = Date.now() + 3000; this.lastPoll = 0; this.poll(cx);
   }
 
   async restart(name, cx) {
@@ -433,7 +440,7 @@ export default class Scripts extends View {
       return h_flex().id(`tab-${j.name}`).h(26).flex_none().px(8).gap(6).items_center().rounded(6).cursor_pointer().text_size(12)
         .bg(on ? t.selected : t.background).text_color(on ? t.foreground : t.muted).hover((x) => x.bg(t.hover))
         .on_click((_e, cx) => { this.sel[this.root] = j.name; cx.notify(); })
-        .child(mark).child(div().child(j.name))
+        .child(mark).child(div().whitespace_nowrap().child(j.name))
         .child(iconBtn(`rm-${j.name}`, "mods/pane/close.svg", (cx) => this.remove(j.name, cx)));
     };
     const logWindow = () => {
@@ -443,8 +450,9 @@ export default class Scripts extends View {
       const follow = !this.still[j.addr];
       if (follow && handle) handle.scroll_to_item(lines.length - 1);
       return v_flex().size_full().min_h(0).border_t(1).border_color(t.border)
-        .child(h_flex().h(34).flex_none().px(6).gap(3).items_center().border_b(1).border_color(t.border)
-          .child(h_flex().id("job-tabs").flex_1().min_w(0).gap(3).items_center().overflow_x_scroll().children(jobs.map(tab)))
+        .child(h_flex().id("job-tabs").flex_none().px(6).py(4).gap(3).flex_wrap().items_center().border_b(1).border_color(t.border)
+          .children(jobs.map(tab)))
+        .child(h_flex().id("job-actions").h(28).flex_none().px(6).gap(3).items_center().border_b(1).border_color(t.border)
           .child(iconBtn("job-restart", "mods/vnh-scripts/restart.svg", (cx) => this.restart(j.name, cx)))
           .when(running, (el) => el.child(iconBtn("job-stop", "mods/vnh-scripts/stop.svg", (cx) => this.stop(j.name, cx)))))
         .child(div().flex_1().min_h(0).relative()

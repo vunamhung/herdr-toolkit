@@ -79,7 +79,7 @@ static void onMagnify(NSEvent *e) {
 enum { Idle, Deciding, Sideways, Sticky, Vertical };
 static int swipe = Idle;
 static double accX = 0, accY = 0, carry = 0, lastScroll = 0, endedAt = 0;
-static CFMachPortRef scrollTap;
+static CFMachPortRef scrollTap, pinchTap;
 
 // The pointer's place in Herdr's window, in points from its top left, with the window's size: the command that opens the switcher
 // carries it, so the popup opens where the pointer is.
@@ -165,7 +165,7 @@ static CGEventRef onScroll(CGEventTapProxy proxy, CGEventType type, CGEventRef e
 }
 
 static CGEventRef onTap(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *info) {
-  if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) return event;
+  if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) { if (pinchTap) CGEventTapEnable(pinchTap, true); return event; }
   NSEvent *e = [NSEvent eventWithCGEvent:event];
   if (e) onMagnify(e);
   return event;
@@ -174,7 +174,7 @@ static CGEventRef onTap(CGEventTapProxy proxy, CGEventType type, CGEventRef even
 int main(void) {
   @autoreleasepool {
     NSDictionary *env = NSProcessInfo.processInfo.environment;
-    herdrApp = env[@"HERDR_APP"] ?: @"/usr/local/bin/herdr-app";
+    herdrApp = env[@"HERDR_APP"] ?: [NSHomeDirectory() stringByAppendingPathComponent:@".local/bin/herdr-app"];
     together = env[@"HERDR_PINCH_TOGETHER"] ?: @"vnh-tabs.git-pull";
     apart = env[@"HERDR_PINCH_APART"] ?: @"vnh-tabs.git-push";
     if (env[@"HERDR_PINCH_IN"]) inThreshold = [env[@"HERDR_PINCH_IN"] doubleValue];
@@ -191,22 +191,25 @@ int main(void) {
     NSDictionary *opts = @{ (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES };
     logf_("accessibility trusted: %d", AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts));
     // The pinch: a listen-only tap, which never blocks or changes an event. NSEvent types 29 (gesture) and 30 (magnify): CGEventMask
-    // has no names for them.
+    // has no names for them. Only fall back to the global monitor if the tap is unavailable (registering both doubles magnification).
     CGEventMask mask = (1 << 29) | (1 << 30);
-    CFMachPortRef tap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionListenOnly, mask, onTap, NULL);
-    if (tap) {
-      CFRunLoopSourceRef src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0);
+    pinchTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionListenOnly, mask, onTap, NULL);
+    if (pinchTap) {
+      CFRunLoopSourceRef src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, pinchTap, 0);
       CFRunLoopAddSource(CFRunLoopGetMain(), src, kCFRunLoopCommonModes);
-      CGEventTapEnable(tap, true);
+      CFRelease(src);
+      CGEventTapEnable(pinchTap, true);
       logf_("pinch tap on");
-    } else logf_("pinch tap refused: grant Accessibility to this app in System Settings > Privacy & Security, then restart the agent");
-    // The global monitor too, for systems that deliver gestures there.
-    [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskMagnify handler:^(NSEvent *e) { onMagnify(e); }];
+    } else {
+      logf_("pinch tap refused: falling back to global magnify monitor");
+      [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskMagnify handler:^(NSEvent *e) { onMagnify(e); }];
+    }
     // The sideways scroll: a tap that may drop the events of a gesture the switcher has taken (it acts only in Herdr).
     scrollTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault, CGEventMaskBit(kCGEventScrollWheel), onScroll, NULL);
     if (scrollTap) {
       CFRunLoopSourceRef src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, scrollTap, 0);
       CFRunLoopAddSource(CFRunLoopGetMain(), src, kCFRunLoopCommonModes);
+      CFRelease(src);
       CGEventTapEnable(scrollTap, true);
       logf_("scroll tap on: %.0f points a tab%s", stepPx, flip ? ", flipped" : "");
     } else logf_("scroll tap refused: grant Accessibility to this app, then restart the agent");

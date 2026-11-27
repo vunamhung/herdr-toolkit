@@ -333,7 +333,8 @@ export const diffMethods = {
 
   // Shown in the pane's own header when the layout uses ours, so there's one row.
   publishHead() {
-    const pane = panes().find((p) => p.mod === "better-changes" && p.tab === this.diffTab())?.pane;
+    const tab = this.diffTab();
+    const pane = panes().find((p) => p.mod === "better-changes" && p.tab === tab)?.pane;
     if (!pane) return;
     const head = this.head();
     const heads = shared("pane-heads") ?? {};

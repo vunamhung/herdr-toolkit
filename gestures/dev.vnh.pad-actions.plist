@@ -6,7 +6,7 @@
   <key>ProgramArguments</key><array><string>HOME_DIR/Applications/PadActions.app/Contents/MacOS/pad-actions</string></array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PAD_LOG</key><string>HOME_DIR/Library/Logs/pad-actions.log</string>
+    <key>HERDR_APP</key><string>HERDR_APP_BIN</string>
     <key>PAD_DY</key><string>0.18</string>
     <key>PAD_EDGE</key><string>0.12</string>
     <key>PAD_SLIDE</key><string>0.8</string>

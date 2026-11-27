@@ -9,83 +9,17 @@
 // result is cached in shared "vnh.sessions.cache".
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, ScrollHandle } from "gpui-base";
-import { theme, props, closeOverlay, exec, run, spaces, shared, setShared, notify, home, panes } from "herdr";
+import { theme, props, closeOverlay, exec, run, spaces, shared, setShared, notify, home, appHome, panes } from "herdr";
 
 const AGENTS = { claude: "Claude", agy: "Antigravity", codex: "Codex" };
 // Herdr's own icon for each agent (in its home folder, coloured: drawn as images).
 const AGENT_ICON = { claude: "icons/claude.svg", agy: "icons/antigravity.svg", codex: "icons/codex.svg" };
 const RESUME = { claude: 'exec claude --resume "$1"', agy: 'exec agy --conversation "$1"', codex: 'exec codex resume "$1"' };
-
-// Antigravity and Codex sessions, one JSON object per line: { agent, id, m (unix s), n (prompts), title, prompt, cwd }.
-// agy keeps no per-conversation title: its history file has every prompt with its conversation id and folder.
-// Codex: the rollout files in ~/.codex/sessions (first line the session's id and folder, then the messages).
-const OTHERS = `python3 - <<'PY'
-import glob, json, os, re, sys
-home = os.path.expanduser("~")
-out = []
-def clean(t): return re.sub(r"\s+", " ", t or "").strip()
-hist = os.path.join(home, ".gemini/antigravity-cli/history.jsonl")
-if os.path.exists(hist):
-    convs = {}
-    for line in open(hist, encoding="utf-8", errors="replace"):
-        try: j = json.loads(line)
-        except Exception: continue
-        cid = j.get("conversationId")
-        if not cid: continue
-        c = convs.setdefault(cid, {"first": None, "n": 0, "m": 0, "cwd": None})
-        t = clean(j.get("display"))
-        if c["first"] is None and t: c["first"] = t[:240]
-        c["n"] += 1
-        c["m"] = max(c["m"], (j.get("timestamp") or 0) / 1000)
-        c["cwd"] = j.get("workspace") or c["cwd"]
-    for cid, c in convs.items():
-        db = os.path.join(home, ".gemini/antigravity-cli/conversations", cid + ".db")
-        if os.path.exists(db): c["m"] = max(c["m"], os.path.getmtime(db))
-        out.append({"agent": "agy", "id": cid, "m": int(c["m"]), "n": c["n"], "title": "", "prompt": c["first"] or "", "cwd": c["cwd"]})
-files = sorted(glob.glob(os.path.join(home, ".codex/sessions/**/rollout-*.jsonl"), recursive=True), key=os.path.getmtime, reverse=True)[:300]
-for f in files:
-    sid = cwd = None; first = None; n = 0
-    try:
-        with open(f, encoding="utf-8", errors="replace") as fh:
-            for i, line in enumerate(fh):
-                if i > 4000: break
-                try: j = json.loads(line)
-                except Exception: continue
-                p = j.get("payload") or {}
-                if j.get("type") == "session_meta":
-                    sid = p.get("id") or sid; cwd = p.get("cwd") or cwd
-                elif j.get("type") == "response_item" and p.get("type") == "message" and p.get("role") == "user":
-                    t = clean(" ".join(x.get("text", "") for x in p.get("content", []) if isinstance(x, dict)))
-                    if t and not t.startswith("<"):
-                        n += 1
-                        if first is None: first = t[:240]
-    except Exception: continue
-    if sid and n: out.append({"agent": "codex", "id": sid, "m": int(os.path.getmtime(f)), "n": n, "title": "", "prompt": first or "", "cwd": cwd})
-for o in out: print(json.dumps(o))
-PY`;
-
+const SESSIONS_PY = () => `${appHome()}/lib/sessions.py`;
 const ICON = (n) => `mods/vnh-sessions/${n}.svg`;
 const CACHE = "vnh.sessions.cache.v2"; // v2: entries carry `sdk`
 const LIMIT = 400;
-
-const LIST = `root="\${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"; [ -d "$root" ] || exit 0
-ls -t "$root"/*/*.jsonl 2>/dev/null | head -n "$1" | while IFS= read -r f; do
-  m=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f"); printf '%s\\t%s\\n' "$m" "$f"; done`;
-// For each file: its title record (last one), first real prompt, prompt count; one line each.
-const READ = `for f in "$@"; do
-  t=$(grep -E '"type":"(custom-title|ai-title|agent-name)"' "$f" | tail -n 1)
-  u=$(grep -m 60 '"type":"user"' "$f" | grep -v -e '"isMeta":true' -e '"tool_result"' -e '"isSidechain":true' -e '"content":"<' -e '"text":"<' | head -n 1)
-  n=$(grep '"type":"user"' "$f" | grep -c -v -e '"tool_result"' -e '"isMeta":true')
-  e=$(grep -m 1 -o '"entrypoint":"[a-z-]*"' "$f")
-  printf '@@%s\\n%s\\n%s\\n%s\\n%s\\n' "$f" "$n" "$t" "$u" "$e"
-done`;
-
 const parse = (line) => { try { return JSON.parse(line); } catch { return null; } };
-function promptText(rec) {
-  const c = rec?.message?.content;
-  const text = typeof c === "string" ? c : Array.isArray(c) ? c.filter((x) => x?.type === "text").map((x) => x.text).join(" ") : "";
-  return text.replace(/\s+/g, " ").trim();
-}
 function ago(sec) {
   const s = Math.max(0, Math.floor(Date.now() / 1000 - sec));
   if (s < 60) return "now";
@@ -98,7 +32,7 @@ function ago(sec) {
 export default class Sessions extends View {
   init(_props, cx) {
     this.query = ""; this.at = 0; this.busy = false;
-    this.hover = null; this.confirm = null; // the row under the pointer, the one asking ✓ / ✗
+    this.hover = null; this.confirm = null; this.deleted = new Set(); // the row under the pointer, the one asking ✓ / ✗
     this.agentF = null; this.spaceF = null; // chips: one agent, one space (null: all)
     this.others = (shared("vnh.sessions.others") ?? []);
     this.cache = shared(CACHE) ?? {};
@@ -119,38 +53,39 @@ export default class Sessions extends View {
     this.busy = true; cx.notify();
     cx.spawn(async (cx) => {
       try {
-        const l = await exec("sh", ["-c", LIST, "list", String(LIMIT)], { timeout: 15000 }).catch(() => null);
-        const files = (l?.stdout ?? "").split("\n").filter(Boolean).map((x) => { const [m, f] = x.split("\t"); return { m: Number(m), f }; });
+        const l = await exec("python3", ["-I", SESSIONS_PY(), "list-claude", "--limit", String(LIMIT)], { timeout: 15000 }).catch(() => null);
+        if (!l || l.code !== 0) return;
+        const files = (parse(l.stdout)?.files ?? []).map(([m, f]) => ({ m: Number(m), f }));
         const next = {}, stale = [];
-        for (const { m, f } of files) { const old = this.cache[f]; if (old && old.m === m) next[f] = old; else stale.push({ m, f }); }
-        // Read changed files a few at a time, showing them as they come.
-        for (let i = 0; i < stale.length; i += 8) {
-          const batch = stale.slice(i, i + 8);
-          const r = await exec("sh", ["-c", READ, "read", ...batch.map((x) => x.f)], { timeout: 60000 }).catch(() => null);
-          const parts = (r?.stdout ?? "").split("@@").filter(Boolean);
-          for (const part of parts) {
-            const [f, n, t, u, e] = part.split("\n");
-            const item = batch.find((x) => x.f === f); if (!item) continue;
-            const tr = parse(t), ur = parse(u);
-            const id = f.split("/").pop().replace(/\.jsonl$/, "");
-            const title = tr?.customTitle ?? tr?.title ?? tr?.aiTitle ?? tr?.agentName ?? "";
-            // `claude -p` runs (tools such as the AI commit button) aren't conversations: kept in the
-            // cache so they aren't read again, but never listed.
-            const sdk = /"sdk-/.test(e ?? "");
-            next[f] = { f, id, m: item.m, n: Number(n) || 0, title, prompt: promptText(ur).slice(0, 240), cwd: ur?.cwd ?? null, branch: ur?.gitBranch ?? null, sdk };
+        for (const { m, f } of files) {
+          if (this.deleted.has(f)) continue;
+          const old = this.cache[f];
+          if (old && old.m === m) next[f] = old; else stale.push({ m, f });
+        }
+        // Read changed files in batches through Python (no shell/grep loops, no `@@` split collision).
+        for (let i = 0; i < stale.length; i += 24) {
+          const batch = stale.slice(i, i + 24);
+          const r = await exec("python3", ["-I", SESSIONS_PY(), "read-claude", ...batch.map((x) => x.f)], { timeout: 60000 }).catch(() => null);
+          if (r?.code === 0) {
+            for (const entry of (r.stdout ?? "").split("\n").map(parse).filter((x) => x?.f)) {
+              if (!this.deleted.has(entry.f)) next[entry.f] = entry;
+            }
+          } else {
+            for (const x of batch) if (this.cache[x.f] && !this.deleted.has(x.f)) next[x.f] = this.cache[x.f];
           }
           this.cache = { ...this.cache, ...next };
-          setShared(CACHE, { ...(shared(CACHE) ?? {}), ...next }); // saved as it goes: the popup may close mid-way
-          this.order = Object.values(next).concat(stale.slice(i + 8).map((x) => this.cache[x.f]).filter(Boolean)).filter((x) => !x.sdk).sort((a, b) => b.m - a.m);
+          setShared(CACHE, { ...(shared(CACHE) ?? {}), ...next });
+          this.order = Object.values(next).concat(stale.slice(i + 24).map((x) => this.cache[x.f]).filter(Boolean)).filter((x) => !x.sdk && !this.deleted.has(x.f)).sort((a, b) => b.m - a.m);
           cx.notify();
         }
+        for (const f of this.deleted) delete next[f];
         this.cache = next;
         this.order = Object.values(next).filter((x) => !x.sdk).sort((a, b) => b.m - a.m);
         setShared(CACHE, next);
       } finally { this.busy = false; cx.notify(); }
     });
     cx.spawn(async (cx) => {
-      const r = await exec("sh", ["-c", OTHERS], { timeout: 20000 }).catch(() => null);
+      const r = await exec("python3", ["-I", SESSIONS_PY(), "list-others"], { timeout: 20000 }).catch(() => null);
       const list = (r?.stdout ?? "").split("\n").map(parse).filter((x) => x?.id);
       if (r?.code === 0) { this.others = list; setShared("vnh.sessions.others", list); cx.notify(); }
     });
@@ -207,11 +142,10 @@ export default class Sessions extends View {
 
   liveOf(s, open) { return s.title ? open.get(`${s.title}\0${s.cwd ?? ""}`) ?? null : null; }
 
-  rows() {
+  rows(allList = this.all(), open = this.openPanes()) {
     const q = this.query.trim().toLowerCase();
-    const base = this.all().filter((s) => (!this.agentF || (s.agent ?? "claude") === this.agentF) && (!this.spaceF || (this.spaceF === "none" ? !this.spaceOf(s) : this.spaceOf(s)?.id === this.spaceF)));
+    const base = allList.filter((s) => (!this.agentF || (s.agent ?? "claude") === this.agentF) && (!this.spaceF || (this.spaceF === "none" ? !this.spaceOf(s) : this.spaceOf(s)?.id === this.spaceF)));
     if (!q) return base;
-    const open = this.openPanes();
     const words = q.split(/\s+/);
     const scored = [];
     for (const s of base) {
@@ -224,28 +158,31 @@ export default class Sessions extends View {
   }
 
   // Moves the conversation to the Trash (Finder, so Put Back works): its .jsonl and its <id>/ folder
-  // (subagents, tool results). A conversation written in the last 5 min, or one a `claude --resume`
-  // process has open, is refused: it may be live and still writing.
+  // (subagents, tool results). Refuses conversations written in the last 5 min, open in a pane, or held by a live Claude session.
   remove(s, cx) {
     this.confirm = null;
-    if (Date.now() / 1000 - s.m < 300) { notify({ title: "Not deleted: the conversation is active", body: "It was written in the last 5 minutes. Close it first.", level: "warning", timeout: 5000 }); cx.notify(); return; }
+    if (this.removing || !s?.f) return;
+    if (Date.now() / 1000 - s.m < 300 || this.liveOf(s, this.openPanes())) { notify({ title: "Not deleted: the conversation is active", body: "Close the open conversation first.", level: "warning", timeout: 5000 }); cx.notify(); return; }
+    this.removing = true;
     cx.spawn(async (cx) => {
-      const live = await exec("sh", ["-c", 'ps -ax -o args= | grep -F -- "$1" | grep -v grep | grep -q claude && echo live; true', "ps", s.id]).catch(() => null);
-      if ((live?.stdout ?? "").includes("live")) { notify({ title: "Not deleted: the conversation is open", body: "A claude --resume process uses it.", level: "warning", timeout: 5000 }); return; }
-      const dir = s.f.replace(/\.jsonl$/, "");
-      const script = 'on run argv\ntell application "Finder"\nrepeat with p in argv\ndelete (POSIX file (contents of p) as alias)\nend repeat\nend tell\nend run';
-      const args = ["-e", script, s.f];
-      const hasDir = await exec("test", ["-d", dir]).then((r) => r.code === 0).catch(() => false);
-      if (hasDir) args.push(dir);
-      const r = await exec("osascript", args).catch((e) => ({ code: 1, stderr: String(e) }));
-      if (r.code === 0) {
-        const { [s.f]: _gone, ...rest } = shared(CACHE) ?? {};
-        setShared(CACHE, rest);
-        delete this.cache[s.f];
-        this.order = this.order.filter((x) => x.f !== s.f);
-        notify({ title: "Moved to the Trash", body: s.title || s.prompt || s.id, level: "success", timeout: 3000 });
-      } else notify({ title: "Couldn't delete the conversation", body: (r.stderr || "").trim(), level: "error", timeout: 6000 });
-      cx.notify();
+      try {
+        const live = await exec("sh", ["-c", 'ps -ax -o args= | grep -F -- "$1" | grep -v grep | grep -q claude && echo live; grep -rlF -- "$1" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions"/*.json 2>/dev/null | head -n 1 | grep -q . && echo live; true', "ps", s.id]).catch(() => null);
+        if ((live?.stdout ?? "").includes("live")) { notify({ title: "Not deleted: the conversation is open", body: "A live Claude process uses it.", level: "warning", timeout: 5000 }); return; }
+        const dir = s.f.replace(/\.jsonl$/, "");
+        const script = 'on run argv\ntell application "Finder"\nrepeat with p in argv\ndelete (POSIX file (contents of p) as alias)\nend repeat\nend tell\nend run';
+        const args = ["-e", script, s.f];
+        const hasDir = await exec("test", ["-d", dir]).then((r) => r.code === 0).catch(() => false);
+        if (hasDir) args.push(dir);
+        const r = await exec("osascript", args).catch((e) => ({ code: 1, stderr: String(e) }));
+        if (r.code === 0) {
+          this.deleted.add(s.f);
+          const { [s.f]: _gone, ...rest } = shared(CACHE) ?? {};
+          setShared(CACHE, rest);
+          delete this.cache[s.f];
+          this.order = this.order.filter((x) => x.f !== s.f);
+          notify({ title: "Moved to the Trash", body: s.title || s.prompt || s.id, level: "success", timeout: 3000 });
+        } else notify({ title: "Couldn't delete the conversation", body: (r.stderr || "").trim(), level: "error", timeout: 6000 });
+      } finally { this.removing = false; cx.notify(); }
     });
   }
 
@@ -263,14 +200,14 @@ export default class Sessions extends View {
 
   render() {
     this.snap = null; // a fresh look at the spaces and panes for this render
-    const t = theme(), rows = this.rows(), h = home(), open = this.openPanes();
+    const t = theme(), h = home(), all = this.all(), open = this.openPanes(), rows = this.rows(all, open);
     if (this.at >= rows.length) this.at = Math.max(0, rows.length - 1);
     const tilde = (p) => (p && h && p.startsWith(h) ? "~" + p.slice(h.length) : p ?? "");
     // Same frame as the cmd-enter command popup (vnh-command): a framed input, a hint row, the list.
     const listH = Math.min(360, Math.max(40, rows.length * 51));
     // Chips: the agents that have conversations, then the spaces that hold some (busiest first, "Other" for
     // folders no space holds). A chip counts what it would show with the other chip row as it is now.
-    const all = this.all(), inSpace = (x) => !this.spaceF || (this.spaceF === "none" ? !this.spaceOf(x) : this.spaceOf(x)?.id === this.spaceF);
+    const inSpace = (x) => !this.spaceF || (this.spaceF === "none" ? !this.spaceOf(x) : this.spaceOf(x)?.id === this.spaceF);
     const inAgent = (x) => !this.agentF || (x.agent ?? "claude") === this.agentF;
     const agentCount = {}, spaceCount = new Map(); let none = 0;
     for (const x of all) { if (inSpace(x)) agentCount[x.agent ?? "claude"] = (agentCount[x.agent ?? "claude"] ?? 0) + 1; }

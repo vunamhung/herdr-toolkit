@@ -42,16 +42,18 @@ const COMMIT_PROMPT = [
 const GENERATE_SCRIPT = `
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 for d in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$d" ] && PATH="$PATH:$d"; done # last: only for codex; claude stays ~/.local/bin
-[ -n "$(git diff --cached --name-only)" ] || exit 3
-log=$(git log -8 --format=%s 2>/dev/null)
-diff=$(git -c core.quotePath=false diff --cached --stat --no-color; echo; git diff --cached --no-color -U2 | head -c 60000)
+GIT_RO="git --no-optional-locks -c core.fsmonitor=false -c core.quotePath=false"
+[ -n "$($GIT_RO diff --cached --name-only)" ] || exit 3
+log=$($GIT_RO log -8 --format=%s 2>/dev/null)
+diff=$($GIT_RO diff --cached --stat --no-color --no-ext-diff --no-textconv; echo; $GIT_RO diff --cached --no-color --no-ext-diff --no-textconv -U2 | head -c 60000)
 input=$(printf '%s\n\nRecent commit subjects in this repository (match their style):\n%s\n\nStaged changes:\n%s\n' "$2" "$log" "$diff")
 if [ "$1" = codex ]; then
   command -v codex >/dev/null || { echo "codex not found" >&2; exit 127; }
-  out=$(mktemp); printf '%s' "$input" | codex exec --skip-git-repo-check --color never -o "$out" - >/dev/null 2>&1; s=$?; cat "$out"; rm -f "$out"; exit $s
+  out=$(mktemp); trap 'rm -f "$out"' EXIT
+  printf '%s' "$input" | codex exec --skip-git-repo-check --color never -o "$out" - >/dev/null; s=$?; cat "$out"; exit $s
 fi
 command -v claude >/dev/null || { echo "claude not found" >&2; exit 127; }
-printf '%s' "$input" | claude -p --model haiku
+printf '%s' "$input" | claude -p --model haiku --tools "" --no-session-persistence --strict-mcp-config --setting-sources "" --disable-slash-commands
 `;
 // Drops code fences and a leading "Commit message:" the model may add.
 function cleanMessage(raw) {
@@ -102,7 +104,7 @@ export const sidebarMethods = {
   // VNH: the files the agent in view wrote, as paths relative to the repository, or null when nothing is filtered (the option is off, or
   // no agent is in view). Fed by the Files panel (vnh-filetree), which sees every Claude and agy write.
   sessionPaths() {
-    if (!this.sessionOnly || !this.mine || !this.root) return null;
+    if (!this.sessionOnly || !this.mine || !this.root || this.on) return null;
     // Only what the ledger join says (main.js, readSessionFiles): the Files panel's older log of "paths this session wrote" has no times,
     // so a file another agent wrote later would still be counted.
     return this.sessionSet ?? new Set();
@@ -665,7 +667,7 @@ export const sidebarMethods = {
             id: `${bulk.action}-all`,
             icon: bulk.icon,
             label: bulk.label,
-            onClick: (cx) => this.indexAction(bulk.action, null, cx),
+            onClick: (cx) => this.indexAction(bulk.action, this.sessionPaths() ? files.map((f) => f.path) : null, cx),
           }),
         onClick: (cx) => this.toggleGroup(scope, cx),
       }),

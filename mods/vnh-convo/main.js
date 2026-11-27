@@ -6,7 +6,7 @@
 // One preview tab per space: opening another conversation asks this copy to switch (shared "vnh.convo.open", read by its pane).
 import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { theme, props, run, exec, spaces, panes, agents, readTextFile, home, appHome, window, shared, setShared, nextCommand } from "herdr";
+import { theme, props, run, exec, spaces, panes, agents, readTextFile, home, appHome, window, shared, setShared, nextCommand, checking } from "herdr";
 
 const RESUME = { claude: 'exec claude --resume "$1"', agy: 'exec agy --conversation "$1"', codex: 'exec codex resume "$1"' };
 const AGENT_ICON = { claude: "icons/claude.svg", agy: "icons/antigravity.svg", codex: "icons/codex.svg" };
@@ -33,7 +33,8 @@ export default class Convo extends View {
     this.kb = cx.focus_handle();
     this.seenOpen = shared("vnh.convo.open")?.n ?? 0;
     // This copy's own pane (a mod pane isn't told its id): claimed from the unclaimed vnh-convo panes, retrying until its tab exists.
-    this.myPane = null; this.showing = false;
+    this.myPane = null; this.showing = false; this.resuming = false;
+    if (checking()) return;
     const claim = () => {
       const all = panes().filter((p) => p.mod === "vnh-convo"), live = new Set(all.map((p) => p.pane));
       const taken = Object.fromEntries(Object.entries(shared("vnh.convo.panes") ?? {}).filter(([pane]) => live.has(pane)));
@@ -84,7 +85,7 @@ export default class Convo extends View {
   load(cx) {
     const d = this.doc, token = (this.token = (this.token ?? 0) + 1);
     cx.spawn(async (cx) => {
-      const r = await exec("python3", ["-I", `${appHome()}/mods/vnh-convo/convo.py`, d.agent, d.id, d.f, `${appHome()}/mods/vnh-prompts/prompts.py`], { timeout: 30000 }).catch(() => null);
+      const r = await exec("python3", ["-I", `${appHome()}/mods/vnh-convo/convo.py`, d.agent, d.id, d.f], { timeout: 30000 }).catch(() => null);
       if (token !== this.token) return;
       try { const j = JSON.parse(r?.stdout ?? ""); this.turns = (j.turns ?? []).reverse(); this.note = j.note ?? ""; }
       catch { this.turns = []; this.note = "Could not read this conversation."; }
@@ -105,20 +106,24 @@ export default class Convo extends View {
   // Enter / the Resume button: go to the pane that already runs it, else start it again in a new tab at its folder.
   async resume() {
     const d = this.doc;
-    for (const a of agents()) {
-      const st = await readTextFile(`${home()}/.cache/herdr-status/${a.address}.json`).then((x) => JSON.parse(x ?? "null")).catch(() => null);
-      if (st?.session && st.session === d.id) {
-        const p = panes().find((x) => x.terminal === a.address);
-        const sp = spaces().find((s) => (s.tabs ?? []).some((t) => t.id === p?.tab));
-        if (sp) run("space.select", { id: sp.id });
-        if (p) { run("tab.select", { id: p.tab }); run("pane.focus", { pane: p.pane }); }
-        this.close(false);
-        return;
+    if (this.resuming || !d?.id) return;
+    this.resuming = true;
+    try {
+      for (const a of agents()) {
+        const st = await readTextFile(`${home()}/.cache/herdr-status/${a.address}.json`).then((x) => JSON.parse(x ?? "null")).catch(() => null);
+        if (st?.session && st.session === d.id) {
+          const p = panes().find((x) => x.terminal === a.address);
+          const sp = spaces().find((s) => (s.tabs ?? []).some((t) => t.id === p?.tab));
+          if (sp) run("space.select", { id: sp.id });
+          if (p) { run("tab.select", { id: p.tab }); run("pane.focus", { pane: p.pane }); }
+          this.close(false);
+          return;
+        }
       }
-    }
-    const space = spaces().find((x) => x.active);
-    run("tab.new", { space: space?.id, folder: d.cwd || undefined, name: this.label().slice(0, 40), argv: ["sh", "-lc", RESUME[d.agent] ?? RESUME.claude, "resume", d.id] });
-    this.close(false);
+      const space = spaces().find((x) => x.active);
+      run("tab.new", { space: space?.id, folder: d.cwd || undefined, name: this.label().slice(0, 40), argv: ["sh", "-lc", RESUME[d.agent] ?? RESUME.claude, "resume", d.id] });
+      this.close(false);
+    } finally { this.resuming = false; }
   }
 
   render() {
@@ -143,7 +148,7 @@ export default class Convo extends View {
         .child(image(AGENT_ICON[d.agent] ?? AGENT_ICON.claude).size(16).flex_none())
         .child(v_flex().flex_1().min_w(0).gap(1)
           .child(div().truncate().font_semibold().text_size(13).child(this.label()))
-          .child(div().truncate().text_size(11).text_color(t.dim).child([d.cwd.replace(home(), "~"), d.branch, d.n ? `${d.n} prompt${d.n > 1 ? "s" : ""}` : ""].filter(Boolean).join(" · "))))
+          .child(div().truncate().text_size(11).text_color(t.dim).child([(d.cwd && home() && (d.cwd === home() || d.cwd.startsWith(home() + "/")) ? "~" + d.cwd.slice(home().length) : d.cwd), d.branch, d.n ? `${d.n} prompt${d.n > 1 ? "s" : ""}` : ""].filter(Boolean).join(" · "))))
         .child(div().flex_none().text_size(11).text_color(t.dim).child("Esc close · Enter resume"))
         .child(h_flex().id("convo-resume").h(28).flex_none().px(12).gap(6).items_center().rounded(7).cursor_pointer().bg(t.accent).text_color(t.background)
           .font_semibold().hover((s) => s.opacity(0.85))

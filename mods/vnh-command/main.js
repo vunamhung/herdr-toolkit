@@ -19,6 +19,7 @@ function ago(ms) {
   return `${Math.floor(s / 86400)}d`;
 }
 const base = (p) => (p || "").replace(/\/+$/, "").split("/").pop() || p;
+const shq = (s) => (/^[A-Za-z0-9._:@/-]+$/.test(s) ? s : `'${String(s).replace(/'/g, "'\\''")}'`);
 const LOCK_PM = { "pnpm-lock.yaml": "pnpm", "yarn.lock": "yarn", "bun.lockb": "bun", "bun.lock": "bun", "package-lock.json": "npm" };
 
 // Scripts whose name starts with the text, then has every word ("gate dev"), then its letters in
@@ -106,14 +107,14 @@ export default class CommandRunner extends View {
   // scripts and history; with nothing typed, the history and then every script.
   rows() {
     const f = this.filter.trim(), lower = f.toLowerCase();
-    const scripts = rankScripts(this.scripts, f).map((s) => ({ cmd: `${this.pm} run ${s.name}`, script: s }));
+    const scripts = rankScripts(this.scripts, f).map((s) => ({ cmd: `${this.pm} run ${shq(s.name)}`, script: s }));
     const scriptCmds = new Set(scripts.map((s) => s.cmd));
     const hits = this.history().filter((e) => !lower || e.cmd.toLowerCase().includes(lower));
     const typed = f && !hits.some((e) => e.cmd === f) && !scriptCmds.has(f) ? [{ cmd: f, typed: true }] : [];
     return f ? [...typed, ...scripts, ...hits.filter((e) => !scriptCmds.has(e.cmd))] : [...hits, ...scripts];
   }
 
-  close() { closeOverlay(props().overlay); }
+  close() { closeOverlay(props()?.overlay); }
 
   remember(cmd) {
     const next = [{ cmd, root: this.root, at: Date.now() }, ...this.history().filter((e) => e.cmd !== cmd)].slice(0, MAX_HISTORY);
@@ -169,7 +170,7 @@ export default class CommandRunner extends View {
             .when(on, (el) => el.bg(t.selection ?? t.selected)).hover((s) => s.bg(t.hover))
             .on_click(() => this.start(r.cmd))
             .child(svg(`mods/vnh-command/${r.typed ? "terminal" : r.script ? "package" : "clock"}.svg`).size(13).flex_none().text_color(r.typed || r.script ? t.ansi2 : t.dim))
-            .child(div().when(!r.script, (el) => el.flex_1()).flex_none().min_w(0).truncate().text_color(t.foreground).child(r.typed ? `Run: ${r.cmd}` : r.cmd))
+            .child(div().when(!r.script, (el) => el.flex_1()).when(Boolean(r.script), (el) => el.flex_none()).min_w(0).truncate().text_color(t.foreground).child(r.typed ? `Run: ${r.cmd}` : r.cmd))
             .when(Boolean(r.script), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(r.script.cmd)))
             .when(!r.typed && !r.script, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`${base(r.root)} · ${ago(r.at)}`)));
         })));

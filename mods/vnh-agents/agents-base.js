@@ -4,15 +4,13 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, window, layout, notify } from "herdr";
 import { trackRuns } from "./ledger.js";
-import { AUTO_MS, autoOn, setAuto, sleepers, forget, sleepAgent, wake, dismiss, prune, isWoken, wokeAt, fresh, repairSpaces, statusOf } from "./sleep.js";
+import { AUTO_MS, autoOn, setAuto, sleepers, sleepAgent, wake, dismiss, prune, isWoken, wokeAt, fresh, repairSpaces, statusOf } from "./sleep.js";
 
 // VNH: the "breathing" of a working agent. A `.loop("opacity")` repaints the whole window at the display's rate for as long as it
 // runs (about 20% of a core with one agent working, 5% without); this blinks (bright, dim, each half a second), and only the views that draw
-// one are redrawn (ANIM is set while one is on screen, and a 500 ms timer notifies the view while it is).
-let ANIM = false;
-const breath = (from, to) => { ANIM = true; return Math.floor(Date.now() / 500) % 2 ? from : to; };
+// one are redrawn (`this.anim` is set while one is on screen, and a 500 ms timer notifies the view while it is).
 
 // VNH: the spaces sidebar's colors for theme color names (same table as the shipped spaces mod).
 const VNH_MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -97,7 +95,7 @@ function icon(p, size, color) {
 
 export default class Agents extends View {
   init(_props, cx) {
-    if (props()?.sortMenu) return;
+    this.anim = false;
     this.folded = new Set();
     // Each agent's last state and when it changed (ms), kept across restarts.
     try { this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}"); } catch { this.changed = {}; }
@@ -113,33 +111,36 @@ export default class Agents extends View {
     // Antigravity's subagents: its status line payload lists them, status/agy.sh keeps them in the terminal's status file;
     // read here every 2 s for the agy agents (terminal -> [{ name, label, status }]).
     this.agySubs = new Map();
-    if (!props()?.sortMenu) cx.timer.every(2000, (cx) => this.readAgySubs(cx));
+    this.readingSubs = false;
+    cx.timer.every(2000, (cx) => this.readAgySubs(cx));
     this.skipUntil = new Map(); // agents that couldn't be put to sleep (nothing said yet...): not tried again for a while
-    // When each agent was last touched: the terminal in front of you counts as touched while you're there. Auto sleep
-    // measures idleness from the latest of this, its last status change, its wake and this mod's start, so a restart,
-    // a reload or a wake never makes an agent look as idle as it was before.
     this.touched = new Map(); this.bootAt = Date.now();
-    if (!props()?.sortMenu) cx.timer.every(15000, (cx) => this.autoSleep(cx));
-    cx.timer.every(500, (cx) => { if (ANIM) { ANIM = false; cx.notify(); } });
+    cx.timer.every(15000, (cx) => this.autoSleep(cx));
+    cx.timer.every(500, (cx) => { if (this.anim) { this.anim = false; cx.notify(); } });
   }
 
+  breath(from, to) { this.anim = true; return Math.floor(Date.now() / 500) % 2 ? from : to; }
+
   async readAgySubs(cx) {
-    const next = new Map(), now = Date.now() / 1000;
-    for (const a of agents()) {
-      // Only an agent that is working (or was just listed, to clear it) can have sub-agents running: no status file is read for the idle ones.
-      if (a.status !== "working" && a.status !== "blocked" && !this.agySubs.has(a.address)) continue;
-      const st = await statusOf(a.address);
-      // agy refreshes its list with every status line (an old file is a stale list); Codex's hooks only fire at a subagent's start
-      // and stop, so its list counts while the agent works.
-      if (!Array.isArray(st?.subagents) || !(st.provider === "agy" ? now - (st.updated ?? 0) <= 120 : st.provider === "codex" && a.status === "working")) continue;
-      const live = st.subagents.filter((s) => /^(running|working|in[_ -]?progress|pending|started)$/i.test(s.status ?? ""));
-      if (live.length) next.set(a.address, live);
-    }
-    if (JSON.stringify([...next]) !== JSON.stringify([...this.agySubs])) { this.agySubs = next; cx.notify(); }
+    if (this.readingSubs) return;
+    this.readingSubs = true;
+    try {
+      const next = new Map(), now = Date.now() / 1000;
+      const targets = agents().filter((a) => a.status === "working" || a.status === "blocked" || this.agySubs.has(a.address));
+      const statuses = await Promise.all(targets.map((a) => statusOf(a.address)));
+      targets.forEach((a, i) => {
+        const st = statuses[i];
+        if (!Array.isArray(st?.subagents) || !(st.provider === "agy" ? now - (st.updated ?? 0) <= 120 : st.provider === "codex" && a.status === "working")) return;
+        const live = st.subagents.filter((s) => /^(running|working|in[_ -]?progress|pending|started)$/i.test(s.status ?? ""));
+        if (live.length) next.set(a.address, live);
+      });
+      if (JSON.stringify([...next]) !== JSON.stringify([...this.agySubs])) { this.agySubs = next; cx.notify(); }
+    } finally { this.readingSubs = false; }
   }
 
   // `vnh-agents.sleep:<terminal>`: puts that terminal's agent to sleep now (the same as the automatic one).
   sleepNow(address, cx, dry = false) {
+    if (this.sleeping.has(address)) return;
     const a = agents().find((x) => x.address === address) ?? (() => {
       const p = panes().find((x) => x.terminal === address); const sp = spaces().find((x) => x.tabs?.some((tb) => tb.id === p?.tab));
       return p ? { address, pane: p.pane, tab: p.tab, space: sp?.id, space_name: sp?.name, title: p.title } : null; })();
@@ -147,7 +148,7 @@ export default class Agents extends View {
     this.sleeping.add(address);
     cx.spawn(async (cx) => {
       try {
-        const r = await sleepAgent(a, this.labelOf?.get(address), dry);
+        const r = await sleepAgent(a, this.labelOf?.get(address), dry, cx);
         if (dry) return notify({ title: r.ok ? "Would sleep" : "Would not sleep", body: r.ok ? JSON.stringify({ agent: r.rec.agent, session: r.rec.session, flags: r.rec.flags }) : r.why, level: "info", timeout: 8000 });
         notify(r.ok ? { title: "Agent put to sleep", body: a.space_name ?? "", level: "info", timeout: 3000 } : { title: "Not put to sleep", body: r.why, level: "warning", timeout: 5000 });
       } finally { this.sleeping.delete(address); cx.notify(); }
@@ -158,11 +159,16 @@ export default class Agents extends View {
   // the terminal in front of you while the window is active, not a pinned one, not one with a sub-agent working.
   autoSleep(cx) {
     try { repairSpaces(); } catch {}
+    const all = terminals();
+    // Always prune sleepers that were resumed manually elsewhere, even when auto-sleep is toggled off.
+    prune(all.filter((t) => t.state === "live" && t.program?.agent).map((t) => t.address), cx).catch(() => {});
     if (!autoOn() || this.sleeping.size > 0) return;
     const now = Date.now(), front = window()?.active ? focused()?.terminal : null;
     if (front) this.touched.set(front, now);
-    const all = terminals();
     const list = agents();
+    const liveSet = new Set(all.map((t) => t.address));
+    for (const k of this.touched.keys()) if (!liveSet.has(k)) this.touched.delete(k);
+    for (const k of this.skipUntil.keys()) if (!liveSet.has(k)) this.skipUntil.delete(k);
     for (const a of list) {
       if (a.status !== "idle" || a.pinned || a.address === front || this.sleeping.has(a.address) || (this.skipUntil.get(a.address) ?? 0) > now) continue;
       const last = Math.max(this.changed[a.address]?.at ?? 0, this.touched.get(a.address) ?? 0, wokeAt.get(a.address) ?? 0, this.bootAt);
@@ -172,14 +178,13 @@ export default class Agents extends View {
       cx.spawn(async (cx) => {
         try {
           const label = this.labelOf?.get(a.address);
-          const r = await sleepAgent(a, label);
+          const r = await sleepAgent(a, label, false, cx);
           if (!r.ok) this.skipUntil.set(a.address, Date.now() + 3 * 60 * 1000);
           if (r.ok) notify({ title: "Agent put to sleep", body: `${a.space_name ?? ""} · ${label ?? a.title ?? ""}`.trim(), level: "info", timeout: 3000 });
         } finally { this.sleeping.delete(a.address); cx.notify(); }
       });
       break; // one per pass
     }
-    prune(all.filter((t) => t.state === "live" && t.program?.agent).map((t) => t.address));
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -199,7 +204,7 @@ export default class Agents extends View {
     // Gone and old: the list alone is empty right after a start.
     const listed = new Set(list.map((a) => a.address));
     for (const [k, c] of Object.entries(this.changed)) if (!listed.has(k) && now - c.at > 30 * 86400000) delete this.changed[k];
-    localStorage.setItem("changed", JSON.stringify(this.changed));
+    try { localStorage.setItem("changed", JSON.stringify(this.changed)); } catch {}
   }
 
   // Keep offline pins until their terminal returns, and keep each pending until
@@ -251,13 +256,15 @@ export default class Agents extends View {
   }
 
   // Live sub-agents of `addr`, depth first, each with the tree lines in front of it.
-  tree(all, addr, lead = []) {
-    const kids = all.filter((k) => k.parent === addr && k.state === "live");
+  tree(all, addr, lead = [], seen = new Set()) {
+    if (seen.has(addr)) return [];
+    seen.add(addr);
+    const kids = Array.isArray(all) ? all.filter((k) => k.parent === addr && k.state === "live") : (all.get(addr) ?? []);
     return kids.flatMap((k, i) => {
       const last = i === kids.length - 1;
       return [
         { t: k, lines: [...lead, last ? "└" : "├"] },
-        ...this.tree(all, k.address, [...lead, last ? "" : "│"]),
+        ...this.tree(all, k.address, [...lead, last ? "" : "│"], seen),
       ];
     });
   }
@@ -265,7 +272,6 @@ export default class Agents extends View {
   subRow(t, s, shown, compact) {
     const k = s.t;
     const st = kidStatus(k, this.listed);
-    const pic = icon(k.program, 14, t.foreground);
     const on = k.address === shown;
     return h_flex()
       .id(`sub-${k.address}`)
@@ -292,7 +298,7 @@ export default class Agents extends View {
   status(t, a, compact = false) {
     const color = t[a.status] ?? t.dim;
     // VNH: a dot that breathes (slow opacity loop) instead of a spinner, the size of the idle ring.
-    if (a.status === "working") return div().size(7).mx(3).flex_none().rounded(4).bg(t.working).opacity(breath(0.35, 1));
+    if (a.status === "working") return div().size(7).mx(3).flex_none().rounded(4).bg(t.working).opacity(this.breath(0.35, 1));
     if (a.status === "blocked" && compact) return div().size(14).flex_none().rounded(4).bg(t.blocked + "26").text_size(10.5).font_bold().text_color(t.blocked).flex().items_center().justify_center().child("!");
     if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
     // Woken and not looked at yet: a ring with a dot in it (the accent), between idle's empty ring and done's solid dot.
@@ -307,8 +313,8 @@ export default class Agents extends View {
     const collapsed = narrow();
     const sort = sortOf();
     let list = agents();
-    // VNH: a woken agent is idle from the start, not done first (sleep.js isWoken).
-    list = list.map((a) => (a.status === "done" && isWoken(a, this.changed[a.address]?.at) ? { ...a, status: "idle" } : a));
+    // VNH: a woken agent is idle from the start, not done first (sleep.js isWoken clears on any non-done status).
+    list = list.map((a) => (isWoken(a, this.changed[a.address]?.at) ? { ...a, status: "idle" } : a));
     // VNH: a woken agent you haven't looked at yet: its own mark, first among the idle ones; looking at it (focusing it) drops that.
     const viewing = window()?.active;
     list = list.map((a) => { if (a.focused && viewing) fresh.delete(a.address); return fresh.has(a.address) && a.status === "idle" ? { ...a, fresh: true } : a; });
@@ -316,18 +322,31 @@ export default class Agents extends View {
     const real = terminals();
     this.migratePins(real);
     const all = real.concat(this.recordKids(real));
+    const kidsByParent = new Map();
+    for (const k of all) {
+      if (k.state !== "live" || !k.parent) continue;
+      let arr = kidsByParent.get(k.parent);
+      if (!arr) { arr = []; kidsByParent.set(k.parent, arr); }
+      arr.push(k);
+    }
+    const treeCache = new Map();
+    const subsOf = (addr) => {
+      let hit = treeCache.get(addr);
+      if (!hit) { hit = this.tree(kidsByParent, addr); treeCache.set(addr, hit); }
+      return hit;
+    };
     const shown = focused()?.agent;
     const now = Date.now();
     { const front = window()?.active ? focused()?.terminal : null; if (front) this.touched.set(front, now); }
     this.track(list, now);
     // A kept sub-agent (one with a pane) is in agents() too: where a tree shows
     // it, it gets no row of its own, unless it's pinned.
-    const nested = new Set(collapsed ? [] : list.flatMap((a) => this.tree(all, a.address).map((s) => s.t.address)));
+    const nested = new Set(collapsed ? [] : list.flatMap((a) => subsOf(a.address).map((s) => s.t.address)));
     list = list.filter((a) => a.pinned || !nested.has(a.address));
     const tabCounts = new Map();
     for (const a of list) tabCounts.set(a.tab, (tabCounts.get(a.tab) ?? 0) + 1);
     const byPriority = sort.id === "priority";
-    const urgency = new Map(list.map((a) => [a.address, Math.max(this.rank(a), ...this.tree(all, a.address).map((s) => RANK[kidStatus(s.t, this.listed)] ?? 0))]));
+    const urgency = new Map(list.map((a) => [a.address, Math.max(this.rank(a), ...subsOf(a.address).map((s) => RANK[kidStatus(s.t, this.listed)] ?? 0))]));
     const rankOf = (a) => urgency.get(a.address);
     if (byPriority) list = [...list].sort((x, y) => rankOf(y) - rankOf(x) || (y.fresh ? 1 : 0) - (x.fresh ? 1 : 0) || this.since(y) - this.since(x) || y.seq - x.seq);
     const pinned = list.filter((a) => a.pinned);
@@ -336,7 +355,7 @@ export default class Agents extends View {
     setAgentOrder(list.map((a) => a.address));
 
     const withKids = (a, i) => {
-      const subs = collapsed ? [] : this.tree(all, a.address);
+      const subs = collapsed ? [] : subsOf(a.address);
       const r = row(a, i, subs);
       if (this.folded.has(a.address)) return [r];
       return [r, ...subs.map((s) => this.subRow(t, s, shown, byPriority))];
@@ -371,9 +390,12 @@ export default class Agents extends View {
     // A row reads "space \u00b7 detail": the detail is a tab someone named or the
     // agent's own title, never an automatic tab number unless two rows would
     // otherwise read the same.
-    // Read the pane snapshot once: every host read copies the whole list into JS.
+    // Read the pane and space snapshots once: every host read copies the whole list into JS.
     const leads = leadPanes(panes());
-    const tabs = new Map(spaces().flatMap(s => s.tabs).map(tab => [tab.id, tab]));
+    const allSpaces = spaces();
+    const activeSpaceId = allSpaces.find((s) => s.active)?.id ?? null;
+    const spaceColors = shared("space.colors") ?? {};
+    const tabs = new Map(allSpaces.flatMap(s => s.tabs).map(tab => [tab.id, tab]));
     const labels = new Map(list.map(a => {
       const tab = tabs.get(a.tab);
       const many = tabCounts.get(a.tab) > 1;
@@ -450,11 +472,9 @@ export default class Agents extends View {
       const name = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
       // VNH: every agent of the shown space gets a bar on its left edge, not just the focused one:
       // the space's color while it works, gray while it idles. Names keep their usual colors.
-      const here = a.space === spaces().find((s) => s.active)?.id;
-      const spaceColor = (() => {
-        const c = (shared("space.colors") ?? {})[a.space] ?? "ansi6";
-        return c.startsWith("#") ? c : (VNH_MARK[c] ?? t[c] ?? t.accent);
-      })();
+      const here = a.space === activeSpaceId;
+      const c = spaceColors[a.space] ?? "ansi6";
+      const spaceColor = c.startsWith("#") ? c : (VNH_MARK[c] ?? t[c] ?? t.accent);
       return h_flex()
         .id(`ag-${a.address}`)
         .relative()
@@ -555,10 +575,10 @@ export default class Agents extends View {
           // The whole row is the click target: a layer over all of it (the x below sits above the layer), since the texts under it
           // took the click and only the moon passed it on.
           .child(div().id(`zw-${r.id}`).absolute().top(0).left(0).right(0).bottom(0).cursor_pointer().tooltip("Wake it: resumes the conversation")
-            .on_click((_e, cx) => { cx.stop_propagation(); wake(r); }))
+            .on_click((_e, cx) => { cx.stop_propagation(); wake(r, cx); }))
           .when(hot, (el) => el.child(div().id(`zx-${r.id}`).flex_none().p(2).rounded(4).text_color(t.dim).cursor_pointer().tooltip("Forget it")
             .hover((s) => s.bg(t.hover).text_color(t.foreground))
-            .on_click((_e, cx) => { cx.stop_propagation(); dismiss(r); this.hovered = null; cx.notify(); })
+            .on_click((_e, cx) => { cx.stop_propagation(); dismiss(r, cx); this.hovered = null; cx.notify(); })
             .child(svg("mods/pane/close.svg").size(12))))
           .when(!hot, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - r.at))))
           .child(div().flex_none().w(14).flex().items_center().justify_center().child(svg("mods/vnh-agents/moon.svg").size(13).text_color(t.dim)));
@@ -613,7 +633,7 @@ export default class Agents extends View {
             ),
         ),
       )
-      .when(list.length === 0 && !collapsed, (el) =>
+      .when(list.length === 0 && dozing.length === 0 && !collapsed, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
       .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").children(rows))

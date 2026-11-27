@@ -6,8 +6,7 @@
   <key>ProgramArguments</key><array><string>HOME_DIR/Applications/HerdrPad.app/Contents/MacOS/herdr-pad</string></array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>HERDR_APP</key><string>HOME_DIR/.local/bin/herdr-app</string>
-    <key>HERDR_PINCH_LOG</key><string>HOME_DIR/Library/Logs/herdr-pad.log</string>
+    <key>HERDR_APP</key><string>HERDR_APP_BIN</string>
     <key>HERDR_PINCH_TOGETHER</key><string>vnh-tabs.git-pull</string>
     <key>HERDR_PINCH_APART</key><string>vnh-tabs.git-push</string>
     <key>HERDR_PAD_STEP</key><string>30</string>

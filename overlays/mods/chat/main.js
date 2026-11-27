@@ -338,7 +338,7 @@ export default class HerdrChat extends View {
       if (this.redirectFocus(cx)) changed = true;
     }
     if (shown) this.markSeen(me, cx);
-    if (shown && !this.sub) this.vnhPublish(me); // VNH: the status bar shows this chat's model
+    if (shown && !this.sub && focused()?.pane === me.pane) this.vnhPublish(me); // VNH: the status bar shows this chat's model only when this chat pane is focused
     if (this.sub && this.subKey() !== this.lastSubKey) { this.lastSubKey = this.subKey(); changed = true; } // the header bar
     // The hand-off's terminal (in its dialog): finished, back to the chat (the
     // host resumes the agent by itself).
@@ -1695,9 +1695,8 @@ export default class HerdrChat extends View {
     });
   }
 
-  // VNH: publishes { provider, model, effort, ctx } under this chat's tab id in shared "vnh.chat", only while the
-  // tab is shown and only when something changed, so the status bar can show the chat in front of you (a chat
-  // runs `claude -p`, which never calls the status line script).
+  // VNH: publishes { provider, model, effort, ctx } under this chat's pane id in shared "vnh.chat", only while this
+  // pane is focused and pruning closed panes so shared storage never grows unbounded or hijacks split terminals.
   vnhPublish(me) {
     const s = this.store.state;
     const entry = {
@@ -1706,10 +1705,13 @@ export default class HerdrChat extends View {
       effort: s.thinking ?? null,
       ctx: s.usage?.percent != null ? Math.round(s.usage.percent) : null,
     };
-    const key = `${me.tab}:${JSON.stringify(entry)}`;
+    const key = `${me.pane}:${JSON.stringify(entry)}`;
     if (key === this.vnhKey) return;
     this.vnhKey = key;
-    setShared("vnh.chat", { ...(shared("vnh.chat") ?? {}), [me.tab]: { ...entry, at: Date.now() } });
+    this.vnhPane = me.pane;
+    const live = new Set(panes().map((p) => p.pane));
+    const cur = Object.fromEntries(Object.entries(shared("vnh.chat") ?? {}).filter(([k]) => live.has(k)));
+    setShared("vnh.chat", { ...cur, [me.pane]: { ...entry, at: Date.now() } });
   }
 
   command(c, cx) {
@@ -1898,6 +1900,15 @@ export default class HerdrChat extends View {
   close() {
     if (this.viewer || this.termbar) return;
     owners.delete(this.uid);
+    if (this.vnhPane) {
+      const cur = shared("vnh.chat") ?? {};
+      if (this.vnhPane in cur) {
+        const next = { ...cur };
+        delete next[this.vnhPane];
+        setShared("vnh.chat", next);
+      }
+      this.vnhPane = null;
+    }
     // A sub-agent's host is its parent's: closing its peek or its tab leaves it running.
     if (this.sub || hostTerminal(this.chat)?.parent) {
       this.conn?.close();

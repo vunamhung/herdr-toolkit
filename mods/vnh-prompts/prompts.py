@@ -25,7 +25,7 @@ def text_of(content):
     if isinstance(content, list):
         if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
             return None
-        return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+        return "\n".join((b.get("text") or "") for b in content if isinstance(b, dict) and b.get("type") == "text")
     return None
 
 
@@ -39,8 +39,15 @@ def main():
         if not files:
             print('{"prompts": [], "context": 0, "size": 0, "path": null}')
             return
-        path = max(files, key=os.path.getmtime)
-    size = os.path.getsize(path)
+        def safe_mt(p):
+            try: return os.path.getmtime(p)
+            except OSError: return 0
+        path = max(files, key=safe_mt)
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        print('{"prompts": [], "context": 0, "size": 0, "path": null}')
+        return
     if len(sys.argv) > 2 and sys.argv[2] == f"{path}\t{size}":
         print('{"same": true}')
         return
@@ -82,7 +89,7 @@ def main():
             for b in (e.get("message") or {}).get("content") or []:
                 if not isinstance(b, dict):
                     continue
-                if b.get("type") == "text" and b.get("text", "").strip():
+                if b.get("type") == "text" and (b.get("text") or "").strip():
                     cur["reply"] = b["text"].strip()
                 elif b.get("type") == "tool_use":
                     cur["tools"] += 1
@@ -98,4 +105,5 @@ def main():
     json.dump({"prompts": out, "context": context, "size": size, "path": path}, sys.stdout)
 
 
-main()
+if __name__ == "__main__":
+    main()

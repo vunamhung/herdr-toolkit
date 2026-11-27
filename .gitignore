@@ -4,3 +4,5 @@ herdr.d.ts
 jsconfig.json
 *.error
 .DS_Store
+__pycache__/
+*.pyc

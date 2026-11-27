@@ -128,7 +128,7 @@ def evidence(sid):
                                 if s0 and t and t - s0 < 180: st["wins"].append([s0 - 1.0, t + 1.5])
                     st["off"] += end + 1
                     st["wins"] = st["wins"][-3000:]
-                    tmp = key + ".tmp"
+                    tmp = f"{key}.{os.getpid()}.tmp"
                     with open(tmp, "w") as f: json.dump(st, f)
                     os.replace(tmp, key)
         except Exception:
@@ -143,7 +143,6 @@ def evidence(sid):
         try:
             ev["last"] = max(ev["last"], os.path.getmtime(db) + 20)
             con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=1)
-            steps = con.execute("select idx, metadata, step_type, step_payload from steps order by idx").fetchall()
             for idx, md, stype, pl in con.execute("select idx, metadata, step_type, step_payload from steps where step_type=132 order by idx"):
                 created, began, finished = step_times(md)
                 if not began: continue
@@ -404,18 +403,24 @@ class BetterChanges extends View {
     if (!m || m.root !== this.root) { notify({ title: "Can't undo", body: m ? "It was another repository." : "What it saved is gone.", level: "warning", timeout: 5000 }); return; }
     if (m.type === "reset") {
       // HEAD goes back where it was (hard: with the working tree, kept as a stash commit); untracked files were never touched.
-      const steps = [`git reset --${m.mode === "hard" ? "hard" : m.mode} ${m.head}`];
-      if (m.stash) steps.push(`git stash apply --index ${m.stash}`);
-      const res = await exec("sh", ["-c", steps.join(" && "), "x"], { cwd: this.root }).catch(() => null);
+      const mode = ["soft", "mixed", "hard"].includes(m.mode) ? m.mode : null;
+      const sha = /^[0-9a-f]{40,64}$/i;
+      if (!mode || !sha.test(String(m.head ?? "")) || (m.stash && !sha.test(String(m.stash)))) {
+        notify({ title: "Couldn't undo the reset", body: "Invalid undo manifest.", level: "error", timeout: 5000 });
+        return;
+      }
+      let res = await exec("git", ["reset", `--${mode}`, m.head], { cwd: this.root }).catch(() => null);
+      if (res?.code === 0 && m.stash) res = await exec("git", ["stash", "apply", "--index", m.stash], { cwd: this.root }).catch(() => null);
       if (res?.code === 0) { setShared("better-changes.reload", { root: this.root, on: null, at: Date.now() }); notify({ title: "Reset undone", body: m.head.slice(0, 8), level: "success", timeout: 4000 }); }
       else notify({ title: "Couldn't undo the reset", body: (res?.stderr || "").trim().slice(0, 200), level: "error", timeout: 7000 });
       return;
     }
     const steps = [];
-    if (m.staged?.length) steps.push('git apply --index "$1/staged.patch"');
-    if (m.work?.length) steps.push('[ -s "$1/work.patch" ] && git apply "$1/work.patch" || true');
-    for (const p of m.copies ?? []) steps.push(`mkdir -p "$(dirname -- ${JSON.stringify(p)})" && cp -p "$1/files/"${JSON.stringify(p)} ${JSON.stringify(p)}`);
-    const res = await exec("sh", ["-c", steps.length ? steps.join(" && ") : "true", "x", B], { cwd: this.root }).catch(() => null);
+    if (m.staged?.length) steps.push('if [ -s "$1/staged.patch" ]; then git apply --index "$1/staged.patch"; fi');
+    if (m.work?.length) steps.push('if [ -s "$1/work.patch" ]; then git apply "$1/work.patch"; fi');
+    const copies = Array.isArray(m.copies) ? m.copies.filter((p) => typeof p === "string" && p) : [];
+    if (copies.length) steps.push('B="$1"; shift; for p in "$@"; do mkdir -p -- "$(dirname -- "$p")" && cp -RpP -- "$B/files/$p" "$p"; done');
+    const res = await exec("sh", ["-c", steps.length ? steps.join(" && ") : "true", "x", B, ...copies], { cwd: this.root }).catch(() => null);
     if (res?.code === 0) {
       setShared("better-changes.reload", { root: this.root, on: null, at: Date.now() });
       notify({ title: "Rollback undone", body: `${m.work?.length || m.copies?.length || 0} file(s) are back`, level: "success", timeout: 4000 });

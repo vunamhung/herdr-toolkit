@@ -72,12 +72,14 @@ export default class ChangesMenu extends View {
 
   async sh(script, args) {
     const { root, on } = this.a();
-    return exec("sh", ["-c", script, "x", root, ...args], { cwd: root, on: on ?? null });
+    const r = await exec("sh", ["-c", script, "x", root, ...args], { cwd: root, on: on ?? null, timeout: 60000 });
+    if (r.code !== 0) throw new Error((r.stderr || r.stdout || "").trim() || `shell command failed (exit ${r.code})`);
+    return r;
   }
 
   async git(args) {
     const { root, on } = this.a();
-    const r = await exec("git", args, { cwd: root, on: on ?? null });
+    const r = await exec("env", ["GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=0", "git", ...args], { cwd: root, on: on ?? null, timeout: 60000 });
     if (r.code !== 0) throw new Error((r.stderr || r.stdout || "").trim() || `git ${args[0]} failed`);
     return r;
   }
@@ -149,11 +151,10 @@ export default class ChangesMenu extends View {
     const os = window()?.platform;
     try {
       let script;
-      if (on) script = 'cd "$1"; shift; rm -rf -- "$@"';
-      else if (os === "macos") script = 'cd "$1"; shift; T="$HOME/.Trash"; mkdir -p "$T"; for p in "$@"; do b=$(basename "$p"); d="$T/$b"; [ -e "$d" ] && d="$T/$b.$(date +%H%M%S).$$"; mv -- "$p" "$d" || exit 1; done';
-      else script = 'cd "$1"; shift; for p in "$@"; do (command -v gio >/dev/null 2>&1 && gio trash -- "$p") || rm -rf -- "$p"; done';
-      const r = await this.sh(script, paths);
-      if (r.code !== 0) throw new Error((r.stderr || "").trim() || "could not remove");
+      if (on) script = 'cd -- "$1" || exit 1; shift; rm -rf -- "$@"';
+      else if (os === "macos") script = 'cd -- "$1" || exit 1; shift; T="$HOME/.Trash"; mkdir -p "$T"; n=0; for p in "$@"; do b=$(basename -- "$p"); d="$T/$b"; while [ -e "$d" ] || [ -L "$d" ]; do n=$((n+1)); d="$T/$b.$(date +%H%M%S).$$.$n"; done; mv -- "$p" "$d" || exit 1; done';
+      else script = 'cd -- "$1" || exit 1; shift; for p in "$@"; do if command -v gio >/dev/null 2>&1; then gio trash -- "$p" || exit 1; else rm -rf -- "$p" || exit 1; fi; done';
+      await this.sh(script, paths);
       this.done("Delete", cx, () => notify({ title: on ? "Deleted" : "Moved to the Trash", body: paths.length === 1 ? paths[0] : plural(paths.length, "file"), level: "info", timeout: 4000 }));
     } catch (e) { this.fail("Delete", e); }
   }
@@ -173,9 +174,9 @@ export default class ChangesMenu extends View {
         await this.sh('B="$2"; shift 2; mkdir -p "$B/files"', [B]);
         if (manifest.staged.length) await this.sh('B="$2"; shift 2; git diff --cached --binary -- "$@" > "$B/staged.patch"', [B, ...manifest.staged]);
         if (manifest.work.length) await this.sh('B="$2"; shift 2; git diff --binary -- "$@" > "$B/work.patch"', [B, ...manifest.work]);
-        if (by.untracked.length) await this.sh('B="$2"; shift 2; for p in "$@"; do mkdir -p "$B/files/$(dirname "$p")" && cp -p "$p" "$B/files/$p"; done', [B, ...by.untracked]);
+        if (by.untracked.length) await this.sh('B="$2"; shift 2; for p in "$@"; do mkdir -p -- "$B/files/$(dirname -- "$p")" && cp -RpP -- "$p" "$B/files/$p"; done', [B, ...by.untracked]);
         await this.sh('B="$2"; printf "%s" "$3" > "$B/manifest.json"', [B, JSON.stringify(manifest)]);
-        await this.sh('ls -1t "$HOME/.cache/vnh-changes-undo" | tail -n +21 | while read d; do rm -rf "$HOME/.cache/vnh-changes-undo/$d"; done; true', []);
+        await this.sh('ls -1t "$HOME/.cache/vnh-changes-undo" | tail -n +21 | while IFS= read -r d; do [ -n "$d" ] && rm -rf -- "$HOME/.cache/vnh-changes-undo/$d"; done; true', []);
       }
       if (by.unstaged.length) await this.git(["restore", "--", ...by.unstaged]);
       if (by.staged.length) await this.git(["restore", "--source=HEAD", "--staged", "--worktree", "--", ...by.staged]);
@@ -295,16 +296,16 @@ export default class ChangesMenu extends View {
     const ours = (side) => (cx) => this.runOps(side === "ours" ? "Accept ours" : "Accept theirs", async () => { await this.git(["checkout", `--${side}`, "--", ...paths]); await this.git(["add", "--", ...paths]); }, cx, side === "ours" ? "Kept our side" : "Took their side");
     // A folder is ignored as the folder ("/dir/"), not file by file; an entry already there is not added twice.
     const ignoreLines = isFolder && this.a().dir && this.a().dir !== "." ? [`/${this.a().dir}/`] : paths.map((p) => `/${p}`);
-    const ignore = (cx) => this.runOps("Ignore", () => this.sh('cd "$1"; shift; [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ] && echo >> .gitignore; for p in "$@"; do grep -qxF -- "$p" .gitignore 2>/dev/null || printf "%s\\n" "$p" >> .gitignore; done', ignoreLines), cx, "Added to .gitignore");
-    const historyOf = () => { run("tab.new", { folder: this.a().root, name: `history ${name}`.slice(0, 40), argv: ["sh", "-lc", `git log --follow --stat --color=always -- ${JSON.stringify(isFolder ? this.a().dir : path)} | less -R`] }); this.close(); };
-    const blameOf = () => { run("tab.new", { folder: this.a().root, name: `blame ${name}`.slice(0, 40), argv: ["sh", "-lc", `git blame --color-lines -- ${JSON.stringify(path)} | less -R`] }); this.close(); };
+    const ignore = (cx) => this.runOps("Ignore", () => this.sh('cd -- "$1" || exit 1; shift; [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ] && echo >> .gitignore; for p in "$@"; do grep -qxF -- "$p" .gitignore 2>/dev/null || printf "%s\\n" "$p" >> .gitignore; done', ignoreLines), cx, "Added to .gitignore");
+    const historyOf = () => { run("tab.new", { folder: this.a().root, name: `history ${name}`.slice(0, 40), argv: ["sh", "-lc", 'git log --follow --stat --color=always -- "$1" | less -R', "history", isFolder ? (this.a().dir || ".") : path] }); this.close(); };
+    const blameOf = () => { run("tab.new", { folder: this.a().root, name: `blame ${name}`.slice(0, 40), argv: ["sh", "-lc", 'git blame --color-lines -- "$1" | less -R', "blame", path] }); this.close(); };
     const paths_ = [
       item("send", "at", "Send to agent (@path)", !on, (cx) => { this.busy = true; sendToAgent(cx, absPath, () => this.close()); }),
       item("copy-path", "copy", "Copy path", true, copy(absPath, "path")),
       item("copy-rel", "copy", "Copy relative path", true, copy(isFolder ? (this.a().dir ?? name) : path, "relative path")),
       ...(isFolder ? [] : [item("open", "file", "Open file", !on, () => open())]),
       item("history", "history", isFolder ? "History of the folder" : "History of the file", !on, () => historyOf()),
-      ...(isFolder ? [] : [item("blame", "blame", "Blame (who changed each line)", !on && scope !== "untracked", () => blameOf())]),
+      ...(isFolder ? [] : [item("blame", "blame", "Blame (who changed each line)", !on && !kinds.has("untracked"), () => blameOf())]),
       item("reveal", "folder", on ? "Reveal (not on another machine)" : os === "macos" ? (isFolder ? "Open the folder" : "Reveal in Finder") : "Show in the file manager", !on, () => reveal()),
     ];
 
