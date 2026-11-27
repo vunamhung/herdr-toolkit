@@ -159,6 +159,7 @@ if want --gestures; then
   codesign -f -s "$SIGN" --identifier dev.vnh.herdr-pad "$HAPP"
   PL="$HOME/Library/LaunchAgents/dev.vnh.herdr-pad.plist"
   if [ -f "$PL" ]; then launchctl bootout "gui/$(id -u)" "$PL" 2>/dev/null || true; backup "$PL"; fi
+  pkill -x herdr-pad 2>/dev/null || true
   sed -e "s#HOME_DIR#$HOME#g" -e "s#HERDR_APP_BIN#$HERDR_BIN#g" "$ROOT/gestures/dev.vnh.herdr-pad.plist" > "$PL"
   launchctl bootstrap "gui/$(id -u)" "$PL"
 
@@ -174,6 +175,7 @@ if want --gestures; then
   codesign -f -s "$SIGN" --identifier dev.vnh.pad-actions "$PADAPP"
   PF="$HOME/Library/LaunchAgents/dev.vnh.pad-actions.plist"
   if [ -f "$PF" ]; then launchctl bootout "gui/$(id -u)" "$PF" 2>/dev/null || true; backup "$PF"; fi
+  pkill -x pad-actions 2>/dev/null || true
   sed -e "s#HOME_DIR#$HOME#g" -e "s#HERDR_APP_BIN#$HERDR_BIN#g" "$ROOT/gestures/dev.vnh.pad-actions.plist" > "$PF"
   launchctl bootstrap "gui/$(id -u)" "$PF"
 fi
